@@ -328,12 +328,26 @@
       }
     },
     {
+      "id": "triageloop",
+      "name": "Triage loop",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        2150,
+        -200
+      ],
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      }
+    },
+    {
       "id": "triage",
       "name": "Triage",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        2200,
+        2350,
         -200
       ],
       "parameters": {
@@ -345,13 +359,7 @@
         "specifyBody": "json",
         "jsonBody": "={{ $('Prep doc').item.json.triage_body }}",
         "options": {
-          "timeout": 90000,
-          "batching": {
-            "batch": {
-              "batchSize": 1,
-              "batchInterval": 200
-            }
-          }
+          "timeout": 120000
         }
       },
       "credentials": {
@@ -443,13 +451,7 @@
         "specifyBody": "json",
         "jsonBody": "={{ $json.retry_body }}",
         "options": {
-          "timeout": 90000,
-          "batching": {
-            "batch": {
-              "batchSize": 1,
-              "batchInterval": 200
-            }
-          }
+          "timeout": 120000
         }
       },
       "credentials": {
@@ -761,6 +763,24 @@
       "main": [
         [
           {
+            "node": "Triage loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Triage loop": {
+      "main": [
+        [
+          {
+            "node": "Merge for stats",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
             "node": "Triage",
             "type": "main",
             "index": 0
@@ -856,7 +876,7 @@
       "main": [
         [
           {
-            "node": "Merge for stats",
+            "node": "Triage loop",
             "type": "main",
             "index": 0
           }

@@ -272,11 +272,16 @@ const nodes = [
     "with s as (insert into seen_urls (canonical_url, source) values ($1, nullif($2,'')) on conflict (canonical_url) do nothing) insert into raw_docs (canonical_url, title, markdown, scraper, run_id) values ($1, nullif($3,''), $4, $6, $5::bigint) returning id as raw_doc_id",
     "={{ $json.canonical_url }},{{ $json.source }},{{ $json.title }},{{ $json.markdown }},{{ $json.run_id }},{{ $json.scraper }}"),
 
-  { id: 'triage', name: 'Triage', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [2200, -200],
+  // One item at a time through triage: n8n "batching" only staggers request
+  // starts, so a queue at LM Studio (parallel=1) blows per-request timeouts.
+  { id: 'triageloop', name: 'Triage loop', type: 'n8n-nodes-base.splitInBatches', typeVersion: 3, position: [2150, -200],
+    parameters: { batchSize: 1, options: {} } },
+
+  { id: 'triage', name: 'Triage', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [2350, -200],
     parameters: { method: 'POST', url: 'http://host.docker.internal:1234/v1/chat/completions',
       authentication: 'genericCredentialType', genericAuthType: 'httpBearerAuth',
       sendBody: true, specifyBody: 'json', jsonBody: "={{ $('Prep doc').item.json.triage_body }}",
-      options: { timeout: 90000, batching: { batch: { batchSize: 1, batchInterval: 200 } } } },
+      options: { timeout: 120000 } },
     credentials: { httpBearerAuth: CRED_LM },
     retryOnFail: true, maxTries: 2, waitBetweenTries: 1000, onError: 'continueRegularOutput' },
 
@@ -293,7 +298,7 @@ const nodes = [
     parameters: { method: 'POST', url: 'http://host.docker.internal:1234/v1/chat/completions',
       authentication: 'genericCredentialType', genericAuthType: 'httpBearerAuth',
       sendBody: true, specifyBody: 'json', jsonBody: '={{ $json.retry_body }}',
-      options: { timeout: 90000, batching: { batch: { batchSize: 1, batchInterval: 200 } } } },
+      options: { timeout: 120000 } },
     credentials: { httpBearerAuth: CRED_LM },
     retryOnFail: false, onError: 'continueRegularOutput' },
 
@@ -350,7 +355,11 @@ const connections = {
     [{ node: 'Log failure', type: 'main', index: 0 }]
   ] },
   'Prep doc': { main: [[{ node: 'Insert doc', type: 'main', index: 0 }]] },
-  'Insert doc': { main: [[{ node: 'Triage', type: 'main', index: 0 }]] },
+  'Insert doc': { main: [[{ node: 'Triage loop', type: 'main', index: 0 }]] },
+  'Triage loop': { main: [
+    [{ node: 'Merge for stats', type: 'main', index: 0 }],
+    [{ node: 'Triage', type: 'main', index: 0 }]
+  ] },
   'Triage': { main: [[{ node: 'Validate triage', type: 'main', index: 0 }]] },
   'Validate triage': { main: [[{ node: 'Triage valid?', type: 'main', index: 0 }]] },
   'Triage valid?': { main: [
@@ -361,7 +370,7 @@ const connections = {
   'Triage retry': { main: [[{ node: 'Validate retry', type: 'main', index: 0 }]] },
   'Validate retry': { main: [[{ node: 'Merge triaged', type: 'main', index: 1 }]] },
   'Merge triaged': { main: [[{ node: 'Insert feed', type: 'main', index: 0 }]] },
-  'Insert feed': { main: [[{ node: 'Merge for stats', type: 'main', index: 0 }]] },
+  'Insert feed': { main: [[{ node: 'Triage loop', type: 'main', index: 0 }]] },
   'Log failure': { main: [[{ node: 'Merge for stats', type: 'main', index: 1 }]] },
   'Merge for stats': { main: [[{ node: 'Collect stats', type: 'main', index: 0 }]] },
   'Collect stats': { main: [[{ node: 'Finalize run', type: 'main', index: 0 }]] },
