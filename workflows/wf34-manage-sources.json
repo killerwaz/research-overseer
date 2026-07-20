@@ -1,0 +1,43 @@
+{
+  "name": "WF-34 manage_sources",
+  "nodes": [
+    { "id": "trigger", "name": "WF Input", "type": "n8n-nodes-base.executeWorkflowTrigger", "typeVersion": 1.1, "position": [0, 0],
+      "parameters": { "workflowInputs": { "values": [
+        { "name": "action", "type": "string" }, { "name": "url", "type": "string" },
+        { "name": "label", "type": "string" }, { "name": "id", "type": "string" } ] } } },
+    { "id": "switch", "name": "Action", "type": "n8n-nodes-base.switch", "typeVersion": 3.2, "position": [200, 0],
+      "parameters": { "rules": { "values": [
+        { "conditions": { "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" }, "combinator": "and", "conditions": [ { "id": "c1", "leftValue": "={{ $json.action }}", "rightValue": "add", "operator": { "type": "string", "operation": "equals" } } ] }, "renameOutput": true, "outputKey": "add" },
+        { "conditions": { "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" }, "combinator": "and", "conditions": [ { "id": "c2", "leftValue": "={{ $json.action }}", "rightValue": "remove", "operator": { "type": "string", "operation": "equals" } } ] }, "renameOutput": true, "outputKey": "remove" },
+        { "conditions": { "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" }, "combinator": "and", "conditions": [ { "id": "c3", "leftValue": "={{ $json.action }}", "rightValue": "list", "operator": { "type": "string", "operation": "equals" } } ] }, "renameOutput": true, "outputKey": "list" }
+      ] }, "options": {} } },
+    { "id": "add", "name": "Add source", "type": "n8n-nodes-base.postgres", "typeVersion": 2.4, "position": [420, -120],
+      "parameters": { "operation": "executeQuery",
+        "query": "insert into sources (kind, url, label) values ('rss', $1, nullif($2,'')) on conflict (url) do update set active = true, label = coalesce(nullif($2,''), sources.label) returning id, url, label, active",
+        "options": { "queryReplacement": "={{ $json.url }},{{ $json.label || '' }}" } },
+      "credentials": { "postgres": { "id": "tzBuhu9KEXlaRRfW", "name": "Postgres account" } } },
+    { "id": "remove", "name": "Remove source", "type": "n8n-nodes-base.postgres", "typeVersion": 2.4, "position": [420, 0],
+      "parameters": { "operation": "executeQuery",
+        "query": "update sources set active = false where (nullif($1,'') is not null and id = nullif($1,'')::bigint) or (nullif($2,'') is not null and url = $2) returning id, url, label, active",
+        "options": { "queryReplacement": "={{ $json.id || '' }},{{ $json.url || '' }}" } },
+      "credentials": { "postgres": { "id": "tzBuhu9KEXlaRRfW", "name": "Postgres account" } } },
+    { "id": "list", "name": "List sources", "type": "n8n-nodes-base.postgres", "typeVersion": 2.4, "position": [420, 120],
+      "parameters": { "operation": "executeQuery", "query": "select id, url, label, active from sources order by id", "options": {} },
+      "credentials": { "postgres": { "id": "tzBuhu9KEXlaRRfW", "name": "Postgres account" } },
+      "executeOnce": true, "alwaysOutputData": true },
+    { "id": "shape", "name": "Shape result", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [640, 0],
+      "parameters": { "mode": "runOnceForAllItems", "jsCode": "const rows = $input.all().map(i => i.json).filter(j => j && Object.keys(j).length);\nreturn [{ json: { count: rows.length, result: rows } }];" } }
+  ],
+  "connections": {
+    "WF Input": { "main": [[{ "node": "Action", "type": "main", "index": 0 }]] },
+    "Action": { "main": [
+      [{ "node": "Add source", "type": "main", "index": 0 }],
+      [{ "node": "Remove source", "type": "main", "index": 0 }],
+      [{ "node": "List sources", "type": "main", "index": 0 }]
+    ] },
+    "Add source": { "main": [[{ "node": "Shape result", "type": "main", "index": 0 }]] },
+    "Remove source": { "main": [[{ "node": "Shape result", "type": "main", "index": 0 }]] },
+    "List sources": { "main": [[{ "node": "Shape result", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1", "errorWorkflow": "PNJMA4NbQGmp1xKv" }
+}

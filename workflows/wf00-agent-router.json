@@ -1,0 +1,882 @@
+{
+  "name": "WF-00 agent_router",
+  "nodes": [
+    {
+      "id": "poll",
+      "name": "Poll updates",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "seconds",
+              "secondsInterval": 20
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "offset",
+      "name": "Get offset",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        180,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select coalesce(max(update_id), 0) + 1 as tg_offset from tg_updates",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "tzBuhu9KEXlaRRfW",
+          "name": "Postgres account"
+        }
+      },
+      "executeOnce": true,
+      "alwaysOutputData": true
+    },
+    {
+      "id": "fetch",
+      "name": "Fetch updates",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        360,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.telegram.org/bot__TG_TOKEN__/getUpdates?offset={{ $json.tg_offset || 1 }}&timeout=0",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "retryOnFail": false,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "extract",
+      "name": "Extract messages",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        540,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const j = $input.first().json;\nif (!j.ok || !Array.isArray(j.result)) return [];\nconst out = [];\nfor (const u of j.result) {\n  const m = u.message || u.edited_message || {};\n  out.push({ json: {\n    update_id: u.update_id,\n    chat_id: (m.chat && m.chat.id) || 0,\n    text: (m.text || '').slice(0, 4000)\n  } });\n}\nreturn out;"
+      }
+    },
+    {
+      "id": "record",
+      "name": "Record update",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        720,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "insert into tg_updates (update_id, chat_id, text) values ($1::bigint, $2::bigint, $3) on conflict (update_id) do nothing returning update_id, chat_id, text",
+        "options": {
+          "queryReplacement": "={{ $json.update_id }},{{ $json.chat_id }},{{ $json.text }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "tzBuhu9KEXlaRRfW",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "allow",
+      "name": "Allowlisted?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        900,
+        0
+      ],
+      "parameters": {
+        "options": {},
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "a1",
+              "leftValue": "={{ String($json.chat_id) }}",
+              "rightValue": "__TG_CHAT__",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "a2",
+              "leftValue": "={{ ($json.text || \"\").length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "testwh",
+      "name": "Test webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        720,
+        200
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "scout-router-test-__ZZ_SECRET__",
+        "responseMode": "lastNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "testnorm",
+      "name": "Test normalize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        200
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const b = $input.first().json.body || {};\nreturn [{ json: { chat_id: Number(b.chat_id) || __TG_CHAT__, text: String(b.text || ''), test: true } }];"
+      }
+    },
+    {
+      "id": "agent",
+      "name": "Scout Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        1120,
+        100
+      ],
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.text }}",
+        "options": {
+          "systemMessage": "=You are The Scout's dispatcher on Telegram. Route requests to tools; never do research yourself; never fabricate results or data — if a tool returns nothing, say so.\n\nRules:\n1. Cheap and unambiguous requests run immediately, no confirmation: a pasted URL -> scrape_url; status questions -> run_status; reading existing findings -> query_feed.\n2. Expensive or ambiguous requests (full_sweep, broad conceptual discovery) need a one-line confirmation first. If the user's next message is an affirmative, execute what you proposed.\n3. Questions about existing findings are ALWAYS query_feed or run_status — never trigger a new run for them.\n4. When uncertain between search sources, fail WIDE: prefer full_sweep (with confirmation) or brave. Never guess narrow.\n5. manage_schedule: parse natural language into cron, timezone Asia/Dhaka (UTC+6). 'every day at 8am' -> cron '0 8 * * *' via action create_recurring. Relative one-times ('in 3 hours') -> action create_onetime with an ISO timestamp you compute from the current time below. If phrasing is ambiguous ('tomorrow morning'), ask ONE clarifying question. Always echo the parsed schedule back and get a yes before creating. Other actions: cancel (needs id), list.\n6. manage_sources actions: add (url, optional label), remove (id or url), list.\n7. Reply tersely — this is Telegram. Plain text, no markdown formatting.\n\nCurrent time UTC: {{ $now.toUTC().toISO() }} (Dhaka = UTC+6).",
+          "maxIterations": 6
+        }
+      }
+    },
+    {
+      "id": "model",
+      "name": "OpenRouter Haiku",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        1000,
+        320
+      ],
+      "parameters": {
+        "model": "anthropic/claude-haiku-4.5",
+        "options": {
+          "temperature": 0
+        }
+      },
+      "credentials": {
+        "openRouterApi": {
+          "id": "CZJ5Mo20Hr8BNBxG",
+          "name": "openrouter-api"
+        }
+      }
+    },
+    {
+      "id": "memory",
+      "name": "Chat memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.3,
+      "position": [
+        1160,
+        320
+      ],
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $json.chat_id }}",
+        "contextWindowLength": 10
+      },
+      "credentials": {
+        "postgres": {
+          "id": "tzBuhu9KEXlaRRfW",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "tool_run_discovery",
+      "name": "run_discovery",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [
+        1300,
+        320
+      ],
+      "parameters": {
+        "description": "Run ONE search source now. Params: source (exa|tavily|brave|rss), query. exa = conceptual or thematic digs ('explore', 'dig into', fuzzy themes). tavily = a specific named topic. brave = broad general sweep ('anything on X', 'search around for'). rss = recency from known feeds ('anything new today'). Does NOT read past results.",
+        "workflowId": {
+          "__rl": true,
+          "value": "ccdGJn47aX7PHBti",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "source": "={{ $fromAI('source', 'one of exa, tavily, brave, rss', 'string') }}",
+            "query": "={{ $fromAI('query', 'the search query (empty for rss)', 'string') }}",
+            "trigger": "agent"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "source",
+              "displayName": "source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "query",
+              "displayName": "query",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "trigger",
+              "displayName": "trigger",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "tool_full_sweep",
+      "name": "full_sweep",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [
+        1440,
+        320
+      ],
+      "parameters": {
+        "description": "Run ALL discovery sources (exa, tavily, brave, rss). Only for 'sweep', 'go wide', 'full run'. Expensive — always confirm with the user first. Only call after the user has confirmed.",
+        "workflowId": {
+          "__rl": true,
+          "value": "du4KagpWdi5AT84v",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "query": "={{ $fromAI('query', 'optional focus query; empty string runs the default sweep', 'string') }}",
+            "trigger": "agent"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "query",
+              "displayName": "query",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "trigger",
+              "displayName": "trigger",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "tool_scrape_url",
+      "name": "scrape_url",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [
+        1580,
+        320
+      ],
+      "parameters": {
+        "description": "Ingest one URL the user pasted. Use whenever the message contains a link. Cheap — execute immediately, no confirmation.",
+        "workflowId": {
+          "__rl": true,
+          "value": "fzgIhUYkPOaSdCUu",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "url": "={{ $fromAI('url', 'the full URL to scrape', 'string') }}",
+            "trigger": "agent"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "url",
+              "displayName": "url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "trigger",
+              "displayName": "trigger",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "tool_query_feed",
+      "name": "query_feed",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [
+        1720,
+        320
+      ],
+      "parameters": {
+        "description": "Read EXISTING triaged results. Use for 'what did you find', 'show me', 'anything good last night'. NEVER triggers a new run. Params: since (ISO timestamp, optional), min_relevance (1-5, optional), tag (optional), limit (default 20).",
+        "workflowId": {
+          "__rl": true,
+          "value": "VaA4YM6N4ni7F6CB",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "since": "={{ $fromAI('since', 'ISO timestamp lower bound for created_at, empty for none', 'string') }}",
+            "min_relevance": "={{ $fromAI('min_relevance', 'minimum relevance 1-5, empty for none', 'string') }}",
+            "tag": "={{ $fromAI('tag', 'single lowercase tag to filter by, empty for none', 'string') }}",
+            "limit": "={{ $fromAI('limit', 'max items to return, empty for default 20', 'string') }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "since",
+              "displayName": "since",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "min_relevance",
+              "displayName": "min_relevance",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "tag",
+              "displayName": "tag",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "limit",
+              "displayName": "limit",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "tool_run_status",
+      "name": "run_status",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [
+        1860,
+        320
+      ],
+      "parameters": {
+        "description": "Report recent runs: when, scope, counts, ok/partial/failed. Use for 'did last night's run work', 'when did you last run', 'did anything break'.",
+        "workflowId": {
+          "__rl": true,
+          "value": "Ni3bddpEPN91ISg2",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "limit": "={{ $fromAI('limit', 'how many recent runs to return, empty for default 5', 'string') }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "limit",
+              "displayName": "limit",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "tool_manage_schedule",
+      "name": "manage_schedule",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [
+        2000,
+        320
+      ],
+      "parameters": {
+        "description": "Create, cancel or list schedules. Params: action (create_recurring|create_onetime|cancel|list); cron (for create_recurring, 5-field, Asia/Dhaka); run_at (for create_onetime, ISO timestamp); label; id (for cancel). Echo the parsed schedule back for confirmation BEFORE calling create.",
+        "workflowId": {
+          "__rl": true,
+          "value": "GiJSUs1kqil1jtsp",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "action": "={{ $fromAI('action', 'create_recurring, create_onetime, cancel, or list', 'string') }}",
+            "cron": "={{ $fromAI('cron', '5-field cron expression for create_recurring, else empty', 'string') }}",
+            "run_at": "={{ $fromAI('run_at', 'ISO timestamp for create_onetime, else empty', 'string') }}",
+            "label": "={{ $fromAI('label', 'short human label for the schedule, optional', 'string') }}",
+            "id": "={{ $fromAI('id', 'schedule id for cancel, else empty', 'string') }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "action",
+              "displayName": "action",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "cron",
+              "displayName": "cron",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "run_at",
+              "displayName": "run_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "label",
+              "displayName": "label",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "tool_manage_sources",
+      "name": "manage_sources",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [
+        2140,
+        320
+      ],
+      "parameters": {
+        "description": "Add, remove or list RSS feeds. Use for 'add this feed', 'stop following X', 'what feeds are you watching'. Params: action (add|remove|list); url (for add/remove); label (optional); id (for remove).",
+        "workflowId": {
+          "__rl": true,
+          "value": "qAGxheHskgw3Ki9A",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "action": "={{ $fromAI('action', 'add, remove, or list', 'string') }}",
+            "url": "={{ $fromAI('url', 'feed URL for add or remove, else empty', 'string') }}",
+            "label": "={{ $fromAI('label', 'short label for the feed, optional', 'string') }}",
+            "id": "={{ $fromAI('id', 'source id for remove, else empty', 'string') }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "action",
+              "displayName": "action",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "url",
+              "displayName": "url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "label",
+              "displayName": "label",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "prepreply",
+      "name": "Prep reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1400,
+        100
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "let chat_id = __TG_CHAT__;\ntry { chat_id = $('Record update').item.json.chat_id || chat_id; } catch (e) {\n  try { chat_id = $('Test normalize').item.json.chat_id || chat_id; } catch (e2) {}\n}\nreturn { json: { chat_id, output: String($json.output || '').slice(0, 4000) || '(empty reply)' } };"
+      }
+    },
+    {
+      "id": "reply",
+      "name": "Send reply",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1600,
+        100
+      ],
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.output }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "6RLwMp4ODoesGE4v",
+          "name": "telegram-scout-bot"
+        }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Poll updates": {
+      "main": [
+        [
+          {
+            "node": "Get offset",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get offset": {
+      "main": [
+        [
+          {
+            "node": "Fetch updates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch updates": {
+      "main": [
+        [
+          {
+            "node": "Extract messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract messages": {
+      "main": [
+        [
+          {
+            "node": "Record update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record update": {
+      "main": [
+        [
+          {
+            "node": "Allowlisted?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Allowlisted?": {
+      "main": [
+        [
+          {
+            "node": "Scout Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Test webhook": {
+      "main": [
+        [
+          {
+            "node": "Test normalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Test normalize": {
+      "main": [
+        [
+          {
+            "node": "Scout Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter Haiku": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Scout Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chat memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "Scout Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "run_discovery": {
+      "ai_tool": [
+        [
+          {
+            "node": "Scout Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "full_sweep": {
+      "ai_tool": [
+        [
+          {
+            "node": "Scout Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "scrape_url": {
+      "ai_tool": [
+        [
+          {
+            "node": "Scout Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "query_feed": {
+      "ai_tool": [
+        [
+          {
+            "node": "Scout Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "run_status": {
+      "ai_tool": [
+        [
+          {
+            "node": "Scout Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "manage_schedule": {
+      "ai_tool": [
+        [
+          {
+            "node": "Scout Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "manage_sources": {
+      "ai_tool": [
+        [
+          {
+            "node": "Scout Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scout Agent": {
+      "main": [
+        [
+          {
+            "node": "Prep reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prep reply": {
+      "main": [
+        [
+          {
+            "node": "Send reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "PNJMA4NbQGmp1xKv"
+  }
+}
