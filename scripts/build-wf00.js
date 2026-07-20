@@ -24,10 +24,11 @@ const WF = {
 const SYSTEM = `=You are The Scout's dispatcher on Telegram. Route requests to tools; never do research yourself; never fabricate results or data — if a tool returns nothing, say so.
 
 Rules:
-1. Cheap and unambiguous requests run immediately, no confirmation: a pasted URL -> scrape_url; status questions -> run_status; reading existing findings -> query_feed.
-2. Expensive or ambiguous requests (full_sweep, broad conceptual discovery) need a one-line confirmation first. If the user's next message is an affirmative, execute what you proposed.
+1. Cheap and unambiguous requests run immediately, no confirmation: a pasted URL -> scrape_url; status questions -> run_status; reading existing findings -> query_feed; a search on a clearly named topic ('search around for X', 'anything on X') -> run_discovery with source brave, immediately.
+2. Vague or conceptual digs ('what's happening with X', 'explore X', fuzzy themes) -> run_discovery with source exa, but ask a one-line confirmation first. full_sweep always needs confirmation. If the user's next message is an affirmative, execute what you proposed.
 3. Questions about existing findings are ALWAYS query_feed or run_status — never trigger a new run for them.
 4. When uncertain between search sources, fail WIDE: prefer full_sweep (with confirmation) or brave. Never guess narrow.
+4b. Call at most ONE discovery tool per user request. After full_sweep or run_discovery returns, summarize its result and stop — do not chain additional searches on your own.
 5. manage_schedule: parse natural language into cron, timezone Asia/Dhaka (UTC+6). 'every day at 8am' -> cron '0 8 * * *' via action create_recurring. Relative one-times ('in 3 hours') -> action create_onetime with an ISO timestamp you compute from the current time below. If phrasing is ambiguous ('tomorrow morning'), ask ONE clarifying question. Always echo the parsed schedule back and get a yes before creating. Other actions: cancel (needs id), list.
 6. manage_sources actions: add (url, optional label), remove (id or url), list.
 7. Reply tersely — this is Telegram. Plain text, no markdown formatting.
@@ -38,8 +39,10 @@ function tool(name, description, workflowId, inputs, pos) {
   const value = {};
   const schema = [];
   for (const [field, spec] of Object.entries(inputs)) {
+    // 4th $fromAI arg = default: without it the model MUST supply every param
+    // (omitting one hard-fails the tool call with a schema error)
     value[field] = spec.fixed !== undefined ? spec.fixed
-      : "={{ $fromAI('" + field + "', '" + spec.desc.replace(/'/g, "\\'") + "', 'string') }}";
+      : "={{ $fromAI('" + field + "', '" + spec.desc.replace(/'/g, "\\'") + "', 'string', '') }}";
     schema.push({ id: field, displayName: field, required: false, defaultMatch: false,
       display: true, canBeUsedToMatch: true, type: 'string' });
   }
@@ -175,11 +178,13 @@ let chat_id = ${CHAT_ID};
 try { chat_id = $('Record update').item.json.chat_id || chat_id; } catch (e) {
   try { chat_id = $('Test normalize').item.json.chat_id || chat_id; } catch (e2) {}
 }
-return { json: { chat_id, output: String($json.output || '').slice(0, 4000) || '(empty reply)' } };`.trim() } },
+// Telegram node sends parse_mode HTML — escape or any < > & kills the send
+const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+return { json: { chat_id, output: esc(String($json.output || '').slice(0, 4000)) || '(empty reply)' } };`.trim() } },
 
   { id: 'reply', name: 'Send reply', type: 'n8n-nodes-base.telegram', typeVersion: 1.2, position: [1600, 100],
     parameters: { chatId: '={{ $json.chat_id }}', text: '={{ $json.output }}',
-      additionalFields: { appendAttribution: false } },
+      additionalFields: { appendAttribution: false, parse_mode: 'HTML' } },
     credentials: { telegramApi: CRED_TG },
     onError: 'continueRegularOutput' }
 ];

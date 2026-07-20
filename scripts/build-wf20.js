@@ -324,8 +324,8 @@ const nodes = [
   { id: 'tgsummary', name: 'Telegram summary', type: 'n8n-nodes-base.telegram', typeVersion: 1.2, position: [4200, 0],
     parameters: {
       chatId: '__TG_CHAT__',
-      text: "=\u{1F52D} Run #{{ $json.run_id }} ({{ $json.scope }}) {{ $json.status }}: {{ $json.urls_new }} new, {{ $json.items_created }} items{{ $json.top_title ? '\\nTop: ' + $json.top_title : '' }}{{ $json.error ? '\\n⚠️ ' + $json.error : '' }}",
-      additionalFields: { appendAttribution: false } },
+      text: "=\u{1F52D} Run #{{ $json.run_id }} ({{ $json.scope }}) {{ $json.status }}: {{ $json.urls_new }} new, {{ $json.items_created }} items{{ $json.top_title ? '\\nTop: ' + String($json.top_title).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') : '' }}{{ $json.error ? '\\n⚠️ ' + String($json.error).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') : '' }}",
+      additionalFields: { appendAttribution: false, parse_mode: 'HTML' } },
     credentials: { telegramApi: { id: '6RLwMp4ODoesGE4v', name: 'telegram-scout-bot' } },
     onError: 'continueRegularOutput' },
 

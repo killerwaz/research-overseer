@@ -12,7 +12,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const j = $input.first().json;\nconst wf = (j.workflow && j.workflow.name) || 'unknown workflow';\nconst execId = (j.execution && j.execution.id) || null;\nconst execUrl = (j.execution && j.execution.url) || '';\nlet node = 'unknown node';\nlet message = 'unknown error';\ntry {\n  const err = j.execution && j.execution.error;\n  if (err) { node = (err.node && err.node.name) || node; message = err.message || message; }\n} catch (e) {}\nconst text = 'SCOUT ERROR in ' + wf + '\\nnode: ' + node + '\\nerror: ' + String(message).slice(0, 500) + (execUrl ? '\\n' + execUrl : '');\nreturn [{ json: { workflow: wf, node, message: String(message).slice(0, 1000), execution_id: execId, execution_url: execUrl, text } }];"
+        "jsCode": "const j = $input.first().json;\nconst wf = (j.workflow && j.workflow.name) || 'unknown workflow';\nconst execId = (j.execution && j.execution.id) || null;\nconst execUrl = (j.execution && j.execution.url) || '';\nlet node = 'unknown node';\nlet message = 'unknown error';\ntry {\n  const err = j.execution && j.execution.error;\n  if (err) { node = (err.node && err.node.name) || node; message = err.message || message; }\n} catch (e) {}\nconst esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst text = 'SCOUT ERROR in ' + esc(wf) + '\\nnode: ' + esc(node) + '\\nerror: ' + esc(String(message).slice(0, 500)) + (execUrl ? '\\n' + esc(execUrl) : '');\nreturn [{ json: { workflow: wf, node, message: String(message).slice(0, 1000), execution_id: execId, execution_url: execUrl, text } }];"
       },
       "id": "fmt",
       "name": "Format error",
@@ -42,7 +42,7 @@
       "parameters": {
         "chatId": "__TG_CHAT__",
         "text": "={{ $('Format error').first().json.text }}",
-        "additionalFields": { "appendAttribution": false }
+        "additionalFields": { "appendAttribution": false, "parse_mode": "HTML" }
       },
       "id": "tgalert",
       "name": "Telegram alert",
