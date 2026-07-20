@@ -1,0 +1,57 @@
+{
+  "name": "WF-31 query_feed",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            { "name": "since", "type": "string" },
+            { "name": "min_relevance", "type": "string" },
+            { "name": "tag", "type": "string" },
+            { "name": "limit", "type": "string" }
+          ]
+        }
+      },
+      "id": "trigger",
+      "name": "WF Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select f.id, f.canonical_url, f.title, f.summary, f.angle, f.relevance, f.tags, f.created_at from feed_items f where (nullif($1,'') is null or f.created_at >= nullif($1,'')::timestamptz) and (nullif($2,'') is null or f.relevance >= nullif($2,'')::int) and (nullif($3,'') is null or lower(nullif($3,'')) = any(f.tags)) order by f.relevance desc nulls last, f.created_at desc limit coalesce(nullif($4,'')::int, 20)",
+        "options": {
+          "queryReplacement": "={{ $json.since || '' }},{{ $json.min_relevance || '' }},{{ $json.tag || '' }},{{ $json.limit || '' }}"
+        }
+      },
+      "id": "select",
+      "name": "Select feed",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [220, 0],
+      "credentials": {
+        "postgres": { "id": "tzBuhu9KEXlaRRfW", "name": "Postgres account" }
+      },
+      "executeOnce": true,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const rows = $input.all().map(i => i.json).filter(j => j && j.id);\nif (!rows.length) return [{ json: { count: 0, items: [], note: 'no feed items matched the filters' } }];\nreturn [{ json: { count: rows.length, items: rows } }];"
+      },
+      "id": "shape",
+      "name": "Shape result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 0]
+    }
+  ],
+  "connections": {
+    "WF Input": { "main": [[{ "node": "Select feed", "type": "main", "index": 0 }]] },
+    "Select feed": { "main": [[{ "node": "Shape result", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1", "errorWorkflow": "PNJMA4NbQGmp1xKv" }
+}
