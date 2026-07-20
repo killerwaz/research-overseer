@@ -1,0 +1,25 @@
+{
+  "name": "WF-42 scrape_url",
+  "nodes": [
+    { "id": "trigger", "name": "WF Input", "type": "n8n-nodes-base.executeWorkflowTrigger", "typeVersion": 1.1, "position": [0, 0],
+      "parameters": { "workflowInputs": { "values": [
+        { "name": "url", "type": "string" }, { "name": "trigger", "type": "string" } ] } } },
+    { "id": "build", "name": "Build urls", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [200, 0],
+      "parameters": { "mode": "runOnceForAllItems", "jsCode": "const j = $input.first().json;\nconst url = String(j.url || '').trim();\nif (!url) return [{ json: { urls: [], trigger: j.trigger || 'agent', error: 'no url provided' } }];\nreturn [{ json: { urls: [{ url, source: 'manual' }], trigger: j.trigger || 'agent' } }];" } },
+    { "id": "run20", "name": "Run WF-20", "type": "n8n-nodes-base.executeWorkflow", "typeVersion": 1.2, "position": [400, 0],
+      "parameters": { "workflowId": { "__rl": true, "value": "NXWu2wqU6ifrFIpd", "mode": "id" },
+        "workflowInputs": { "mappingMode": "defineBelow",
+          "value": { "urls": "={{ $json.urls }}", "trigger": "={{ $json.trigger }}", "scope": "url" },
+          "matchingColumns": [],
+          "schema": [
+            { "id": "urls", "displayName": "urls", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "array" },
+            { "id": "trigger", "displayName": "trigger", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" },
+            { "id": "scope", "displayName": "scope", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" } ] },
+        "options": { "waitForSubWorkflow": true } } }
+  ],
+  "connections": {
+    "WF Input": { "main": [[{ "node": "Build urls", "type": "main", "index": 0 }]] },
+    "Build urls": { "main": [[{ "node": "Run WF-20", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1", "errorWorkflow": "PNJMA4NbQGmp1xKv" }
+}
