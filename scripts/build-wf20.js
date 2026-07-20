@@ -6,6 +6,7 @@ const path = require('path');
 const CRED_PG = { id: 'tzBuhu9KEXlaRRfW', name: 'Postgres account' };
 const CRED_CRAWL = { id: 'avVVOMOhNmIhsK5n', name: 'crawl4ai-bearer' };
 const CRED_LM = { id: 'JsTIc0R9trd31PsV', name: 'lmstudio-bearer' };
+const CRED_FC = { id: 'J7cbHkpEdHeUIhif', name: 'firecrawl-api' };
 
 // NOTE: no URL/URLSearchParams in the n8n task-runner sandbox — manual parsing only.
 const CANONICALIZE = `
@@ -77,27 +78,37 @@ return fresh.map(j => ({ json: j }));
 
 const LOG_FAILURE = `
 const orig = $('Filter new').item.json;
-let reason = 'empty_or_short_markdown';
-if ($json.error) reason = 'scrape_error: ' + (typeof $json.error === 'object' ? JSON.stringify($json.error) : String($json.error)).slice(0, 200);
-else if ($json.results && $json.results[0] && $json.results[0].error_message) reason = 'crawl4ai: ' + String($json.results[0].error_message).slice(0, 200);
+let reason = 'both_scrapers_failed_or_short_markdown';
+if ($json.error) reason = 'firecrawl_error: ' + (typeof $json.error === 'object' ? JSON.stringify($json.error) : String($json.error)).slice(0, 200);
+else if ($json.data) reason = 'firecrawl_short_markdown';
 return { json: { failed: true, url: orig.url, canonical_url: orig.canonical_url, reason, run_id: orig.run_id } };
 `.trim();
 
 const PREP_DOC = `
 const orig = $('Filter new').item.json;
-const r = ($json.results && $json.results[0]) || {};
-const md = r.markdown || {};
-const fit = (typeof md === 'object' ? md.fit_markdown : md) || '';
-const raw = (typeof md === 'object' ? md.raw_markdown : '') || '';
-const markdown = fit.length >= 400 ? fit : raw;
-const title = (r.metadata && r.metadata.title) || orig.title || '';
+let markdown = '';
+let title = '';
+let scraper = 'crawl4ai';
+if ($json.results) {
+  const r = ($json.results && $json.results[0]) || {};
+  const md = r.markdown || {};
+  const fit = (typeof md === 'object' ? md.fit_markdown : md) || '';
+  const raw = (typeof md === 'object' ? md.raw_markdown : '') || '';
+  markdown = fit.length >= 400 ? fit : raw;
+  title = (r.metadata && r.metadata.title) || orig.title || '';
+} else {
+  scraper = 'firecrawl';
+  const d = $json.data || {};
+  markdown = d.markdown || '';
+  title = (d.metadata && d.metadata.title) || orig.title || '';
+}
 const sys = __TRIAGE_SYSTEM__;
 const user = 'TITLE: ' + title + '\\n' + 'URL: ' + orig.canonical_url + '\\n\\nCONTENT:\\n' + markdown.slice(0, 6000);
-const triage_body = JSON.stringify({ model: 'qwen/qwen3.5-9b', temperature: 0.2, max_tokens: 1200,
+const triage_body = JSON.stringify({ model: 'qwen/qwen3.5-9b', temperature: 0.2, max_tokens: 4000,
   response_format: __TRIAGE_SCHEMA__,
   messages: [ { role: 'system', content: sys }, { role: 'user', content: user } ] });
 return { json: { canonical_url: orig.canonical_url, source: orig.source || '', title,
-  markdown, run_id: orig.run_id, triage_body } };
+  markdown, scraper, run_id: orig.run_id, triage_body } };
 `.trim();
 
 const BUILD_RETRY = `
@@ -171,16 +182,20 @@ return { json: { raw_doc_id: rawDocId, canonical_url: doc.canonical_url, title: 
   summary: o.summary, angle: o.angle || '', relevance: o.relevance, tags_pg: tagsPg(o.tags), run_id: doc.run_id } };
 `;
 
+// Counts and status are computed in SQL (Finalize run) because nodes fed by two
+// branches (crawl4ai + firecrawl paths) execute once per input batch, and
+// $('node').all() only returns the LAST batch. Here we only gather urls_new and
+// failure strings (walking every run of Log failure via runIndex).
 const COLLECT_STATS = `
 const runId = $('Create run').first().json.run_id;
-const found = ($('WF Input').first().json.urls || []).length;
 let fresh = 0; try { fresh = $('Filter new').all().map(i => i.json).filter(j => !j.__no_new).length; } catch (e) {}
-let scraped = 0; try { scraped = $('Insert doc').all().length; } catch (e) {}
-let created = 0; try { created = $('Insert feed').all().length; } catch (e) {}
-let fails = []; try { fails = $('Log failure').all().map(i => i.json.url + ' (' + i.json.reason + ')'); } catch (e) {}
-const status = fails.length ? (scraped ? 'partial' : 'failed') : 'ok';
-return [{ json: { run_id: runId, status: fresh === 0 && !fails.length ? 'ok' : status,
-  urls_new: fresh, urls_scraped: scraped, items_created: created, error: fails.join('; ').slice(0, 2000) } }];
+const fails = [];
+for (let r = 0; r < 50; r++) {
+  let items;
+  try { items = $('Log failure').all(0, r); } catch (e) { break; }
+  for (const it of items) fails.push(it.json.url + ' (' + it.json.reason + ')');
+}
+return [{ json: { run_id: runId, urls_new: fresh, error: fails.join('; ').slice(0, 2000) } }];
 `.trim();
 
 const CRAWL_BODY = "={{ JSON.stringify({ urls: [$json.canonical_url], crawler_config: { type: 'CrawlerRunConfig', params: { markdown_generator: { type: 'DefaultMarkdownGenerator', params: { content_filter: { type: 'PruningContentFilter', params: {} } } } } } }) }}";
@@ -235,17 +250,33 @@ const nodes = [
         leftValue: "={{ ($json.results?.[0]?.markdown?.fit_markdown || $json.results?.[0]?.markdown?.raw_markdown || '').length }}",
         rightValue: 400, operator: { type: 'number', operation: 'gte' } } ] } } },
 
-  codeNode('Log failure', 'logfail', [1800, 100], 'runOnceForEachItem', LOG_FAILURE),
+  { id: 'firecrawl', name: 'Firecrawl', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [1700, 50],
+    parameters: { method: 'POST', url: 'https://api.firecrawl.dev/v1/scrape',
+      authentication: 'genericCredentialType', genericAuthType: 'httpBearerAuth',
+      sendBody: true, specifyBody: 'json',
+      jsonBody: "={{ JSON.stringify({ url: $('Filter new').item.json.canonical_url, formats: ['markdown'] }) }}",
+      options: { timeout: 10000 } },
+    credentials: { httpBearerAuth: CRED_FC },
+    retryOnFail: false, onError: 'continueRegularOutput' },
+
+  { id: 'fcok', name: 'Firecrawl OK?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1850, 50],
+    parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' },
+      combinator: 'and', conditions: [ { id: 'c1',
+        leftValue: "={{ ($json.data?.markdown || '').length }}",
+        rightValue: 200, operator: { type: 'number', operation: 'gte' } } ] } } },
+
+  codeNode('Log failure', 'logfail', [2000, 150], 'runOnceForEachItem', LOG_FAILURE),
   codeNode('Prep doc', 'prepdoc', [1800, -200], 'runOnceForEachItem', PREP_DOC_FINAL),
 
   pgNode('Insert doc', 'insertdoc', [2000, -200],
-    "with s as (insert into seen_urls (canonical_url, source) values ($1, nullif($2,'')) on conflict (canonical_url) do nothing) insert into raw_docs (canonical_url, title, markdown, scraper, run_id) values ($1, nullif($3,''), $4, 'crawl4ai', $5::bigint) returning id as raw_doc_id",
-    "={{ $json.canonical_url }},{{ $json.source }},{{ $json.title }},{{ $json.markdown }},{{ $json.run_id }}"),
+    "with s as (insert into seen_urls (canonical_url, source) values ($1, nullif($2,'')) on conflict (canonical_url) do nothing) insert into raw_docs (canonical_url, title, markdown, scraper, run_id) values ($1, nullif($3,''), $4, $6, $5::bigint) returning id as raw_doc_id",
+    "={{ $json.canonical_url }},{{ $json.source }},{{ $json.title }},{{ $json.markdown }},{{ $json.run_id }},{{ $json.scraper }}"),
 
   { id: 'triage', name: 'Triage', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [2200, -200],
     parameters: { method: 'POST', url: 'http://host.docker.internal:1234/v1/chat/completions',
       authentication: 'genericCredentialType', genericAuthType: 'httpBearerAuth',
-      sendBody: true, specifyBody: 'json', jsonBody: "={{ $('Prep doc').item.json.triage_body }}", options: { timeout: 90000 } },
+      sendBody: true, specifyBody: 'json', jsonBody: "={{ $('Prep doc').item.json.triage_body }}",
+      options: { timeout: 90000, batching: { batch: { batchSize: 1, batchInterval: 200 } } } },
     credentials: { httpBearerAuth: CRED_LM },
     retryOnFail: true, maxTries: 2, waitBetweenTries: 1000, onError: 'continueRegularOutput' },
 
@@ -261,7 +292,8 @@ const nodes = [
   { id: 'triage2', name: 'Triage retry', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [2850, -100],
     parameters: { method: 'POST', url: 'http://host.docker.internal:1234/v1/chat/completions',
       authentication: 'genericCredentialType', genericAuthType: 'httpBearerAuth',
-      sendBody: true, specifyBody: 'json', jsonBody: '={{ $json.retry_body }}', options: { timeout: 90000 } },
+      sendBody: true, specifyBody: 'json', jsonBody: '={{ $json.retry_body }}',
+      options: { timeout: 90000, batching: { batch: { batchSize: 1, batchInterval: 200 } } } },
     credentials: { httpBearerAuth: CRED_LM },
     retryOnFail: false, onError: 'continueRegularOutput' },
 
@@ -280,9 +312,20 @@ const nodes = [
   codeNode('Collect stats', 'stats', [3800, 0], 'runOnceForAllItems', COLLECT_STATS),
 
   pgNode('Finalize run', 'finalize', [4000, 0],
-    "update runs set finished_at = now(), status = $2, urls_new = $3::int, urls_scraped = $4::int, items_created = $5::int, error = nullif($6,'') where id = $1::bigint returning id as run_id, status, urls_found, urls_new, urls_scraped, items_created, error",
-    "={{ $json.run_id }},{{ $json.status }},{{ $json.urls_new }},{{ $json.urls_scraped }},{{ $json.items_created }},{{ $json.error }}",
-    { executeOnce: true })
+    "update runs set finished_at = now(), urls_new = $2::int, urls_scraped = (select count(*) from raw_docs where run_id = $1::bigint), items_created = (select count(*) from feed_items where run_id = $1::bigint), error = nullif($3,''), status = case when $2::int = 0 and $3 = '' then 'ok' when (select count(*) from raw_docs where run_id = $1::bigint) = 0 and $2::int > 0 then 'failed' when (select count(*) from raw_docs where run_id = $1::bigint) < $2::int then 'partial' else 'ok' end where id = $1::bigint returning id as run_id, status, scope, urls_found, urls_new, urls_scraped, items_created, error, (select title from feed_items where run_id = $1::bigint order by relevance desc nulls last, id desc limit 1) as top_title",
+    "={{ $json.run_id }},{{ $json.urls_new }},{{ $json.error }}",
+    { executeOnce: true }),
+
+  { id: 'tgsummary', name: 'Telegram summary', type: 'n8n-nodes-base.telegram', typeVersion: 1.2, position: [4200, 0],
+    parameters: {
+      chatId: '__TG_CHAT__',
+      text: "=\u{1F52D} Run #{{ $json.run_id }} ({{ $json.scope }}) {{ $json.status }}: {{ $json.urls_new }} new, {{ $json.items_created }} items{{ $json.top_title ? '\\nTop: ' + $json.top_title : '' }}{{ $json.error ? '\\n⚠️ ' + $json.error : '' }}",
+      additionalFields: { appendAttribution: false } },
+    credentials: { telegramApi: { id: '6RLwMp4ODoesGE4v', name: 'telegram-scout-bot' } },
+    onError: 'continueRegularOutput' },
+
+  codeNode('Return summary', 'retsummary', [4400, 0], 'runOnceForAllItems',
+    "return $('Finalize run').all();")
 ];
 
 const connections = {
@@ -298,6 +341,11 @@ const connections = {
   ] },
   'Scrape': { main: [[{ node: 'Scrape OK?', type: 'main', index: 0 }]] },
   'Scrape OK?': { main: [
+    [{ node: 'Prep doc', type: 'main', index: 0 }],
+    [{ node: 'Firecrawl', type: 'main', index: 0 }]
+  ] },
+  'Firecrawl': { main: [[{ node: 'Firecrawl OK?', type: 'main', index: 0 }]] },
+  'Firecrawl OK?': { main: [
     [{ node: 'Prep doc', type: 'main', index: 0 }],
     [{ node: 'Log failure', type: 'main', index: 0 }]
   ] },
@@ -316,7 +364,9 @@ const connections = {
   'Insert feed': { main: [[{ node: 'Merge for stats', type: 'main', index: 0 }]] },
   'Log failure': { main: [[{ node: 'Merge for stats', type: 'main', index: 1 }]] },
   'Merge for stats': { main: [[{ node: 'Collect stats', type: 'main', index: 0 }]] },
-  'Collect stats': { main: [[{ node: 'Finalize run', type: 'main', index: 0 }]] }
+  'Collect stats': { main: [[{ node: 'Finalize run', type: 'main', index: 0 }]] },
+  'Finalize run': { main: [[{ node: 'Telegram summary', type: 'main', index: 0 }]] },
+  'Telegram summary': { main: [[{ node: 'Return summary', type: 'main', index: 0 }]] }
 };
 
 const workflow = {

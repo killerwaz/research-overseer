@@ -39,18 +39,26 @@
       "onError": "continueRegularOutput"
     },
     {
-      "parameters": {},
-      "id": "tgtodo",
-      "name": "TODO Telegram alert (needs telegram-scout-bot)",
-      "type": "n8n-nodes-base.noOp",
-      "typeVersion": 1,
-      "position": [600, 0]
+      "parameters": {
+        "chatId": "__TG_CHAT__",
+        "text": "={{ $('Format error').first().json.text }}",
+        "additionalFields": { "appendAttribution": false }
+      },
+      "id": "tgalert",
+      "name": "Telegram alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [600, 0],
+      "credentials": {
+        "telegramApi": { "id": "6RLwMp4ODoesGE4v", "name": "telegram-scout-bot" }
+      },
+      "onError": "continueRegularOutput"
     }
   ],
   "connections": {
     "Error Trigger": { "main": [[{ "node": "Format error", "type": "main", "index": 0 }]] },
     "Format error": { "main": [[{ "node": "Mark run failed", "type": "main", "index": 0 }]] },
-    "Mark run failed": { "main": [[{ "node": "TODO Telegram alert (needs telegram-scout-bot)", "type": "main", "index": 0 }]] }
+    "Mark run failed": { "main": [[{ "node": "Telegram alert", "type": "main", "index": 0 }]] }
   },
   "settings": { "executionOrder": "v1" }
 }
