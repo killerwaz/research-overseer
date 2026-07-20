@@ -1,0 +1,120 @@
+{
+  "name": "WF-33 manage_schedule",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            { "name": "action", "type": "string" },
+            { "name": "cron", "type": "string" },
+            { "name": "run_at", "type": "string" },
+            { "name": "label", "type": "string" },
+            { "name": "id", "type": "string" }
+          ]
+        }
+      },
+      "id": "trigger",
+      "name": "WF Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            { "conditions": { "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" }, "combinator": "and", "conditions": [ { "id": "c1", "leftValue": "={{ $json.action }}", "rightValue": "create_recurring", "operator": { "type": "string", "operation": "equals" } } ] }, "renameOutput": true, "outputKey": "create_recurring" },
+            { "conditions": { "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" }, "combinator": "and", "conditions": [ { "id": "c2", "leftValue": "={{ $json.action }}", "rightValue": "create_onetime", "operator": { "type": "string", "operation": "equals" } } ] }, "renameOutput": true, "outputKey": "create_onetime" },
+            { "conditions": { "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" }, "combinator": "and", "conditions": [ { "id": "c3", "leftValue": "={{ $json.action }}", "rightValue": "cancel", "operator": { "type": "string", "operation": "equals" } } ] }, "renameOutput": true, "outputKey": "cancel" },
+            { "conditions": { "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" }, "combinator": "and", "conditions": [ { "id": "c4", "leftValue": "={{ $json.action }}", "rightValue": "list", "operator": { "type": "string", "operation": "equals" } } ] }, "renameOutput": true, "outputKey": "list" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "switch",
+      "name": "Action",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [200, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "insert into schedules (type, cron, label) values ('recurring', $1, nullif($2,'')) returning id, type, cron, label, active",
+        "options": { "queryReplacement": "={{ $json.cron }},{{ $json.label || '' }}" }
+      },
+      "id": "createrec",
+      "name": "Create recurring",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [420, -150],
+      "credentials": { "postgres": { "id": "tzBuhu9KEXlaRRfW", "name": "Postgres account" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "insert into schedules (type, run_at, label) values ('onetime', $1::timestamptz, nullif($2,'')) returning id, type, run_at, label, active",
+        "options": { "queryReplacement": "={{ $json.run_at }},{{ $json.label || '' }}" }
+      },
+      "id": "createone",
+      "name": "Create onetime",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [420, -50],
+      "credentials": { "postgres": { "id": "tzBuhu9KEXlaRRfW", "name": "Postgres account" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "update schedules set active = false where id = $1::bigint returning id, type, label, active",
+        "options": { "queryReplacement": "={{ $json.id }}" }
+      },
+      "id": "cancel",
+      "name": "Cancel",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [420, 50],
+      "credentials": { "postgres": { "id": "tzBuhu9KEXlaRRfW", "name": "Postgres account" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select id, type, cron, run_at, label, active, last_run from schedules order by id",
+        "options": {}
+      },
+      "id": "list",
+      "name": "List",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [420, 150],
+      "credentials": { "postgres": { "id": "tzBuhu9KEXlaRRfW", "name": "Postgres account" } },
+      "executeOnce": true,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const rows = $input.all().map(i => i.json).filter(j => j && Object.keys(j).length);\nreturn [{ json: { count: rows.length, result: rows } }];"
+      },
+      "id": "shape",
+      "name": "Shape result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [640, 0]
+    }
+  ],
+  "connections": {
+    "WF Input": { "main": [[{ "node": "Action", "type": "main", "index": 0 }]] },
+    "Action": { "main": [
+      [{ "node": "Create recurring", "type": "main", "index": 0 }],
+      [{ "node": "Create onetime", "type": "main", "index": 0 }],
+      [{ "node": "Cancel", "type": "main", "index": 0 }],
+      [{ "node": "List", "type": "main", "index": 0 }]
+    ] },
+    "Create recurring": { "main": [[{ "node": "Shape result", "type": "main", "index": 0 }]] },
+    "Create onetime": { "main": [[{ "node": "Shape result", "type": "main", "index": 0 }]] },
+    "Cancel": { "main": [[{ "node": "Shape result", "type": "main", "index": 0 }]] },
+    "List": { "main": [[{ "node": "Shape result", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1", "errorWorkflow": "PNJMA4NbQGmp1xKv" }
+}
