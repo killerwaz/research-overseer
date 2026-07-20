@@ -1,0 +1,56 @@
+{
+  "name": "WF-99 error_workflow",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "errtrig",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const j = $input.first().json;\nconst wf = (j.workflow && j.workflow.name) || 'unknown workflow';\nconst execId = (j.execution && j.execution.id) || null;\nconst execUrl = (j.execution && j.execution.url) || '';\nlet node = 'unknown node';\nlet message = 'unknown error';\ntry {\n  const err = j.execution && j.execution.error;\n  if (err) { node = (err.node && err.node.name) || node; message = err.message || message; }\n} catch (e) {}\nconst text = 'SCOUT ERROR in ' + wf + '\\nnode: ' + node + '\\nerror: ' + String(message).slice(0, 500) + (execUrl ? '\\n' + execUrl : '');\nreturn [{ json: { workflow: wf, node, message: String(message).slice(0, 1000), execution_id: execId, execution_url: execUrl, text } }];"
+      },
+      "id": "fmt",
+      "name": "Format error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [200, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "update runs set status = 'failed', finished_at = coalesce(finished_at, now()), error = left(coalesce(error || ' | ', '') || $1, 2000) where status = 'running' and started_at > now() - interval '2 hours' returning id",
+        "options": {
+          "queryReplacement": "={{ $json.workflow + ' / ' + $json.node + ': ' + $json.message }}"
+        }
+      },
+      "id": "markfail",
+      "name": "Mark run failed",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [400, 0],
+      "credentials": {
+        "postgres": { "id": "tzBuhu9KEXlaRRfW", "name": "Postgres account" }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {},
+      "id": "tgtodo",
+      "name": "TODO Telegram alert (needs telegram-scout-bot)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [600, 0]
+    }
+  ],
+  "connections": {
+    "Error Trigger": { "main": [[{ "node": "Format error", "type": "main", "index": 0 }]] },
+    "Format error": { "main": [[{ "node": "Mark run failed", "type": "main", "index": 0 }]] },
+    "Mark run failed": { "main": [[{ "node": "TODO Telegram alert (needs telegram-scout-bot)", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}
