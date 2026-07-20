@@ -1,0 +1,110 @@
+{
+  "name": "ZZ scout-readtools-harness (build tool)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "scout-readtools-harness-__ZZ_SECRET__",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "wh-1",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" },
+                "combinator": "and",
+                "conditions": [
+                  { "id": "c1", "leftValue": "={{ $json.body.tool }}", "rightValue": "query_feed", "operator": { "type": "string", "operation": "equals" } }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "query_feed"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" },
+                "combinator": "and",
+                "conditions": [
+                  { "id": "c2", "leftValue": "={{ $json.body.tool }}", "rightValue": "run_status", "operator": { "type": "string", "operation": "equals" } }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "run_status"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "switch",
+      "name": "Which tool",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [200, 0]
+    },
+    {
+      "parameters": {
+        "workflowId": { "__rl": true, "value": "__WF31__", "mode": "id" },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "since": "={{ $json.body.since || '' }}",
+            "min_relevance": "={{ $json.body.min_relevance || '' }}",
+            "tag": "={{ $json.body.tag || '' }}",
+            "limit": "={{ $json.body.limit || '' }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            { "id": "since", "displayName": "since", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" },
+            { "id": "min_relevance", "displayName": "min_relevance", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" },
+            { "id": "tag", "displayName": "tag", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" },
+            { "id": "limit", "displayName": "limit", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" }
+          ]
+        },
+        "options": { "waitForSubWorkflow": true }
+      },
+      "id": "exqf",
+      "name": "Run query_feed",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [420, -80]
+    },
+    {
+      "parameters": {
+        "workflowId": { "__rl": true, "value": "__WF32__", "mode": "id" },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "limit": "={{ $json.body.limit || '' }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            { "id": "limit", "displayName": "limit", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" }
+          ]
+        },
+        "options": { "waitForSubWorkflow": true }
+      },
+      "id": "exrs",
+      "name": "Run run_status",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [420, 80]
+    }
+  ],
+  "connections": {
+    "Webhook": { "main": [[{ "node": "Which tool", "type": "main", "index": 0 }]] },
+    "Which tool": { "main": [
+      [{ "node": "Run query_feed", "type": "main", "index": 0 }],
+      [{ "node": "Run run_status", "type": "main", "index": 0 }]
+    ] }
+  },
+  "settings": { "executionOrder": "v1", "errorWorkflow": "PNJMA4NbQGmp1xKv" }
+}
