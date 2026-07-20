@@ -215,6 +215,38 @@
       }
     },
     {
+      "id": "ispdf",
+      "name": "Is PDF?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        -100
+      ],
+      "parameters": {
+        "options": {},
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.canonical_url.toLowerCase().split('?')[0].endsWith('.pdf') }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
       "id": "firecrawl",
       "name": "Firecrawl",
       "type": "n8n-nodes-base.httpRequest",
@@ -232,7 +264,7 @@
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ url: $('Filter new').item.json.canonical_url, formats: ['markdown'] }) }}",
         "options": {
-          "timeout": 10000
+          "timeout": 45000
         }
       },
       "credentials": {
@@ -241,7 +273,9 @@
           "name": "firecrawl-api"
         }
       },
-      "retryOnFail": false,
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000,
       "onError": "continueRegularOutput"
     },
     {
@@ -287,7 +321,7 @@
       ],
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const orig = $('Filter new').item.json;\nlet reason = 'both_scrapers_failed_or_short_markdown';\nif ($json.error) reason = 'firecrawl_error: ' + (typeof $json.error === 'object' ? JSON.stringify($json.error) : String($json.error)).slice(0, 200);\nelse if ($json.data) reason = 'firecrawl_short_markdown';\nreturn { json: { failed: true, url: orig.url, canonical_url: orig.canonical_url, reason, run_id: orig.run_id } };"
+        "jsCode": "const orig = $('Filter new').item.json;\nlet reason = 'both_scrapers_failed_or_short_markdown';\nif ($json.error) {\n  const msg = (typeof $json.error === 'object' && $json.error.message) ? $json.error.message : String($json.error);\n  reason = 'firecrawl_error: ' + String(msg).slice(0, 120);\n} else if ($json.data) reason = 'firecrawl_short_markdown';\nreturn { json: { failed: true, url: orig.url, canonical_url: orig.canonical_url, reason, run_id: orig.run_id } };"
       }
     },
     {
@@ -328,191 +362,83 @@
       }
     },
     {
-      "id": "triageloop",
-      "name": "Triage loop",
-      "type": "n8n-nodes-base.splitInBatches",
-      "typeVersion": 3,
+      "id": "runtriage",
+      "name": "Run triage",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
       "position": [
-        2150,
+        2200,
         -200
       ],
       "parameters": {
-        "batchSize": 1,
-        "options": {}
-      }
-    },
-    {
-      "id": "triage",
-      "name": "Triage",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        2350,
-        -200
-      ],
-      "parameters": {
-        "method": "POST",
-        "url": "http://host.docker.internal:1234/v1/chat/completions",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpBearerAuth",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ $('Prep doc').item.json.triage_body }}",
-        "options": {
-          "timeout": 120000
-        }
-      },
-      "credentials": {
-        "httpBearerAuth": {
-          "id": "JsTIc0R9trd31PsV",
-          "name": "lmstudio-bearer"
-        }
-      },
-      "retryOnFail": true,
-      "maxTries": 2,
-      "waitBetweenTries": 1000,
-      "onError": "continueRegularOutput"
-    },
-    {
-      "id": "validate1",
-      "name": "Validate triage",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        2400,
-        -200
-      ],
-      "parameters": {
-        "mode": "runOnceForEachItem",
-        "jsCode": "function parseContent(j) {\n  try {\n    let c = j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;\n    if (!c) return null;\n    c = c.trim().replace(/^\\`\\`\\`(json)?/i, '').replace(/\\`\\`\\`$/, '').trim();\n    const o = JSON.parse(c);\n    if (o && typeof o.summary === 'string' && Number.isInteger(o.relevance) &&\n        o.relevance >= 1 && o.relevance <= 5 && Array.isArray(o.tags) && o.tags.length >= 1) return o;\n    return null;\n  } catch (e) { return null; }\n}\nfunction tagsPg(tags) {\n  const clean = (tags || []).slice(0, 5).map(t => String(t).toLowerCase().replace(/[{}\",\\\\]/g, '').trim()).filter(Boolean);\n  return '{' + clean.join(',') + '}';\n}\nconst doc = $('Prep doc').item.json;\nconst rawDocId = $('Insert doc').item.json.raw_doc_id;\nconst o = parseContent($json);\nif (!o) return { json: { __invalid: true } };\nreturn { json: { __invalid: false, raw_doc_id: rawDocId, canonical_url: doc.canonical_url, title: doc.title,\n  summary: o.summary, angle: o.angle || '', relevance: o.relevance, tags_pg: tagsPg(o.tags), run_id: doc.run_id } };\n"
-      }
-    },
-    {
-      "id": "triagevalid",
-      "name": "Triage valid?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2,
-      "position": [
-        2600,
-        -200
-      ],
-      "parameters": {
-        "options": {},
-        "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "loose"
+        "workflowId": {
+          "__rl": true,
+          "value": "HISagmvZYi6O7N5u",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "triage_body": "={{ $('Prep doc').item.json.triage_body }}",
+            "raw_doc_id": "={{ $json.raw_doc_id }}",
+            "canonical_url": "={{ $('Prep doc').item.json.canonical_url }}",
+            "title": "={{ $('Prep doc').item.json.title }}",
+            "run_id": "={{ $('Prep doc').item.json.run_id }}"
           },
-          "combinator": "and",
-          "conditions": [
+          "matchingColumns": [],
+          "schema": [
             {
-              "id": "c1",
-              "leftValue": "={{ Boolean($json.__invalid) }}",
-              "rightValue": false,
-              "operator": {
-                "type": "boolean",
-                "operation": "equals"
-              }
+              "id": "triage_body",
+              "displayName": "triage_body",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "raw_doc_id",
+              "displayName": "raw_doc_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "canonical_url",
+              "displayName": "canonical_url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "title",
+              "displayName": "title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "run_id",
+              "displayName": "run_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
             }
           ]
-        }
-      }
-    },
-    {
-      "id": "buildretry",
-      "name": "Build retry",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        2700,
-        -100
-      ],
-      "parameters": {
-        "mode": "runOnceForEachItem",
-        "jsCode": "const prep = $('Prep doc').item.json;\nconst base = JSON.parse(prep.triage_body);\nlet prev = 'no output';\ntry { prev = $('Triage').item.json.choices[0].message.content || 'no output'; } catch (e) {}\nbase.messages.push({ role: 'assistant', content: String(prev).slice(0, 2000) });\nbase.messages.push({ role: 'user', content: 'Your previous output was not valid JSON matching the required schema. Return ONLY the JSON object with fields summary, angle, relevance, tags.' });\nreturn { json: { retry_body: JSON.stringify(base) } };"
-      }
-    },
-    {
-      "id": "triage2",
-      "name": "Triage retry",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        2850,
-        -100
-      ],
-      "parameters": {
-        "method": "POST",
-        "url": "http://host.docker.internal:1234/v1/chat/completions",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpBearerAuth",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ $json.retry_body }}",
+        },
         "options": {
-          "timeout": 120000
+          "waitForSubWorkflow": true
         }
       },
-      "credentials": {
-        "httpBearerAuth": {
-          "id": "JsTIc0R9trd31PsV",
-          "name": "lmstudio-bearer"
-        }
-      },
-      "retryOnFail": false,
       "onError": "continueRegularOutput"
-    },
-    {
-      "id": "validate2",
-      "name": "Validate retry",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        3000,
-        -100
-      ],
-      "parameters": {
-        "mode": "runOnceForEachItem",
-        "jsCode": "function parseContent(j) {\n  try {\n    let c = j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;\n    if (!c) return null;\n    c = c.trim().replace(/^\\`\\`\\`(json)?/i, '').replace(/\\`\\`\\`$/, '').trim();\n    const o = JSON.parse(c);\n    if (o && typeof o.summary === 'string' && Number.isInteger(o.relevance) &&\n        o.relevance >= 1 && o.relevance <= 5 && Array.isArray(o.tags) && o.tags.length >= 1) return o;\n    return null;\n  } catch (e) { return null; }\n}\nfunction tagsPg(tags) {\n  const clean = (tags || []).slice(0, 5).map(t => String(t).toLowerCase().replace(/[{}\",\\\\]/g, '').trim()).filter(Boolean);\n  return '{' + clean.join(',') + '}';\n}\nconst doc = $('Prep doc').item.json;\nconst rawDocId = $('Insert doc').item.json.raw_doc_id;\nconst o = parseContent($json);\nif (!o) return { json: { raw_doc_id: rawDocId, canonical_url: doc.canonical_url, title: doc.title,\n  summary: 'TRIAGE_FAILED', angle: '', relevance: '', tags_pg: '{}', run_id: doc.run_id } };\nreturn { json: { raw_doc_id: rawDocId, canonical_url: doc.canonical_url, title: doc.title,\n  summary: o.summary, angle: o.angle || '', relevance: o.relevance, tags_pg: tagsPg(o.tags), run_id: doc.run_id } };\n"
-      }
-    },
-    {
-      "id": "mergetriage",
-      "name": "Merge triaged",
-      "type": "n8n-nodes-base.merge",
-      "typeVersion": 3,
-      "position": [
-        3200,
-        -200
-      ],
-      "parameters": {
-        "mode": "append",
-        "numberInputs": 2
-      }
-    },
-    {
-      "id": "insertfeed",
-      "name": "Insert feed",
-      "type": "n8n-nodes-base.postgres",
-      "typeVersion": 2.4,
-      "position": [
-        3400,
-        -200
-      ],
-      "parameters": {
-        "operation": "executeQuery",
-        "query": "insert into feed_items (raw_doc_id, canonical_url, title, summary, angle, relevance, tags, run_id) values ($1::bigint, $2, nullif($3,''), $4, nullif($5,''), nullif($6::text,'')::int, $7::text[], $8::bigint) returning id as feed_item_id",
-        "options": {
-          "queryReplacement": "={{ $json.raw_doc_id }},{{ $json.canonical_url }},{{ $json.title }},{{ $json.summary }},{{ $json.angle }},{{ $json.relevance }},{{ $json.tags_pg }},{{ $json.run_id }}"
-        }
-      },
-      "credentials": {
-        "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
-        }
-      }
     },
     {
       "id": "mergestats",
@@ -539,7 +465,7 @@
       ],
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const runId = $('Create run').first().json.run_id;\nlet fresh = 0; try { fresh = $('Filter new').all().map(i => i.json).filter(j => !j.__no_new).length; } catch (e) {}\nconst fails = [];\nfor (let r = 0; r < 50; r++) {\n  let items;\n  try { items = $('Log failure').all(0, r); } catch (e) { break; }\n  for (const it of items) fails.push(it.json.url + ' (' + it.json.reason + ')');\n}\nreturn [{ json: { run_id: runId, urls_new: fresh, error: fails.join('; ').slice(0, 2000) } }];"
+        "jsCode": "const runId = $('Create run').first().json.run_id;\nlet fresh = 0; try { fresh = $('Filter new').all().map(i => i.json).filter(j => !j.__no_new).length; } catch (e) {}\nconst fails = [];\nfor (let r = 0; r < 50; r++) {\n  let items;\n  try { items = $('Log failure').all(0, r); } catch (e) { break; }\n  for (const it of items) fails.push({ url: it.json.url, reason: it.json.reason });\n}\n// full detail -> runs.error (DB); short host list -> Telegram summary\nconst error = fails.map(f => f.url + ' (' + f.reason + ')').join('; ').slice(0, 2000);\nconst hosts = [...new Set(fails.map(f => String(f.url).replace(/^https?:\\/\\//, '').split('/')[0]))];\nconst error_brief = fails.length\n  ? fails.length + ' failed: ' + hosts.slice(0, 5).join(', ') + (hosts.length > 5 ? ', …' : '')\n  : '';\nreturn [{ json: { run_id: runId, urls_new: fresh, error, error_brief } }];"
       }
     },
     {
@@ -553,7 +479,7 @@
       ],
       "parameters": {
         "operation": "executeQuery",
-        "query": "update runs set finished_at = now(), urls_new = $2::int, urls_scraped = (select count(*) from raw_docs where run_id = $1::bigint), items_created = (select count(*) from feed_items where run_id = $1::bigint), error = nullif($3,''), status = case when $2::int = 0 and $3 = '' then 'ok' when (select count(*) from raw_docs where run_id = $1::bigint) = 0 and $2::int > 0 then 'failed' when (select count(*) from raw_docs where run_id = $1::bigint) < $2::int then 'partial' else 'ok' end where id = $1::bigint returning id as run_id, status, scope, urls_found, urls_new, urls_scraped, items_created, error, (select title from feed_items where run_id = $1::bigint order by relevance desc nulls last, id desc limit 1) as top_title",
+        "query": "update runs set finished_at = now(), urls_new = $2::int, urls_scraped = (select count(*) from raw_docs where run_id = $1::bigint), items_created = (select count(*) from feed_items where run_id = $1::bigint), error = nullif($3,''), status = case when $2::int = 0 and $3 = '' then 'ok' when (select count(*) from raw_docs where run_id = $1::bigint) = 0 and $2::int > 0 then 'failed' when (select count(*) from raw_docs where run_id = $1::bigint) < $2::int then 'partial' when (select count(*) from feed_items where run_id = $1::bigint) < (select count(*) from raw_docs where run_id = $1::bigint) then 'partial' else 'ok' end where id = $1::bigint returning id as run_id, status, scope, urls_found, urls_new, urls_scraped, items_created, error, (select title from feed_items where run_id = $1::bigint order by relevance desc nulls last, id desc limit 1) as top_title",
         "options": {
           "queryReplacement": "={{ $json.run_id }},{{ $json.urls_new }},{{ $json.error }}"
         }
@@ -577,7 +503,7 @@
       ],
       "parameters": {
         "chatId": "__TG_CHAT__",
-        "text": "=🔭 Run #{{ $json.run_id }} ({{ $json.scope }}) {{ $json.status }}: {{ $json.urls_new }} new, {{ $json.items_created }} items{{ $json.top_title ? '\\nTop: ' + String($json.top_title).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') : '' }}{{ $json.error ? '\\n⚠️ ' + String($json.error).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') : '' }}",
+        "text": "=🔭 Run #{{ $json.run_id }} ({{ $json.scope }}) {{ $json.status }}: {{ $json.urls_new }} new, {{ $json.items_created }} items{{ $json.top_title ? '\\nTop: ' + String($json.top_title).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') : '' }}{{ $('Collect stats').first().json.error_brief ? '\\n⚠️ ' + String($('Collect stats').first().json.error_brief).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') : '' }}",
         "additionalFields": {
           "appendAttribution": false,
           "parse_mode": "HTML"
@@ -677,7 +603,7 @@
       "main": [
         [
           {
-            "node": "Scrape",
+            "node": "Is PDF?",
             "type": "main",
             "index": 0
           }
@@ -687,6 +613,24 @@
             "node": "Merge for stats",
             "type": "main",
             "index": 2
+          }
+        ]
+      ]
+    },
+    "Is PDF?": {
+      "main": [
+        [
+          {
+            "node": "Firecrawl",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Scrape",
+            "type": "main",
+            "index": 0
           }
         ]
       ]
@@ -764,120 +708,18 @@
       "main": [
         [
           {
-            "node": "Triage loop",
+            "node": "Run triage",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Triage loop": {
+    "Run triage": {
       "main": [
         [
           {
             "node": "Merge for stats",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Triage",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Triage": {
-      "main": [
-        [
-          {
-            "node": "Validate triage",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Validate triage": {
-      "main": [
-        [
-          {
-            "node": "Triage valid?",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Triage valid?": {
-      "main": [
-        [
-          {
-            "node": "Merge triaged",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Build retry",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Build retry": {
-      "main": [
-        [
-          {
-            "node": "Triage retry",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Triage retry": {
-      "main": [
-        [
-          {
-            "node": "Validate retry",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Validate retry": {
-      "main": [
-        [
-          {
-            "node": "Merge triaged",
-            "type": "main",
-            "index": 1
-          }
-        ]
-      ]
-    },
-    "Merge triaged": {
-      "main": [
-        [
-          {
-            "node": "Insert feed",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Insert feed": {
-      "main": [
-        [
-          {
-            "node": "Triage loop",
             "type": "main",
             "index": 0
           }

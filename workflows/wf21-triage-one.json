@@ -1,0 +1,315 @@
+{
+  "name": "WF-21 triage_one",
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "WF Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "triage_body",
+              "type": "string"
+            },
+            {
+              "name": "raw_doc_id",
+              "type": "string"
+            },
+            {
+              "name": "canonical_url",
+              "type": "string"
+            },
+            {
+              "name": "title",
+              "type": "string"
+            },
+            {
+              "name": "run_id",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "triage",
+      "name": "Triage",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        200,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:1234/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.triage_body }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "JsTIc0R9trd31PsV",
+          "name": "lmstudio-bearer"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "validate1",
+      "name": "Validate triage",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "function parseContent(j) {\n  try {\n    let c = j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;\n    if (!c) return null;\n    c = c.trim().replace(/^\\`\\`\\`(json)?/i, '').replace(/\\`\\`\\`$/, '').trim();\n    const o = JSON.parse(c);\n    if (o && typeof o.summary === 'string' && Number.isInteger(o.relevance) &&\n        o.relevance >= 1 && o.relevance <= 5 && Array.isArray(o.tags) && o.tags.length >= 1) return o;\n    return null;\n  } catch (e) { return null; }\n}\nfunction tagsPg(tags) {\n  const clean = (tags || []).slice(0, 5).map(t => String(t).toLowerCase().replace(/[{}\",\\\\]/g, '').trim()).filter(Boolean);\n  return '{' + clean.join(',') + '}';\n}\nconst doc = $('WF Input').first().json;\nconst rawDocId = doc.raw_doc_id;\nconst o = parseContent($json);\nif (!o) return { json: { __invalid: true } };\nreturn { json: { __invalid: false, raw_doc_id: rawDocId, canonical_url: doc.canonical_url, title: doc.title,\n  summary: o.summary, angle: o.angle || '', relevance: o.relevance, tags_pg: tagsPg(o.tags), run_id: doc.run_id } };\n"
+      }
+    },
+    {
+      "id": "triagevalid",
+      "name": "Triage valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        600,
+        0
+      ],
+      "parameters": {
+        "options": {},
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ Boolean($json.__invalid) }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "buildretry",
+      "name": "Build retry",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        120
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const doc = $('WF Input').first().json;\nconst base = JSON.parse(doc.triage_body);\nlet prev = 'no output';\ntry { prev = $('Triage').first().json.choices[0].message.content || 'no output'; } catch (e) {}\nbase.messages.push({ role: 'assistant', content: String(prev).slice(0, 2000) });\nbase.messages.push({ role: 'user', content: 'Your previous output was not valid JSON matching the required schema. Return ONLY the JSON object with fields summary, angle, relevance, tags.' });\nreturn { json: { retry_body: JSON.stringify(base) } };"
+      }
+    },
+    {
+      "id": "triage2",
+      "name": "Triage retry",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        850,
+        120
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:1234/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.retry_body }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "JsTIc0R9trd31PsV",
+          "name": "lmstudio-bearer"
+        }
+      },
+      "retryOnFail": false,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "validate2",
+      "name": "Validate retry",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        120
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "function parseContent(j) {\n  try {\n    let c = j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;\n    if (!c) return null;\n    c = c.trim().replace(/^\\`\\`\\`(json)?/i, '').replace(/\\`\\`\\`$/, '').trim();\n    const o = JSON.parse(c);\n    if (o && typeof o.summary === 'string' && Number.isInteger(o.relevance) &&\n        o.relevance >= 1 && o.relevance <= 5 && Array.isArray(o.tags) && o.tags.length >= 1) return o;\n    return null;\n  } catch (e) { return null; }\n}\nfunction tagsPg(tags) {\n  const clean = (tags || []).slice(0, 5).map(t => String(t).toLowerCase().replace(/[{}\",\\\\]/g, '').trim()).filter(Boolean);\n  return '{' + clean.join(',') + '}';\n}\nconst doc = $('WF Input').first().json;\nconst rawDocId = doc.raw_doc_id;\nconst o = parseContent($json);\nif (!o) return { json: { raw_doc_id: rawDocId, canonical_url: doc.canonical_url, title: doc.title,\n  summary: 'TRIAGE_FAILED', angle: '', relevance: '', tags_pg: '{}', run_id: doc.run_id } };\nreturn { json: { raw_doc_id: rawDocId, canonical_url: doc.canonical_url, title: doc.title,\n  summary: o.summary, angle: o.angle || '', relevance: o.relevance, tags_pg: tagsPg(o.tags), run_id: doc.run_id } };\n"
+      }
+    },
+    {
+      "id": "mergetriage",
+      "name": "Merge triaged",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        1200,
+        0
+      ],
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 2
+      }
+    },
+    {
+      "id": "insertfeed",
+      "name": "Insert feed",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        1400,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "insert into feed_items (raw_doc_id, canonical_url, title, summary, angle, relevance, tags, run_id) values ($1::bigint, $2, nullif($3,''), $4, nullif($5,''), nullif($6::text,'')::int, $7::text[], $8::bigint) returning id as feed_item_id",
+        "options": {
+          "queryReplacement": "={{ $json.raw_doc_id }},{{ $json.canonical_url }},{{ $json.title }},{{ $json.summary }},{{ $json.angle }},{{ $json.relevance }},{{ $json.tags_pg }},{{ $json.run_id }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "tzBuhu9KEXlaRRfW",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "WF Input": {
+      "main": [
+        [
+          {
+            "node": "Triage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Triage": {
+      "main": [
+        [
+          {
+            "node": "Validate triage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate triage": {
+      "main": [
+        [
+          {
+            "node": "Triage valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Triage valid?": {
+      "main": [
+        [
+          {
+            "node": "Merge triaged",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build retry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build retry": {
+      "main": [
+        [
+          {
+            "node": "Triage retry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Triage retry": {
+      "main": [
+        [
+          {
+            "node": "Validate retry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate retry": {
+      "main": [
+        [
+          {
+            "node": "Merge triaged",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge triaged": {
+      "main": [
+        [
+          {
+            "node": "Insert feed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "PNJMA4NbQGmp1xKv"
+  }
+}

@@ -7,6 +7,10 @@ const CRED_PG = { id: 'tzBuhu9KEXlaRRfW', name: 'Postgres account' };
 const CRED_CRAWL = { id: 'avVVOMOhNmIhsK5n', name: 'crawl4ai-bearer' };
 const CRED_LM = { id: 'JsTIc0R9trd31PsV', name: 'lmstudio-bearer' };
 const CRED_FC = { id: 'J7cbHkpEdHeUIhif', name: 'firecrawl-api' };
+// WF-21 triage_one — set after first deploy; per-item Execute Workflow calls run
+// sequentially, which serializes LM Studio traffic without a SplitInBatches loop
+// (that loop silently skipped items when scrape branches produced multiple batches).
+const WF21_ID = 'HISagmvZYi6O7N5u';
 
 // NOTE: no URL/URLSearchParams in the n8n task-runner sandbox — manual parsing only.
 const CANONICALIZE = `
@@ -79,8 +83,10 @@ return fresh.map(j => ({ json: j }));
 const LOG_FAILURE = `
 const orig = $('Filter new').item.json;
 let reason = 'both_scrapers_failed_or_short_markdown';
-if ($json.error) reason = 'firecrawl_error: ' + (typeof $json.error === 'object' ? JSON.stringify($json.error) : String($json.error)).slice(0, 200);
-else if ($json.data) reason = 'firecrawl_short_markdown';
+if ($json.error) {
+  const msg = (typeof $json.error === 'object' && $json.error.message) ? $json.error.message : String($json.error);
+  reason = 'firecrawl_error: ' + String(msg).slice(0, 120);
+} else if ($json.data) reason = 'firecrawl_short_markdown';
 return { json: { failed: true, url: orig.url, canonical_url: orig.canonical_url, reason, run_id: orig.run_id } };
 `.trim();
 
@@ -111,11 +117,12 @@ return { json: { canonical_url: orig.canonical_url, source: orig.source || '', t
   markdown, scraper, run_id: orig.run_id, triage_body } };
 `.trim();
 
+// WF-21 runs one doc per execution, so .first() is always the right item
 const BUILD_RETRY = `
-const prep = $('Prep doc').item.json;
-const base = JSON.parse(prep.triage_body);
+const doc = $('WF Input').first().json;
+const base = JSON.parse(doc.triage_body);
 let prev = 'no output';
-try { prev = $('Triage').item.json.choices[0].message.content || 'no output'; } catch (e) {}
+try { prev = $('Triage').first().json.choices[0].message.content || 'no output'; } catch (e) {}
 base.messages.push({ role: 'assistant', content: String(prev).slice(0, 2000) });
 base.messages.push({ role: 'user', content: 'Your previous output was not valid JSON matching the required schema. Return ONLY the JSON object with fields summary, angle, relevance, tags.' });
 return { json: { retry_body: JSON.stringify(base) } };
@@ -163,8 +170,8 @@ function tagsPg(tags) {
   const clean = (tags || []).slice(0, 5).map(t => String(t).toLowerCase().replace(/[{}",\\\\]/g, '').trim()).filter(Boolean);
   return '{' + clean.join(',') + '}';
 }
-const doc = $('Prep doc').item.json;
-const rawDocId = $('Insert doc').item.json.raw_doc_id;
+const doc = $('WF Input').first().json;
+const rawDocId = doc.raw_doc_id;
 `.trim();
 
 const VALIDATE_1 = VALIDATE_COMMON + `
@@ -193,9 +200,15 @@ const fails = [];
 for (let r = 0; r < 50; r++) {
   let items;
   try { items = $('Log failure').all(0, r); } catch (e) { break; }
-  for (const it of items) fails.push(it.json.url + ' (' + it.json.reason + ')');
+  for (const it of items) fails.push({ url: it.json.url, reason: it.json.reason });
 }
-return [{ json: { run_id: runId, urls_new: fresh, error: fails.join('; ').slice(0, 2000) } }];
+// full detail -> runs.error (DB); short host list -> Telegram summary
+const error = fails.map(f => f.url + ' (' + f.reason + ')').join('; ').slice(0, 2000);
+const hosts = [...new Set(fails.map(f => String(f.url).replace(/^https?:\\/\\//, '').split('/')[0]))];
+const error_brief = fails.length
+  ? fails.length + ' failed: ' + hosts.slice(0, 5).join(', ') + (hosts.length > 5 ? ', …' : '')
+  : '';
+return [{ json: { run_id: runId, urls_new: fresh, error, error_brief } }];
 `.trim();
 
 const CRAWL_BODY = "={{ JSON.stringify({ urls: [$json.canonical_url], crawler_config: { type: 'CrawlerRunConfig', params: { markdown_generator: { type: 'DefaultMarkdownGenerator', params: { content_filter: { type: 'PruningContentFilter', params: {} } } } } } }) }}";
@@ -250,14 +263,23 @@ const nodes = [
         leftValue: "={{ ($json.results?.[0]?.markdown?.fit_markdown || $json.results?.[0]?.markdown?.raw_markdown || '').length }}",
         rightValue: 400, operator: { type: 'number', operation: 'gte' } } ] } } },
 
+  // PDFs skip Crawl4AI (a headless browser can't markdown them) and go straight here
+  { id: 'ispdf', name: 'Is PDF?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1300, -100],
+    parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' },
+      combinator: 'and', conditions: [ { id: 'c1',
+        leftValue: "={{ $json.canonical_url.toLowerCase().split('?')[0].endsWith('.pdf') }}",
+        rightValue: true, operator: { type: 'boolean', operation: 'equals' } } ] } } },
+
+  // Firecrawl does its own fetch+render (and PDF parsing) — 10s kills legitimate
+  // scrapes of slow enterprise docs; 45s is still an explicit no-stall bound
   { id: 'firecrawl', name: 'Firecrawl', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [1700, 50],
     parameters: { method: 'POST', url: 'https://api.firecrawl.dev/v1/scrape',
       authentication: 'genericCredentialType', genericAuthType: 'httpBearerAuth',
       sendBody: true, specifyBody: 'json',
       jsonBody: "={{ JSON.stringify({ url: $('Filter new').item.json.canonical_url, formats: ['markdown'] }) }}",
-      options: { timeout: 10000 } },
+      options: { timeout: 45000 } },
     credentials: { httpBearerAuth: CRED_FC },
-    retryOnFail: false, onError: 'continueRegularOutput' },
+    retryOnFail: true, maxTries: 2, waitBetweenTries: 2000, onError: 'continueRegularOutput' },
 
   { id: 'fcok', name: 'Firecrawl OK?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1850, 50],
     parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' },
@@ -272,44 +294,32 @@ const nodes = [
     "with s as (insert into seen_urls (canonical_url, source) values ($1, nullif($2,'')) on conflict (canonical_url) do nothing) insert into raw_docs (canonical_url, title, markdown, scraper, run_id) values ($1, nullif($3,''), $4, $6, $5::bigint) returning id as raw_doc_id",
     "={{ $json.canonical_url }},{{ $json.source }},{{ $json.title }},{{ $json.markdown }},{{ $json.run_id }},{{ $json.scraper }}"),
 
-  // One item at a time through triage: n8n "batching" only staggers request
-  // starts, so a queue at LM Studio (parallel=1) blows per-request timeouts.
-  { id: 'triageloop', name: 'Triage loop', type: 'n8n-nodes-base.splitInBatches', typeVersion: 3, position: [2150, -200],
-    parameters: { batchSize: 1, options: {} } },
-
-  { id: 'triage', name: 'Triage', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [2350, -200],
-    parameters: { method: 'POST', url: 'http://host.docker.internal:1234/v1/chat/completions',
-      authentication: 'genericCredentialType', genericAuthType: 'httpBearerAuth',
-      sendBody: true, specifyBody: 'json', jsonBody: "={{ $('Prep doc').item.json.triage_body }}",
-      options: { timeout: 120000 } },
-    credentials: { httpBearerAuth: CRED_LM },
-    retryOnFail: true, maxTries: 2, waitBetweenTries: 1000, onError: 'continueRegularOutput' },
-
-  codeNode('Validate triage', 'validate1', [2400, -200], 'runOnceForEachItem', VALIDATE_1),
-
-  { id: 'triagevalid', name: 'Triage valid?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [2600, -200],
-    parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' },
-      combinator: 'and', conditions: [ { id: 'c1', leftValue: '={{ Boolean($json.__invalid) }}', rightValue: false,
-        operator: { type: 'boolean', operation: 'equals' } } ] } } },
-
-  codeNode('Build retry', 'buildretry', [2700, -100], 'runOnceForEachItem', BUILD_RETRY),
-
-  { id: 'triage2', name: 'Triage retry', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [2850, -100],
-    parameters: { method: 'POST', url: 'http://host.docker.internal:1234/v1/chat/completions',
-      authentication: 'genericCredentialType', genericAuthType: 'httpBearerAuth',
-      sendBody: true, specifyBody: 'json', jsonBody: '={{ $json.retry_body }}',
-      options: { timeout: 120000 } },
-    credentials: { httpBearerAuth: CRED_LM },
-    retryOnFail: false, onError: 'continueRegularOutput' },
-
-  codeNode('Validate retry', 'validate2', [3000, -100], 'runOnceForEachItem', VALIDATE_2),
-
-  { id: 'mergetriage', name: 'Merge triaged', type: 'n8n-nodes-base.merge', typeVersion: 3, position: [3200, -200],
-    parameters: { mode: 'append', numberInputs: 2 } },
-
-  pgNode('Insert feed', 'insertfeed', [3400, -200],
-    "insert into feed_items (raw_doc_id, canonical_url, title, summary, angle, relevance, tags, run_id) values ($1::bigint, $2, nullif($3,''), $4, nullif($5,''), nullif($6::text,'')::int, $7::text[], $8::bigint) returning id as feed_item_id",
-    "={{ $json.raw_doc_id }},{{ $json.canonical_url }},{{ $json.title }},{{ $json.summary }},{{ $json.angle }},{{ $json.relevance }},{{ $json.tags_pg }},{{ $json.run_id }}"),
+  // Per-item sequential sub-workflow call — serializes LM Studio traffic and is
+  // correct no matter how many batches the scrape branches produce.
+  { id: 'runtriage', name: 'Run triage', type: 'n8n-nodes-base.executeWorkflow', typeVersion: 1.2, position: [2200, -200],
+    parameters: {
+      workflowId: { __rl: true, value: WF21_ID, mode: 'id' },
+      workflowInputs: {
+        mappingMode: 'defineBelow',
+        value: {
+          triage_body: "={{ $('Prep doc').item.json.triage_body }}",
+          raw_doc_id: '={{ $json.raw_doc_id }}',
+          canonical_url: "={{ $('Prep doc').item.json.canonical_url }}",
+          title: "={{ $('Prep doc').item.json.title }}",
+          run_id: "={{ $('Prep doc').item.json.run_id }}"
+        },
+        matchingColumns: [],
+        schema: [
+          { id: 'triage_body', displayName: 'triage_body', required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: 'string' },
+          { id: 'raw_doc_id', displayName: 'raw_doc_id', required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: 'string' },
+          { id: 'canonical_url', displayName: 'canonical_url', required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: 'string' },
+          { id: 'title', displayName: 'title', required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: 'string' },
+          { id: 'run_id', displayName: 'run_id', required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: 'string' }
+        ]
+      },
+      options: { waitForSubWorkflow: true }
+    },
+    onError: 'continueRegularOutput' },
 
   { id: 'mergestats', name: 'Merge for stats', type: 'n8n-nodes-base.merge', typeVersion: 3, position: [3600, 0],
     parameters: { mode: 'append', numberInputs: 3 } },
@@ -317,14 +327,14 @@ const nodes = [
   codeNode('Collect stats', 'stats', [3800, 0], 'runOnceForAllItems', COLLECT_STATS),
 
   pgNode('Finalize run', 'finalize', [4000, 0],
-    "update runs set finished_at = now(), urls_new = $2::int, urls_scraped = (select count(*) from raw_docs where run_id = $1::bigint), items_created = (select count(*) from feed_items where run_id = $1::bigint), error = nullif($3,''), status = case when $2::int = 0 and $3 = '' then 'ok' when (select count(*) from raw_docs where run_id = $1::bigint) = 0 and $2::int > 0 then 'failed' when (select count(*) from raw_docs where run_id = $1::bigint) < $2::int then 'partial' else 'ok' end where id = $1::bigint returning id as run_id, status, scope, urls_found, urls_new, urls_scraped, items_created, error, (select title from feed_items where run_id = $1::bigint order by relevance desc nulls last, id desc limit 1) as top_title",
+    "update runs set finished_at = now(), urls_new = $2::int, urls_scraped = (select count(*) from raw_docs where run_id = $1::bigint), items_created = (select count(*) from feed_items where run_id = $1::bigint), error = nullif($3,''), status = case when $2::int = 0 and $3 = '' then 'ok' when (select count(*) from raw_docs where run_id = $1::bigint) = 0 and $2::int > 0 then 'failed' when (select count(*) from raw_docs where run_id = $1::bigint) < $2::int then 'partial' when (select count(*) from feed_items where run_id = $1::bigint) < (select count(*) from raw_docs where run_id = $1::bigint) then 'partial' else 'ok' end where id = $1::bigint returning id as run_id, status, scope, urls_found, urls_new, urls_scraped, items_created, error, (select title from feed_items where run_id = $1::bigint order by relevance desc nulls last, id desc limit 1) as top_title",
     "={{ $json.run_id }},{{ $json.urls_new }},{{ $json.error }}",
     { executeOnce: true }),
 
   { id: 'tgsummary', name: 'Telegram summary', type: 'n8n-nodes-base.telegram', typeVersion: 1.2, position: [4200, 0],
     parameters: {
       chatId: '__TG_CHAT__',
-      text: "=\u{1F52D} Run #{{ $json.run_id }} ({{ $json.scope }}) {{ $json.status }}: {{ $json.urls_new }} new, {{ $json.items_created }} items{{ $json.top_title ? '\\nTop: ' + String($json.top_title).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') : '' }}{{ $json.error ? '\\n⚠️ ' + String($json.error).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') : '' }}",
+      text: "=\u{1F52D} Run #{{ $json.run_id }} ({{ $json.scope }}) {{ $json.status }}: {{ $json.urls_new }} new, {{ $json.items_created }} items{{ $json.top_title ? '\\nTop: ' + String($json.top_title).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') : '' }}{{ $('Collect stats').first().json.error_brief ? '\\n⚠️ ' + String($('Collect stats').first().json.error_brief).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') : '' }}",
       additionalFields: { appendAttribution: false, parse_mode: 'HTML' } },
     credentials: { telegramApi: { id: '6RLwMp4ODoesGE4v', name: 'telegram-scout-bot' } },
     onError: 'continueRegularOutput' },
@@ -341,8 +351,12 @@ const connections = {
   'Find seen': { main: [[{ node: 'Filter new', type: 'main', index: 0 }]] },
   'Filter new': { main: [[{ node: 'Any new?', type: 'main', index: 0 }]] },
   'Any new?': { main: [
-    [{ node: 'Scrape', type: 'main', index: 0 }],
+    [{ node: 'Is PDF?', type: 'main', index: 0 }],
     [{ node: 'Merge for stats', type: 'main', index: 2 }]
+  ] },
+  'Is PDF?': { main: [
+    [{ node: 'Firecrawl', type: 'main', index: 0 }],
+    [{ node: 'Scrape', type: 'main', index: 0 }]
   ] },
   'Scrape': { main: [[{ node: 'Scrape OK?', type: 'main', index: 0 }]] },
   'Scrape OK?': { main: [
@@ -355,22 +369,8 @@ const connections = {
     [{ node: 'Log failure', type: 'main', index: 0 }]
   ] },
   'Prep doc': { main: [[{ node: 'Insert doc', type: 'main', index: 0 }]] },
-  'Insert doc': { main: [[{ node: 'Triage loop', type: 'main', index: 0 }]] },
-  'Triage loop': { main: [
-    [{ node: 'Merge for stats', type: 'main', index: 0 }],
-    [{ node: 'Triage', type: 'main', index: 0 }]
-  ] },
-  'Triage': { main: [[{ node: 'Validate triage', type: 'main', index: 0 }]] },
-  'Validate triage': { main: [[{ node: 'Triage valid?', type: 'main', index: 0 }]] },
-  'Triage valid?': { main: [
-    [{ node: 'Merge triaged', type: 'main', index: 0 }],
-    [{ node: 'Build retry', type: 'main', index: 0 }]
-  ] },
-  'Build retry': { main: [[{ node: 'Triage retry', type: 'main', index: 0 }]] },
-  'Triage retry': { main: [[{ node: 'Validate retry', type: 'main', index: 0 }]] },
-  'Validate retry': { main: [[{ node: 'Merge triaged', type: 'main', index: 1 }]] },
-  'Merge triaged': { main: [[{ node: 'Insert feed', type: 'main', index: 0 }]] },
-  'Insert feed': { main: [[{ node: 'Triage loop', type: 'main', index: 0 }]] },
+  'Insert doc': { main: [[{ node: 'Run triage', type: 'main', index: 0 }]] },
+  'Run triage': { main: [[{ node: 'Merge for stats', type: 'main', index: 0 }]] },
   'Log failure': { main: [[{ node: 'Merge for stats', type: 'main', index: 1 }]] },
   'Merge for stats': { main: [[{ node: 'Collect stats', type: 'main', index: 0 }]] },
   'Collect stats': { main: [[{ node: 'Finalize run', type: 'main', index: 0 }]] },
@@ -388,3 +388,66 @@ const out = path.join(__dirname, '..', 'workflows', 'wf20-process-urls.json');
 fs.mkdirSync(path.dirname(out), { recursive: true });
 fs.writeFileSync(out, JSON.stringify(workflow, null, 2));
 console.log('wrote', out);
+
+// ---- WF-21 triage_one: one doc per execution (called per item by WF-20) ----
+const wf21 = {
+  name: 'WF-21 triage_one',
+  nodes: [
+    { id: 'trigger', name: 'WF Input', type: 'n8n-nodes-base.executeWorkflowTrigger', typeVersion: 1.1, position: [0, 0],
+      parameters: { workflowInputs: { values: [
+        { name: 'triage_body', type: 'string' }, { name: 'raw_doc_id', type: 'string' },
+        { name: 'canonical_url', type: 'string' }, { name: 'title', type: 'string' },
+        { name: 'run_id', type: 'string' } ] } } },
+
+    { id: 'triage', name: 'Triage', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [200, 0],
+      parameters: { method: 'POST', url: 'http://host.docker.internal:1234/v1/chat/completions',
+        authentication: 'genericCredentialType', genericAuthType: 'httpBearerAuth',
+        sendBody: true, specifyBody: 'json', jsonBody: '={{ $json.triage_body }}',
+        options: { timeout: 120000 } },
+      credentials: { httpBearerAuth: CRED_LM },
+      retryOnFail: true, maxTries: 2, waitBetweenTries: 1000, onError: 'continueRegularOutput' },
+
+    codeNode('Validate triage', 'validate1', [400, 0], 'runOnceForEachItem', VALIDATE_1),
+
+    { id: 'triagevalid', name: 'Triage valid?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [600, 0],
+      parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' },
+        combinator: 'and', conditions: [ { id: 'c1', leftValue: '={{ Boolean($json.__invalid) }}', rightValue: false,
+          operator: { type: 'boolean', operation: 'equals' } } ] } } },
+
+    codeNode('Build retry', 'buildretry', [700, 120], 'runOnceForEachItem', BUILD_RETRY),
+
+    { id: 'triage2', name: 'Triage retry', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [850, 120],
+      parameters: { method: 'POST', url: 'http://host.docker.internal:1234/v1/chat/completions',
+        authentication: 'genericCredentialType', genericAuthType: 'httpBearerAuth',
+        sendBody: true, specifyBody: 'json', jsonBody: '={{ $json.retry_body }}',
+        options: { timeout: 120000 } },
+      credentials: { httpBearerAuth: CRED_LM },
+      retryOnFail: false, onError: 'continueRegularOutput' },
+
+    codeNode('Validate retry', 'validate2', [1000, 120], 'runOnceForEachItem', VALIDATE_2),
+
+    { id: 'mergetriage', name: 'Merge triaged', type: 'n8n-nodes-base.merge', typeVersion: 3, position: [1200, 0],
+      parameters: { mode: 'append', numberInputs: 2 } },
+
+    pgNode('Insert feed', 'insertfeed', [1400, 0],
+      "insert into feed_items (raw_doc_id, canonical_url, title, summary, angle, relevance, tags, run_id) values ($1::bigint, $2, nullif($3,''), $4, nullif($5,''), nullif($6::text,'')::int, $7::text[], $8::bigint) returning id as feed_item_id",
+      "={{ $json.raw_doc_id }},{{ $json.canonical_url }},{{ $json.title }},{{ $json.summary }},{{ $json.angle }},{{ $json.relevance }},{{ $json.tags_pg }},{{ $json.run_id }}")
+  ],
+  connections: {
+    'WF Input': { main: [[{ node: 'Triage', type: 'main', index: 0 }]] },
+    'Triage': { main: [[{ node: 'Validate triage', type: 'main', index: 0 }]] },
+    'Validate triage': { main: [[{ node: 'Triage valid?', type: 'main', index: 0 }]] },
+    'Triage valid?': { main: [
+      [{ node: 'Merge triaged', type: 'main', index: 0 }],
+      [{ node: 'Build retry', type: 'main', index: 0 }]
+    ] },
+    'Build retry': { main: [[{ node: 'Triage retry', type: 'main', index: 0 }]] },
+    'Triage retry': { main: [[{ node: 'Validate retry', type: 'main', index: 0 }]] },
+    'Validate retry': { main: [[{ node: 'Merge triaged', type: 'main', index: 1 }]] },
+    'Merge triaged': { main: [[{ node: 'Insert feed', type: 'main', index: 0 }]] }
+  },
+  settings: { executionOrder: 'v1', errorWorkflow: 'PNJMA4NbQGmp1xKv' }
+};
+const out21 = path.join(__dirname, '..', 'workflows', 'wf21-triage-one.json');
+fs.writeFileSync(out21, JSON.stringify(wf21, null, 2));
+console.log('wrote', out21);
