@@ -23,9 +23,9 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "update runs set status = 'failed', finished_at = coalesce(finished_at, now()), error = left(coalesce(error || ' | ', '') || $1, 2000) where status = 'running' and started_at > now() - interval '2 hours' returning id",
+        "query": "update runs set status = 'failed', finished_at = coalesce(finished_at, now()), error = left(coalesce(error || ' | ', '') || $1, 2000) where status = 'running' and started_at > now() - interval '2 hours' and $2 like 'WF-%' returning id",
         "options": {
-          "queryReplacement": "={{ $json.workflow + ' / ' + $json.node + ': ' + $json.message }}"
+          "queryReplacement": "={{ $json.workflow + ' / ' + $json.node + ': ' + $json.message }},{{ $json.workflow }}"
         }
       },
       "id": "markfail",

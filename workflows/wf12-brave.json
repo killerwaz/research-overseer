@@ -30,6 +30,12 @@
             { "name": "freshness", "value": "pw" }
           ]
         },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Accept", "value": "application/json" }
+          ]
+        },
         "options": { "timeout": 10000 }
       },
       "id": "brave",
