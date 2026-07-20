@@ -1,0 +1,85 @@
+{
+  "name": "WF-10 discovery_exa",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            { "name": "query", "type": "string" },
+            { "name": "trigger", "type": "string" }
+          ]
+        }
+      },
+      "id": "trigger",
+      "name": "WF Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.exa.ai/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query: $json.query, type: 'neural', numResults: 10, useAutoprompt: true }) }}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "exa",
+      "name": "Exa search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [200, 0],
+      "credentials": {
+        "httpHeaderAuth": { "id": "lBgkLf08RQvF6Iwa", "name": "exa-api" }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1000
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const j = $input.first().json;\nif (j.error) throw new Error('Exa search failed: ' + (typeof j.error === 'object' ? JSON.stringify(j.error) : j.error));\nconst results = j.results || [];\nconst urls = results.filter(r => r && r.url).map(r => ({ url: r.url, title: r.title || null, source: 'exa', published_at: r.publishedDate || null }));\nreturn [{ json: { urls, trigger: $('WF Input').first().json.trigger || 'agent', scope: 'exa' } }];"
+      },
+      "id": "normalize",
+      "name": "Normalize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [400, 0]
+    },
+    {
+      "parameters": {
+        "workflowId": { "__rl": true, "value": "NXWu2wqU6ifrFIpd", "mode": "id" },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "urls": "={{ $json.urls }}",
+            "trigger": "={{ $json.trigger }}",
+            "scope": "={{ $json.scope }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            { "id": "urls", "displayName": "urls", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "array" },
+            { "id": "trigger", "displayName": "trigger", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" },
+            { "id": "scope", "displayName": "scope", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" }
+          ]
+        },
+        "options": { "waitForSubWorkflow": true }
+      },
+      "id": "runwf20",
+      "name": "Run WF-20",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [600, 0]
+    }
+  ],
+  "connections": {
+    "WF Input": { "main": [[{ "node": "Exa search", "type": "main", "index": 0 }]] },
+    "Exa search": { "main": [[{ "node": "Normalize", "type": "main", "index": 0 }]] },
+    "Normalize": { "main": [[{ "node": "Run WF-20", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1", "errorWorkflow": "PNJMA4NbQGmp1xKv" }
+}

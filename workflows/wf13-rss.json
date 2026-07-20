@@ -1,0 +1,91 @@
+{
+  "name": "WF-13 discovery_rss",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            { "name": "trigger", "type": "string" }
+          ]
+        }
+      },
+      "id": "trigger",
+      "name": "WF Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select url, label from sources where active and kind = 'rss'",
+        "options": {}
+      },
+      "id": "getsources",
+      "name": "Get sources",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [200, 0],
+      "credentials": {
+        "postgres": { "id": "tzBuhu9KEXlaRRfW", "name": "Postgres account" }
+      },
+      "executeOnce": true,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": {}
+      },
+      "id": "rss",
+      "name": "Read feed",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.2,
+      "position": [400, 0],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const cutoff = Date.now() - 48 * 3600 * 1000;\nconst urls = [];\nfor (const item of $input.all()) {\n  const j = item.json || {};\n  const link = j.link || j.url;\n  if (!link || j.error) continue;\n  const ts = Date.parse(j.isoDate || j.pubDate || '') || 0;\n  if (ts && ts < cutoff) continue;\n  urls.push({ url: link, title: j.title || null, source: 'rss', published_at: (j.isoDate || j.pubDate) ? new Date(ts).toISOString() : null });\n}\nreturn [{ json: { urls, trigger: $('WF Input').first().json.trigger || 'agent', scope: 'rss' } }];"
+      },
+      "id": "normalize",
+      "name": "Normalize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [600, 0]
+    },
+    {
+      "parameters": {
+        "workflowId": { "__rl": true, "value": "NXWu2wqU6ifrFIpd", "mode": "id" },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "urls": "={{ $json.urls }}",
+            "trigger": "={{ $json.trigger }}",
+            "scope": "={{ $json.scope }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            { "id": "urls", "displayName": "urls", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "array" },
+            { "id": "trigger", "displayName": "trigger", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" },
+            { "id": "scope", "displayName": "scope", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" }
+          ]
+        },
+        "options": { "waitForSubWorkflow": true }
+      },
+      "id": "runwf20",
+      "name": "Run WF-20",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [800, 0]
+    }
+  ],
+  "connections": {
+    "WF Input": { "main": [[{ "node": "Get sources", "type": "main", "index": 0 }]] },
+    "Get sources": { "main": [[{ "node": "Read feed", "type": "main", "index": 0 }]] },
+    "Read feed": { "main": [[{ "node": "Normalize", "type": "main", "index": 0 }]] },
+    "Normalize": { "main": [[{ "node": "Run WF-20", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1", "errorWorkflow": "PNJMA4NbQGmp1xKv" }
+}

@@ -1,0 +1,47 @@
+{
+  "name": "ZZ scout-discovery-harness (build tool)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "scout-discovery-harness-__ZZ_SECRET__",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "wh-1",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "workflowId": { "__rl": true, "value": "={{ $json.body.workflow_id }}", "mode": "id" },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "query": "={{ $json.body.query }}",
+            "trigger": "={{ $json.body.trigger || 'manual' }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            { "id": "query", "displayName": "query", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" },
+            { "id": "trigger", "displayName": "trigger", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" }
+          ]
+        },
+        "options": { "waitForSubWorkflow": true }
+      },
+      "id": "ex-1",
+      "name": "Run discovery WF",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [220, 0]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Run discovery WF", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}
