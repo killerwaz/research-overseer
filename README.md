@@ -26,5 +26,5 @@ Spec: `Obsidian Vault/Research Agentic Architecture Summary/the-scout-build-spec
 |---|---|---|
 | n8n | Docker `n8n` | 5678 |
 | Crawl4AI | Docker `crawl4ai` | 11235 |
-| Ollama | TBD (not yet installed) | 11434 |
+| LM Studio (replaces Ollama; model `qwen/qwen3.5-9b`) | native Windows, auth enabled | 1234 |
 | Postgres | Supabase cloud | pooler |
