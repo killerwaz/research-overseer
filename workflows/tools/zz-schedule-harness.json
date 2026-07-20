@@ -1,0 +1,51 @@
+{
+  "name": "ZZ scout-schedule-harness (build tool)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "scout-schedule-harness-__ZZ_SECRET__",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "wh-1",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "workflowId": { "__rl": true, "value": "GiJSUs1kqil1jtsp", "mode": "id" },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "action": "={{ $json.body.action }}",
+            "cron": "={{ $json.body.cron || '' }}",
+            "run_at": "={{ $json.body.run_at || '' }}",
+            "label": "={{ $json.body.label || '' }}",
+            "id": "={{ $json.body.id || '' }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            { "id": "action", "displayName": "action", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" },
+            { "id": "cron", "displayName": "cron", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" },
+            { "id": "run_at", "displayName": "run_at", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" },
+            { "id": "label", "displayName": "label", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" },
+            { "id": "id", "displayName": "id", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" }
+          ]
+        },
+        "options": { "waitForSubWorkflow": true }
+      },
+      "id": "ex-1",
+      "name": "Run manage_schedule",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [220, 0]
+    }
+  ],
+  "connections": {
+    "Webhook": { "main": [[{ "node": "Run manage_schedule", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1", "errorWorkflow": "PNJMA4NbQGmp1xKv" }
+}

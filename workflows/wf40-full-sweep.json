@@ -1,0 +1,143 @@
+{
+  "name": "WF-40 full_sweep",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            { "name": "query", "type": "string" },
+            { "name": "trigger", "type": "string" }
+          ]
+        }
+      },
+      "id": "trigger",
+      "name": "WF Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "options": {},
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" },
+          "combinator": "and",
+          "conditions": [
+            { "id": "c1", "leftValue": "={{ ($json.query || '').length }}", "rightValue": 0, "operator": { "type": "number", "operation": "gt" } }
+          ]
+        }
+      },
+      "id": "hasquery",
+      "name": "Has query?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [200, 0]
+    },
+    {
+      "parameters": {
+        "workflowId": { "__rl": true, "value": "AM0WjOKXpIemAzT6", "mode": "id" },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": { "query": "={{ $('WF Input').first().json.query }}", "trigger": "={{ $('WF Input').first().json.trigger || 'schedule' }}" },
+          "matchingColumns": [],
+          "schema": [
+            { "id": "query", "displayName": "query", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" },
+            { "id": "trigger", "displayName": "trigger", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" }
+          ]
+        },
+        "options": { "waitForSubWorkflow": true }
+      },
+      "id": "runexa",
+      "name": "Run Exa",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [400, -100],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "workflowId": { "__rl": true, "value": "SujItqZD8LGV034c", "mode": "id" },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": { "query": "={{ $('WF Input').first().json.query }}", "trigger": "={{ $('WF Input').first().json.trigger || 'schedule' }}" },
+          "matchingColumns": [],
+          "schema": [
+            { "id": "query", "displayName": "query", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" },
+            { "id": "trigger", "displayName": "trigger", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" }
+          ]
+        },
+        "options": { "waitForSubWorkflow": true }
+      },
+      "id": "runtavily",
+      "name": "Run Tavily",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [600, -100],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "workflowId": { "__rl": true, "value": "8whU7voTeLMySR6l", "mode": "id" },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": { "query": "={{ $('WF Input').first().json.query }}", "trigger": "={{ $('WF Input').first().json.trigger || 'schedule' }}" },
+          "matchingColumns": [],
+          "schema": [
+            { "id": "query", "displayName": "query", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" },
+            { "id": "trigger", "displayName": "trigger", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" }
+          ]
+        },
+        "options": { "waitForSubWorkflow": true }
+      },
+      "id": "runbrave",
+      "name": "Run Brave",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [800, -100],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "workflowId": { "__rl": true, "value": "HCnDeMk2Gkr1cut5", "mode": "id" },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": { "trigger": "={{ $('WF Input').first().json.trigger || 'schedule' }}" },
+          "matchingColumns": [],
+          "schema": [
+            { "id": "trigger", "displayName": "trigger", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" }
+          ]
+        },
+        "options": { "waitForSubWorkflow": true }
+      },
+      "id": "runrss",
+      "name": "Run RSS",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [1000, 0],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const parts = [];\nfor (const name of ['Run Exa', 'Run Tavily', 'Run Brave', 'Run RSS']) {\n  try {\n    const j = $(name).first().json;\n    if (j.error) parts.push({ source: name, error: String(typeof j.error === 'object' ? JSON.stringify(j.error) : j.error).slice(0, 300) });\n    else parts.push({ source: name, run_id: j.run_id, status: j.status, urls_new: j.urls_new, items_created: j.items_created });\n  } catch (e) { /* source skipped (no query) */ }\n}\nreturn [{ json: { sweep: parts } }];"
+      },
+      "id": "summarize",
+      "name": "Summarize sweep",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1200, 0]
+    }
+  ],
+  "connections": {
+    "WF Input": { "main": [[{ "node": "Has query?", "type": "main", "index": 0 }]] },
+    "Has query?": { "main": [
+      [{ "node": "Run Exa", "type": "main", "index": 0 }],
+      [{ "node": "Run RSS", "type": "main", "index": 0 }]
+    ] },
+    "Run Exa": { "main": [[{ "node": "Run Tavily", "type": "main", "index": 0 }]] },
+    "Run Tavily": { "main": [[{ "node": "Run Brave", "type": "main", "index": 0 }]] },
+    "Run Brave": { "main": [[{ "node": "Run RSS", "type": "main", "index": 0 }]] },
+    "Run RSS": { "main": [[{ "node": "Summarize sweep", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1", "errorWorkflow": "PNJMA4NbQGmp1xKv" }
+}
