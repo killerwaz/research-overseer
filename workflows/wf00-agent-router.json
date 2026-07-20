@@ -184,7 +184,7 @@
         "promptType": "define",
         "text": "={{ $json.text }}",
         "options": {
-          "systemMessage": "=You are The Scout's dispatcher on Telegram. Route requests to tools; never do research yourself; never fabricate results or data — if a tool returns nothing, say so.\n\nRules:\n1. Cheap and unambiguous requests run immediately, no confirmation: a pasted URL -> scrape_url; status questions -> run_status; reading existing findings -> query_feed.\n2. Expensive or ambiguous requests (full_sweep, broad conceptual discovery) need a one-line confirmation first. If the user's next message is an affirmative, execute what you proposed.\n3. Questions about existing findings are ALWAYS query_feed or run_status — never trigger a new run for them.\n4. When uncertain between search sources, fail WIDE: prefer full_sweep (with confirmation) or brave. Never guess narrow.\n5. manage_schedule: parse natural language into cron, timezone Asia/Dhaka (UTC+6). 'every day at 8am' -> cron '0 8 * * *' via action create_recurring. Relative one-times ('in 3 hours') -> action create_onetime with an ISO timestamp you compute from the current time below. If phrasing is ambiguous ('tomorrow morning'), ask ONE clarifying question. Always echo the parsed schedule back and get a yes before creating. Other actions: cancel (needs id), list.\n6. manage_sources actions: add (url, optional label), remove (id or url), list.\n7. Reply tersely — this is Telegram. Plain text, no markdown formatting.\n\nCurrent time UTC: {{ $now.toUTC().toISO() }} (Dhaka = UTC+6).",
+          "systemMessage": "=You are The Scout's dispatcher on Telegram. Route requests to tools; never do research yourself; never fabricate results or data — if a tool returns nothing, say so.\n\nRules:\n1. Cheap and unambiguous requests run immediately, no confirmation: a pasted URL -> scrape_url; status questions -> run_status; reading existing findings -> query_feed; a search on a clearly named topic ('search around for X', 'anything on X') -> run_discovery with source brave, immediately.\n2. Vague or conceptual digs ('what's happening with X', 'explore X', fuzzy themes) -> run_discovery with source exa, but ask a one-line confirmation first. full_sweep always needs confirmation. If the user's next message is an affirmative, execute what you proposed.\n3. Questions about existing findings are ALWAYS query_feed or run_status — never trigger a new run for them.\n4. When uncertain between search sources, fail WIDE: prefer full_sweep (with confirmation) or brave. Never guess narrow.\n4b. Call at most ONE discovery tool per user request. After full_sweep or run_discovery returns, summarize its result and stop — do not chain additional searches on your own.\n5. manage_schedule: parse natural language into cron, timezone Asia/Dhaka (UTC+6). 'every day at 8am' -> cron '0 8 * * *' via action create_recurring. Relative one-times ('in 3 hours') -> action create_onetime with an ISO timestamp you compute from the current time below. If phrasing is ambiguous ('tomorrow morning'), ask ONE clarifying question. Always echo the parsed schedule back and get a yes before creating. Other actions: cancel (needs id), list.\n6. manage_sources actions: add (url, optional label), remove (id or url), list.\n7. Reply tersely — this is Telegram. Plain text, no markdown formatting.\n\nCurrent time UTC: {{ $now.toUTC().toISO() }} (Dhaka = UTC+6).",
           "maxIterations": 6
         }
       }
@@ -251,8 +251,8 @@
         "workflowInputs": {
           "mappingMode": "defineBelow",
           "value": {
-            "source": "={{ $fromAI('source', 'one of exa, tavily, brave, rss', 'string') }}",
-            "query": "={{ $fromAI('query', 'the search query (empty for rss)', 'string') }}",
+            "source": "={{ $fromAI('source', 'one of exa, tavily, brave, rss', 'string', '') }}",
+            "query": "={{ $fromAI('query', 'the search query (empty for rss)', 'string', '') }}",
             "trigger": "agent"
           },
           "matchingColumns": [],
@@ -307,7 +307,7 @@
         "workflowInputs": {
           "mappingMode": "defineBelow",
           "value": {
-            "query": "={{ $fromAI('query', 'optional focus query; empty string runs the default sweep', 'string') }}",
+            "query": "={{ $fromAI('query', 'optional focus query; empty string runs the default sweep', 'string', '') }}",
             "trigger": "agent"
           },
           "matchingColumns": [],
@@ -353,7 +353,7 @@
         "workflowInputs": {
           "mappingMode": "defineBelow",
           "value": {
-            "url": "={{ $fromAI('url', 'the full URL to scrape', 'string') }}",
+            "url": "={{ $fromAI('url', 'the full URL to scrape', 'string', '') }}",
             "trigger": "agent"
           },
           "matchingColumns": [],
@@ -399,10 +399,10 @@
         "workflowInputs": {
           "mappingMode": "defineBelow",
           "value": {
-            "since": "={{ $fromAI('since', 'ISO timestamp lower bound for created_at, empty for none', 'string') }}",
-            "min_relevance": "={{ $fromAI('min_relevance', 'minimum relevance 1-5, empty for none', 'string') }}",
-            "tag": "={{ $fromAI('tag', 'single lowercase tag to filter by, empty for none', 'string') }}",
-            "limit": "={{ $fromAI('limit', 'max items to return, empty for default 20', 'string') }}"
+            "since": "={{ $fromAI('since', 'ISO timestamp lower bound for created_at, empty for none', 'string', '') }}",
+            "min_relevance": "={{ $fromAI('min_relevance', 'minimum relevance 1-5, empty for none', 'string', '') }}",
+            "tag": "={{ $fromAI('tag', 'single lowercase tag to filter by, empty for none', 'string', '') }}",
+            "limit": "={{ $fromAI('limit', 'max items to return, empty for default 20', 'string', '') }}"
           },
           "matchingColumns": [],
           "schema": [
@@ -465,7 +465,7 @@
         "workflowInputs": {
           "mappingMode": "defineBelow",
           "value": {
-            "limit": "={{ $fromAI('limit', 'how many recent runs to return, empty for default 5', 'string') }}"
+            "limit": "={{ $fromAI('limit', 'how many recent runs to return, empty for default 5', 'string', '') }}"
           },
           "matchingColumns": [],
           "schema": [
@@ -501,11 +501,11 @@
         "workflowInputs": {
           "mappingMode": "defineBelow",
           "value": {
-            "action": "={{ $fromAI('action', 'create_recurring, create_onetime, cancel, or list', 'string') }}",
-            "cron": "={{ $fromAI('cron', '5-field cron expression for create_recurring, else empty', 'string') }}",
-            "run_at": "={{ $fromAI('run_at', 'ISO timestamp for create_onetime, else empty', 'string') }}",
-            "label": "={{ $fromAI('label', 'short human label for the schedule, optional', 'string') }}",
-            "id": "={{ $fromAI('id', 'schedule id for cancel, else empty', 'string') }}"
+            "action": "={{ $fromAI('action', 'create_recurring, create_onetime, cancel, or list', 'string', '') }}",
+            "cron": "={{ $fromAI('cron', '5-field cron expression for create_recurring, else empty', 'string', '') }}",
+            "run_at": "={{ $fromAI('run_at', 'ISO timestamp for create_onetime, else empty', 'string', '') }}",
+            "label": "={{ $fromAI('label', 'short human label for the schedule, optional', 'string', '') }}",
+            "id": "={{ $fromAI('id', 'schedule id for cancel, else empty', 'string', '') }}"
           },
           "matchingColumns": [],
           "schema": [
@@ -577,10 +577,10 @@
         "workflowInputs": {
           "mappingMode": "defineBelow",
           "value": {
-            "action": "={{ $fromAI('action', 'add, remove, or list', 'string') }}",
-            "url": "={{ $fromAI('url', 'feed URL for add or remove, else empty', 'string') }}",
-            "label": "={{ $fromAI('label', 'short label for the feed, optional', 'string') }}",
-            "id": "={{ $fromAI('id', 'source id for remove, else empty', 'string') }}"
+            "action": "={{ $fromAI('action', 'add, remove, or list', 'string', '') }}",
+            "url": "={{ $fromAI('url', 'feed URL for add or remove, else empty', 'string', '') }}",
+            "label": "={{ $fromAI('label', 'short label for the feed, optional', 'string', '') }}",
+            "id": "={{ $fromAI('id', 'source id for remove, else empty', 'string', '') }}"
           },
           "matchingColumns": [],
           "schema": [
@@ -635,7 +635,7 @@
       ],
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "let chat_id = __TG_CHAT__;\ntry { chat_id = $('Record update').item.json.chat_id || chat_id; } catch (e) {\n  try { chat_id = $('Test normalize').item.json.chat_id || chat_id; } catch (e2) {}\n}\nreturn { json: { chat_id, output: String($json.output || '').slice(0, 4000) || '(empty reply)' } };"
+        "jsCode": "let chat_id = __TG_CHAT__;\ntry { chat_id = $('Record update').item.json.chat_id || chat_id; } catch (e) {\n  try { chat_id = $('Test normalize').item.json.chat_id || chat_id; } catch (e2) {}\n}\n// Telegram node sends parse_mode HTML — escape or any < > & kills the send\nconst esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nreturn { json: { chat_id, output: esc(String($json.output || '').slice(0, 4000)) || '(empty reply)' } };"
       }
     },
     {
@@ -651,7 +651,8 @@
         "chatId": "={{ $json.chat_id }}",
         "text": "={{ $json.output }}",
         "additionalFields": {
-          "appendAttribution": false
+          "appendAttribution": false,
+          "parse_mode": "HTML"
         }
       },
       "credentials": {
