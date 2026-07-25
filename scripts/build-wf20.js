@@ -114,7 +114,8 @@ const triage_body = JSON.stringify({ model: 'qwen/qwen3.5-9b', temperature: 0.2,
   response_format: __TRIAGE_SCHEMA__,
   messages: [ { role: 'system', content: sys }, { role: 'user', content: user } ] });
 return { json: { canonical_url: orig.canonical_url, source: orig.source || '', title,
-  markdown, scraper, run_id: orig.run_id, triage_body } };
+  markdown, scraper, run_id: orig.run_id, triage_body,
+  published_at: orig.published_at || '' } };
 `.trim();
 
 // WF-21 runs one doc per execution, so .first() is always the right item
@@ -178,15 +179,18 @@ const VALIDATE_1 = VALIDATE_COMMON + `
 const o = parseContent($json);
 if (!o) return { json: { __invalid: true } };
 return { json: { __invalid: false, raw_doc_id: rawDocId, canonical_url: doc.canonical_url, title: doc.title,
-  summary: o.summary, angle: o.angle || '', relevance: o.relevance, tags_pg: tagsPg(o.tags), run_id: doc.run_id } };
+  summary: o.summary, angle: o.angle || '', relevance: o.relevance, tags_pg: tagsPg(o.tags),
+  published_at: doc.published_at || '', run_id: doc.run_id } };
 `;
 
 const VALIDATE_2 = VALIDATE_COMMON + `
 const o = parseContent($json);
 if (!o) return { json: { raw_doc_id: rawDocId, canonical_url: doc.canonical_url, title: doc.title,
-  summary: 'TRIAGE_FAILED', angle: '', relevance: '', tags_pg: '{}', run_id: doc.run_id } };
+  summary: 'TRIAGE_FAILED', angle: '', relevance: '', tags_pg: '{}',
+  published_at: doc.published_at || '', run_id: doc.run_id } };
 return { json: { raw_doc_id: rawDocId, canonical_url: doc.canonical_url, title: doc.title,
-  summary: o.summary, angle: o.angle || '', relevance: o.relevance, tags_pg: tagsPg(o.tags), run_id: doc.run_id } };
+  summary: o.summary, angle: o.angle || '', relevance: o.relevance, tags_pg: tagsPg(o.tags),
+  published_at: doc.published_at || '', run_id: doc.run_id } };
 `;
 
 // Counts and status are computed in SQL (Finalize run) because nodes fed by two
@@ -291,13 +295,19 @@ const nodes = [
   codeNode('Prep doc', 'prepdoc', [1800, -200], 'runOnceForEachItem', PREP_DOC_FINAL),
 
   pgNode('Insert doc', 'insertdoc', [2000, -200],
-    "with s as (insert into seen_urls (canonical_url, source) values ($1, nullif($2,'')) on conflict (canonical_url) do nothing) insert into raw_docs (canonical_url, title, markdown, scraper, run_id) values ($1, nullif($3,''), $4, $6, $5::bigint) returning id as raw_doc_id",
-    "={{ $json.canonical_url }},{{ $json.source }},{{ $json.title }},{{ $json.markdown }},{{ $json.run_id }},{{ $json.scraper }}"),
+    "with s as (insert into seen_urls (canonical_url, source) values ($1, nullif($2,'')) on conflict (canonical_url) do nothing) insert into raw_docs (canonical_url, title, markdown, scraper, run_id, published_at) values ($1, nullif($3,''), $4, $6, $5::bigint, nullif($7,'')::timestamptz) returning id as raw_doc_id",
+    "={{ $json.canonical_url }},{{ $json.source }},{{ $json.title }},{{ $json.markdown }},{{ $json.run_id }},{{ $json.scraper }},{{ $json.published_at }}"),
 
   // Per-item sequential sub-workflow call — serializes LM Studio traffic and is
   // correct no matter how many batches the scrape branches produce.
   { id: 'runtriage', name: 'Run triage', type: 'n8n-nodes-base.executeWorkflow', typeVersion: 1.2, position: [2200, -200],
     parameters: {
+      // mode MUST be 'each'. The default ('once') passes the whole batch into a
+      // single WF-21 execution, where every expression reads WF Input.first() —
+      // silently writing N triage results against the FIRST doc and dropping the
+      // rest. WF-21 guards against this too. ('each' is deprecation-flagged; if it
+      // is ever removed, replace with a Loop Over Items feeding mode 'once'.)
+      mode: 'each',
       workflowId: { __rl: true, value: WF21_ID, mode: 'id' },
       workflowInputs: {
         mappingMode: 'defineBelow',
@@ -306,6 +316,7 @@ const nodes = [
           raw_doc_id: '={{ $json.raw_doc_id }}',
           canonical_url: "={{ $('Prep doc').item.json.canonical_url }}",
           title: "={{ $('Prep doc').item.json.title }}",
+          published_at: "={{ $('Prep doc').item.json.published_at }}",
           run_id: "={{ $('Prep doc').item.json.run_id }}"
         },
         matchingColumns: [],
@@ -314,6 +325,7 @@ const nodes = [
           { id: 'raw_doc_id', displayName: 'raw_doc_id', required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: 'string' },
           { id: 'canonical_url', displayName: 'canonical_url', required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: 'string' },
           { id: 'title', displayName: 'title', required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: 'string' },
+          { id: 'published_at', displayName: 'published_at', required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: 'string' },
           { id: 'run_id', displayName: 'run_id', required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: 'string' }
         ]
       },
@@ -397,7 +409,17 @@ const wf21 = {
       parameters: { workflowInputs: { values: [
         { name: 'triage_body', type: 'string' }, { name: 'raw_doc_id', type: 'string' },
         { name: 'canonical_url', type: 'string' }, { name: 'title', type: 'string' },
-        { name: 'run_id', type: 'string' } ] } } },
+        { name: 'published_at', type: 'string' }, { name: 'run_id', type: 'string' } ] } } },
+
+    // Every expression below assumes exactly one doc per execution. If WF-20's
+    // Run triage ever reverts to mode 'once', fail loudly here instead of
+    // silently attributing the whole batch to the first document.
+    codeNode('Guard single item', 'guard', [100, 0], 'runOnceForAllItems', `
+const n = $input.all().length;
+if (n !== 1) throw new Error('WF-21 expects exactly 1 item per execution, received ' + n +
+  ' — WF-20 "Run triage" must have mode: "each"');
+return $input.all();
+`.trim()),
 
     { id: 'triage', name: 'Triage', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [200, 0],
       parameters: { method: 'POST', url: 'http://host.docker.internal:1234/v1/chat/completions',
@@ -430,11 +452,12 @@ const wf21 = {
       parameters: { mode: 'append', numberInputs: 2 } },
 
     pgNode('Insert feed', 'insertfeed', [1400, 0],
-      "insert into feed_items (raw_doc_id, canonical_url, title, summary, angle, relevance, tags, run_id) values ($1::bigint, $2, nullif($3,''), $4, nullif($5,''), nullif($6::text,'')::int, $7::text[], $8::bigint) returning id as feed_item_id",
-      "={{ $json.raw_doc_id }},{{ $json.canonical_url }},{{ $json.title }},{{ $json.summary }},{{ $json.angle }},{{ $json.relevance }},{{ $json.tags_pg }},{{ $json.run_id }}")
+      "insert into feed_items (raw_doc_id, canonical_url, title, summary, angle, relevance, tags, run_id, published_at) values ($1::bigint, $2, nullif($3,''), $4, nullif($5,''), nullif($6::text,'')::int, $7::text[], $8::bigint, nullif($9,'')::timestamptz) returning id as feed_item_id",
+      "={{ $json.raw_doc_id }},{{ $json.canonical_url }},{{ $json.title }},{{ $json.summary }},{{ $json.angle }},{{ $json.relevance }},{{ $json.tags_pg }},{{ $json.run_id }},{{ $json.published_at }}")
   ],
   connections: {
-    'WF Input': { main: [[{ node: 'Triage', type: 'main', index: 0 }]] },
+    'WF Input': { main: [[{ node: 'Guard single item', type: 'main', index: 0 }]] },
+    'Guard single item': { main: [[{ node: 'Triage', type: 'main', index: 0 }]] },
     'Triage': { main: [[{ node: 'Validate triage', type: 'main', index: 0 }]] },
     'Validate triage': { main: [[{ node: 'Triage valid?', type: 'main', index: 0 }]] },
     'Triage valid?': { main: [
