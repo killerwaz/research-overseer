@@ -33,7 +33,7 @@ Rules:
 6. manage_sources actions: add (url, optional label), remove (id or url), list.
 7. Reply tersely — this is Telegram. Plain text, no markdown formatting.
 
-Current time UTC: {{ $now.toUTC().toISO() }} (Dhaka = UTC+6).`;
+Current time: {{ $now.setZone('Asia/Dhaka').toFormat('cccc yyyy-MM-dd HH:mm') }} (Asia/Dhaka, UTC+6). This is the local date and time — use it directly, do not convert it.`;
 
 function tool(name, description, workflowId, inputs, pos) {
   const value = {};
