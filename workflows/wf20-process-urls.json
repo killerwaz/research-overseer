@@ -335,7 +335,7 @@
       ],
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const orig = $('Filter new').item.json;\nlet markdown = '';\nlet title = '';\nlet scraper = 'crawl4ai';\nif ($json.results) {\n  const r = ($json.results && $json.results[0]) || {};\n  const md = r.markdown || {};\n  const fit = (typeof md === 'object' ? md.fit_markdown : md) || '';\n  const raw = (typeof md === 'object' ? md.raw_markdown : '') || '';\n  markdown = fit.length >= 400 ? fit : raw;\n  title = (r.metadata && r.metadata.title) || orig.title || '';\n} else {\n  scraper = 'firecrawl';\n  const d = $json.data || {};\n  markdown = d.markdown || '';\n  title = (d.metadata && d.metadata.title) || orig.title || '';\n}\nconst sys = \"You are a research triage assistant. You read one scraped article and return ONLY a JSON object with exactly these fields: summary (2-3 sentence summary of the article substance), angle (one sentence - the content angle or hook that makes this usable for research/writing, or null), relevance (integer 1-5, 5 = directly useful now, 1 = noise), tags (array of 1-5 short lowercase topic tags). Return nothing except the JSON object.\";\nconst user = 'TITLE: ' + title + '\\n' + 'URL: ' + orig.canonical_url + '\\n\\nCONTENT:\\n' + markdown.slice(0, 6000);\nconst triage_body = JSON.stringify({ model: 'qwen/qwen3.5-9b', temperature: 0.2, max_tokens: 4000,\n  response_format: {\"type\":\"json_schema\",\"json_schema\":{\"name\":\"triage\",\"strict\":true,\"schema\":{\"type\":\"object\",\"properties\":{\"summary\":{\"type\":\"string\"},\"angle\":{\"type\":[\"string\",\"null\"]},\"relevance\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":5},\"tags\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"minItems\":1,\"maxItems\":5}},\"required\":[\"summary\",\"angle\",\"relevance\",\"tags\"],\"additionalProperties\":false}}},\n  messages: [ { role: 'system', content: sys }, { role: 'user', content: user } ] });\nreturn { json: { canonical_url: orig.canonical_url, source: orig.source || '', title,\n  markdown, scraper, run_id: orig.run_id, triage_body } };"
+        "jsCode": "const orig = $('Filter new').item.json;\nlet markdown = '';\nlet title = '';\nlet scraper = 'crawl4ai';\nif ($json.results) {\n  const r = ($json.results && $json.results[0]) || {};\n  const md = r.markdown || {};\n  const fit = (typeof md === 'object' ? md.fit_markdown : md) || '';\n  const raw = (typeof md === 'object' ? md.raw_markdown : '') || '';\n  markdown = fit.length >= 400 ? fit : raw;\n  title = (r.metadata && r.metadata.title) || orig.title || '';\n} else {\n  scraper = 'firecrawl';\n  const d = $json.data || {};\n  markdown = d.markdown || '';\n  title = (d.metadata && d.metadata.title) || orig.title || '';\n}\nconst sys = \"You are a research triage assistant. You read one scraped article and return ONLY a JSON object with exactly these fields: summary (2-3 sentence summary of the article substance), angle (one sentence - the content angle or hook that makes this usable for research/writing, or null), relevance (integer 1-5, 5 = directly useful now, 1 = noise), tags (array of 1-5 short lowercase topic tags). Return nothing except the JSON object.\";\nconst user = 'TITLE: ' + title + '\\n' + 'URL: ' + orig.canonical_url + '\\n\\nCONTENT:\\n' + markdown.slice(0, 6000);\nconst triage_body = JSON.stringify({ model: 'qwen/qwen3.5-9b', temperature: 0.2, max_tokens: 4000,\n  response_format: {\"type\":\"json_schema\",\"json_schema\":{\"name\":\"triage\",\"strict\":true,\"schema\":{\"type\":\"object\",\"properties\":{\"summary\":{\"type\":\"string\"},\"angle\":{\"type\":[\"string\",\"null\"]},\"relevance\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":5},\"tags\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"minItems\":1,\"maxItems\":5}},\"required\":[\"summary\",\"angle\",\"relevance\",\"tags\"],\"additionalProperties\":false}}},\n  messages: [ { role: 'system', content: sys }, { role: 'user', content: user } ] });\nreturn { json: { canonical_url: orig.canonical_url, source: orig.source || '', title,\n  markdown, scraper, run_id: orig.run_id, triage_body,\n  published_at: orig.published_at || '' } };"
       }
     },
     {
@@ -349,9 +349,9 @@
       ],
       "parameters": {
         "operation": "executeQuery",
-        "query": "with s as (insert into seen_urls (canonical_url, source) values ($1, nullif($2,'')) on conflict (canonical_url) do nothing) insert into raw_docs (canonical_url, title, markdown, scraper, run_id) values ($1, nullif($3,''), $4, $6, $5::bigint) returning id as raw_doc_id",
+        "query": "with s as (insert into seen_urls (canonical_url, source) values ($1, nullif($2,'')) on conflict (canonical_url) do nothing) insert into raw_docs (canonical_url, title, markdown, scraper, run_id, published_at) values ($1, nullif($3,''), $4, $6, $5::bigint, nullif($7,'')::timestamptz) returning id as raw_doc_id",
         "options": {
-          "queryReplacement": "={{ $json.canonical_url }},{{ $json.source }},{{ $json.title }},{{ $json.markdown }},{{ $json.run_id }},{{ $json.scraper }}"
+          "queryReplacement": "={{ $json.canonical_url }},{{ $json.source }},{{ $json.title }},{{ $json.markdown }},{{ $json.run_id }},{{ $json.scraper }},{{ $json.published_at }}"
         }
       },
       "credentials": {
@@ -371,6 +371,7 @@
         -200
       ],
       "parameters": {
+        "mode": "each",
         "workflowId": {
           "__rl": true,
           "value": "HISagmvZYi6O7N5u",
@@ -383,6 +384,7 @@
             "raw_doc_id": "={{ $json.raw_doc_id }}",
             "canonical_url": "={{ $('Prep doc').item.json.canonical_url }}",
             "title": "={{ $('Prep doc').item.json.title }}",
+            "published_at": "={{ $('Prep doc').item.json.published_at }}",
             "run_id": "={{ $('Prep doc').item.json.run_id }}"
           },
           "matchingColumns": [],
@@ -417,6 +419,15 @@
             {
               "id": "title",
               "displayName": "title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "published_at",
+              "displayName": "published_at",
               "required": false,
               "defaultMatch": false,
               "display": true,

@@ -30,11 +30,29 @@
               "type": "string"
             },
             {
+              "name": "published_at",
+              "type": "string"
+            },
+            {
               "name": "run_id",
               "type": "string"
             }
           ]
         }
+      }
+    },
+    {
+      "id": "guard",
+      "name": "Guard single item",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        100,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const n = $input.all().length;\nif (n !== 1) throw new Error('WF-21 expects exactly 1 item per execution, received ' + n +\n  ' — WF-20 \"Run triage\" must have mode: \"each\"');\nreturn $input.all();"
       }
     },
     {
@@ -80,7 +98,7 @@
       ],
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "function parseContent(j) {\n  try {\n    let c = j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;\n    if (!c) return null;\n    c = c.trim().replace(/^\\`\\`\\`(json)?/i, '').replace(/\\`\\`\\`$/, '').trim();\n    const o = JSON.parse(c);\n    if (o && typeof o.summary === 'string' && Number.isInteger(o.relevance) &&\n        o.relevance >= 1 && o.relevance <= 5 && Array.isArray(o.tags) && o.tags.length >= 1) return o;\n    return null;\n  } catch (e) { return null; }\n}\nfunction tagsPg(tags) {\n  const clean = (tags || []).slice(0, 5).map(t => String(t).toLowerCase().replace(/[{}\",\\\\]/g, '').trim()).filter(Boolean);\n  return '{' + clean.join(',') + '}';\n}\nconst doc = $('WF Input').first().json;\nconst rawDocId = doc.raw_doc_id;\nconst o = parseContent($json);\nif (!o) return { json: { __invalid: true } };\nreturn { json: { __invalid: false, raw_doc_id: rawDocId, canonical_url: doc.canonical_url, title: doc.title,\n  summary: o.summary, angle: o.angle || '', relevance: o.relevance, tags_pg: tagsPg(o.tags), run_id: doc.run_id } };\n"
+        "jsCode": "function parseContent(j) {\n  try {\n    let c = j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;\n    if (!c) return null;\n    c = c.trim().replace(/^\\`\\`\\`(json)?/i, '').replace(/\\`\\`\\`$/, '').trim();\n    const o = JSON.parse(c);\n    if (o && typeof o.summary === 'string' && Number.isInteger(o.relevance) &&\n        o.relevance >= 1 && o.relevance <= 5 && Array.isArray(o.tags) && o.tags.length >= 1) return o;\n    return null;\n  } catch (e) { return null; }\n}\nfunction tagsPg(tags) {\n  const clean = (tags || []).slice(0, 5).map(t => String(t).toLowerCase().replace(/[{}\",\\\\]/g, '').trim()).filter(Boolean);\n  return '{' + clean.join(',') + '}';\n}\nconst doc = $('WF Input').first().json;\nconst rawDocId = doc.raw_doc_id;\nconst o = parseContent($json);\nif (!o) return { json: { __invalid: true } };\nreturn { json: { __invalid: false, raw_doc_id: rawDocId, canonical_url: doc.canonical_url, title: doc.title,\n  summary: o.summary, angle: o.angle || '', relevance: o.relevance, tags_pg: tagsPg(o.tags),\n  published_at: doc.published_at || '', run_id: doc.run_id } };\n"
       }
     },
     {
@@ -170,7 +188,7 @@
       ],
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "function parseContent(j) {\n  try {\n    let c = j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;\n    if (!c) return null;\n    c = c.trim().replace(/^\\`\\`\\`(json)?/i, '').replace(/\\`\\`\\`$/, '').trim();\n    const o = JSON.parse(c);\n    if (o && typeof o.summary === 'string' && Number.isInteger(o.relevance) &&\n        o.relevance >= 1 && o.relevance <= 5 && Array.isArray(o.tags) && o.tags.length >= 1) return o;\n    return null;\n  } catch (e) { return null; }\n}\nfunction tagsPg(tags) {\n  const clean = (tags || []).slice(0, 5).map(t => String(t).toLowerCase().replace(/[{}\",\\\\]/g, '').trim()).filter(Boolean);\n  return '{' + clean.join(',') + '}';\n}\nconst doc = $('WF Input').first().json;\nconst rawDocId = doc.raw_doc_id;\nconst o = parseContent($json);\nif (!o) return { json: { raw_doc_id: rawDocId, canonical_url: doc.canonical_url, title: doc.title,\n  summary: 'TRIAGE_FAILED', angle: '', relevance: '', tags_pg: '{}', run_id: doc.run_id } };\nreturn { json: { raw_doc_id: rawDocId, canonical_url: doc.canonical_url, title: doc.title,\n  summary: o.summary, angle: o.angle || '', relevance: o.relevance, tags_pg: tagsPg(o.tags), run_id: doc.run_id } };\n"
+        "jsCode": "function parseContent(j) {\n  try {\n    let c = j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;\n    if (!c) return null;\n    c = c.trim().replace(/^\\`\\`\\`(json)?/i, '').replace(/\\`\\`\\`$/, '').trim();\n    const o = JSON.parse(c);\n    if (o && typeof o.summary === 'string' && Number.isInteger(o.relevance) &&\n        o.relevance >= 1 && o.relevance <= 5 && Array.isArray(o.tags) && o.tags.length >= 1) return o;\n    return null;\n  } catch (e) { return null; }\n}\nfunction tagsPg(tags) {\n  const clean = (tags || []).slice(0, 5).map(t => String(t).toLowerCase().replace(/[{}\",\\\\]/g, '').trim()).filter(Boolean);\n  return '{' + clean.join(',') + '}';\n}\nconst doc = $('WF Input').first().json;\nconst rawDocId = doc.raw_doc_id;\nconst o = parseContent($json);\nif (!o) return { json: { raw_doc_id: rawDocId, canonical_url: doc.canonical_url, title: doc.title,\n  summary: 'TRIAGE_FAILED', angle: '', relevance: '', tags_pg: '{}',\n  published_at: doc.published_at || '', run_id: doc.run_id } };\nreturn { json: { raw_doc_id: rawDocId, canonical_url: doc.canonical_url, title: doc.title,\n  summary: o.summary, angle: o.angle || '', relevance: o.relevance, tags_pg: tagsPg(o.tags),\n  published_at: doc.published_at || '', run_id: doc.run_id } };\n"
       }
     },
     {
@@ -198,9 +216,9 @@
       ],
       "parameters": {
         "operation": "executeQuery",
-        "query": "insert into feed_items (raw_doc_id, canonical_url, title, summary, angle, relevance, tags, run_id) values ($1::bigint, $2, nullif($3,''), $4, nullif($5,''), nullif($6::text,'')::int, $7::text[], $8::bigint) returning id as feed_item_id",
+        "query": "insert into feed_items (raw_doc_id, canonical_url, title, summary, angle, relevance, tags, run_id, published_at) values ($1::bigint, $2, nullif($3,''), $4, nullif($5,''), nullif($6::text,'')::int, $7::text[], $8::bigint, nullif($9,'')::timestamptz) returning id as feed_item_id",
         "options": {
-          "queryReplacement": "={{ $json.raw_doc_id }},{{ $json.canonical_url }},{{ $json.title }},{{ $json.summary }},{{ $json.angle }},{{ $json.relevance }},{{ $json.tags_pg }},{{ $json.run_id }}"
+          "queryReplacement": "={{ $json.raw_doc_id }},{{ $json.canonical_url }},{{ $json.title }},{{ $json.summary }},{{ $json.angle }},{{ $json.relevance }},{{ $json.tags_pg }},{{ $json.run_id }},{{ $json.published_at }}"
         }
       },
       "credentials": {
@@ -213,6 +231,17 @@
   ],
   "connections": {
     "WF Input": {
+      "main": [
+        [
+          {
+            "node": "Guard single item",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guard single item": {
       "main": [
         [
           {
