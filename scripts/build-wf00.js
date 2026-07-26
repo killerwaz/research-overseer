@@ -26,7 +26,7 @@ const SYSTEM = `=You are The Scout's dispatcher on Telegram. Route requests to t
 Rules:
 1. Cheap and unambiguous requests run immediately, no confirmation: a pasted URL -> scrape_url; status questions -> run_status; reading existing findings -> query_feed; a search on a clearly named topic ('search around for X', 'anything on X') -> run_discovery with source brave, immediately.
 2. Vague or conceptual digs ('what's happening with X', 'explore X', fuzzy themes) -> run_discovery with source exa, but ask a one-line confirmation first. full_sweep always needs confirmation. If the user's next message is an affirmative, execute what you proposed.
-3. Questions about existing findings are ALWAYS query_feed or run_status — never trigger a new run for them.
+3. Questions about existing findings are ALWAYS query_feed or run_status — never trigger a new run for them. If the question names a time ('today', 'last night', 'this week'), compute the ISO timestamp for the start of that window from the current time below and pass it to query_feed as the since parameter. Never answer a time-scoped question from an unfiltered read.
 4. When uncertain between search sources, fail WIDE: prefer full_sweep (with confirmation) or brave. Never guess narrow.
 4b. Call at most ONE discovery tool per user request. After full_sweep or run_discovery returns, summarize its result and stop — do not chain additional searches on your own.
 5. manage_schedule: parse natural language into cron, timezone Asia/Dhaka (UTC+6). 'every day at 8am' -> cron '0 8 * * *' via action create_recurring. Relative one-times ('in 3 hours') -> action create_onetime with an ISO timestamp you compute from the current time below. If phrasing is ambiguous ('tomorrow morning'), ask ONE clarifying question. Always echo the parsed schedule back and get a yes before creating. Other actions: cancel (needs id), list.
@@ -178,7 +178,10 @@ return [{ json: { chat_id, output: text } }];
       trigger: { fixed: 'agent' } }, [1580, 320]),
 
   tool('query_feed',
-    "Read EXISTING triaged results. Use for 'what did you find', 'show me', 'anything good last night'. NEVER triggers a new run. Params: since (ISO timestamp, optional), min_relevance (1-5, optional), tag (optional), limit (default 20).",
+    "Read EXISTING triaged results. Use for 'what did you find', 'show me', 'anything good last night'. NEVER triggers a new run. " +
+    "CRITICAL: if the question implies ANY time window — today, tonight, last night, this morning, yesterday, this week, recently, just now — you MUST pass `since` as an ISO timestamp you compute from the current time given above. Omitting it returns the whole archive, and you will report old items as if they were new. " +
+    "Only omit `since` for questions with no time element at all ('show me the best stuff', 'anything on agents'). " +
+    "Params: since (ISO timestamp), min_relevance (1-5), tag, limit (default 20).",
     WF.query_feed,
     { since: { desc: 'ISO timestamp lower bound for created_at, empty for none' },
       min_relevance: { desc: 'minimum relevance 1-5, empty for none' },
@@ -213,9 +216,16 @@ let chat_id = ${CHAT_ID};
 try { chat_id = $('Record update').item.json.chat_id || chat_id; } catch (e) {
   try { chat_id = $('Test normalize').item.json.chat_id || chat_id; } catch (e2) {}
 }
-// Telegram node sends parse_mode HTML — escape or any < > & kills the send
+// Telegram node sends parse_mode HTML — escape or any < > & kills the send.
+// Also strip markdown the model emits despite instructions: under HTML mode
+// **bold** and _italics_ would show up as literal punctuation.
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-return { json: { chat_id, output: esc(String($json.output || '').slice(0, 4000)) || '(empty reply)' } };`.trim() } },
+const demd = (s) => String(s)
+  .replace(/\\*\\*(.+?)\\*\\*/g, '$1')
+  .replace(/(^|\\s)\\*(?!\\s)(.+?)(?<!\\s)\\*(?=\\s|$)/g, '$1$2')
+  .replace(/(^|\\s)_(?!\\s)(.+?)(?<!\\s)_(?=\\s|$)/g, '$1$2')
+  .replace(/^\\s{0,3}#{1,6}\\s+/gm, '');
+return { json: { chat_id, output: esc(demd(String($json.output || '').slice(0, 4000))) || '(empty reply)' } };`.trim() } },
 
   { id: 'reply', name: 'Send reply', type: 'n8n-nodes-base.telegram', typeVersion: 1.2, position: [1600, 100],
     parameters: { chatId: '={{ $json.chat_id }}', text: '={{ $json.output }}',
