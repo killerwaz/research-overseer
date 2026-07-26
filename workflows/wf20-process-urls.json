@@ -504,17 +504,31 @@
       "executeOnce": true
     },
     {
+      "id": "compose",
+      "name": "Compose summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4180,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const r = $('Finalize run').first().json;\nlet brief = '';\ntry { brief = $('Collect stats').first().json.error_brief || ''; } catch (e) {}\nconst esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst made = Number(r.items_created) || 0;\nconst failed = Number((brief.match(/^(\\d+) failed/) || [])[1] || 0);\nconst plural = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');\n\nlet text;\nif (made === 0 && failed === 0) {\n  text = '🔭 Nothing new — everything found was already in your feed.';\n} else if (made === 0) {\n  text = '🔭 Nothing added. ' + plural(failed, 'page') + \" couldn't be read.\";\n} else {\n  text = '🔭 Found ' + plural(made, 'new page') + ', all summarized.';\n  if (failed) text += ' ' + plural(failed, 'other') + \" couldn't be read.\";\n}\nif (r.top_title) text += '\\nTop: ' + esc(r.top_title);\nif (brief) {\n  const hosts = brief.replace(/^\\d+ failed: /, '');\n  text += '\\n⚠ ' + esc(hosts);\n}\nreturn [{ json: { text } }];"
+      }
+    },
+    {
       "id": "tgsummary",
       "name": "Telegram summary",
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
       "position": [
-        4200,
+        4380,
         0
       ],
       "parameters": {
         "chatId": "__TG_CHAT__",
-        "text": "=🔭 Run #{{ $json.run_id }} ({{ $json.scope }}) {{ $json.status }}: {{ $json.urls_new }} new, {{ $json.items_created }} items{{ $json.top_title ? '\\nTop: ' + String($json.top_title).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') : '' }}{{ $('Collect stats').first().json.error_brief ? '\\n⚠️ ' + String($('Collect stats').first().json.error_brief).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') : '' }}",
+        "text": "={{ $json.text }}",
         "additionalFields": {
           "appendAttribution": false,
           "parse_mode": "HTML"
@@ -771,6 +785,17 @@
       ]
     },
     "Finalize run": {
+      "main": [
+        [
+          {
+            "node": "Compose summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compose summary": {
       "main": [
         [
           {

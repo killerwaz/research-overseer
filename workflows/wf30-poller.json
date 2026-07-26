@@ -128,6 +128,211 @@
           "waitForSubWorkflow": false
         }
       }
+    },
+    {
+      "id": "findbacklog",
+      "name": "Find backlog",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        200,
+        200
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "with backlog as (\n  select rd.id\n  from raw_docs rd\n  left join feed_items f on f.raw_doc_id = rd.id\n  group by rd.id\n  having count(f.id) <> 1\n)\nselect rd.id as raw_doc_id,\n       rd.canonical_url,\n       coalesce(rd.title, '') as title,\n       coalesce(to_char(rd.published_at, 'YYYY-MM-DD\"T\"HH24:MI:SSOF'), '') as published_at,\n       coalesce(rd.run_id, 0) as run_id,\n       left(rd.markdown, 6000) as markdown,\n       (select count(*) from backlog) as backlog_total\nfrom raw_docs rd\nwhere rd.id in (select id from backlog)\n  and not exists (\n    select 1 from runs r\n    where r.status = 'running' and r.started_at > now() - interval '15 minutes'\n  )\norder by rd.id\nlimit 2",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "tzBuhu9KEXlaRRfW",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "hasbacklog",
+      "name": "Has backlog?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        400,
+        200
+      ],
+      "parameters": {
+        "options": {},
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "b1",
+              "leftValue": "={{ $json.raw_doc_id }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "buildbody",
+      "name": "Build triage body",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        600,
+        140
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const sys = \"You are a research triage assistant. You read one scraped article and return ONLY a JSON object with exactly these fields: summary (2-3 sentence summary of the article substance), angle (one sentence - the content angle or hook that makes this usable for research/writing, or null), relevance (integer 1-5, 5 = directly useful now, 1 = noise), tags (array of 1-5 short lowercase topic tags). Return nothing except the JSON object.\";\nconst schema = {\"type\":\"json_schema\",\"json_schema\":{\"name\":\"triage\",\"strict\":true,\"schema\":{\"type\":\"object\",\"properties\":{\"summary\":{\"type\":\"string\"},\"angle\":{\"type\":[\"string\",\"null\"]},\"relevance\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":5},\"tags\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"minItems\":1,\"maxItems\":5}},\"required\":[\"summary\",\"angle\",\"relevance\",\"tags\"],\"additionalProperties\":false}}};\nreturn $input.all().map(i => {\n  const d = i.json;\n  const user = 'TITLE: ' + (d.title || '') + '\\n' + 'URL: ' + d.canonical_url +\n    '\\n\\nCONTENT:\\n' + (d.markdown || '');\n  return { json: {\n    raw_doc_id: d.raw_doc_id,\n    canonical_url: d.canonical_url,\n    title: d.title || '',\n    published_at: d.published_at || '',\n    run_id: d.run_id,\n    triage_body: JSON.stringify({\n      model: \"qwen/qwen3.5-9b\", temperature: 0.2, max_tokens: 4000,\n      response_format: schema,\n      messages: [ { role: 'system', content: sys }, { role: 'user', content: user } ]\n    })\n  } };\n});"
+      }
+    },
+    {
+      "id": "draintriage",
+      "name": "Drain triage",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        800,
+        140
+      ],
+      "parameters": {
+        "mode": "each",
+        "workflowId": {
+          "__rl": true,
+          "value": "HISagmvZYi6O7N5u",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "triage_body": "={{ $json.triage_body }}",
+            "raw_doc_id": "={{ $json.raw_doc_id }}",
+            "canonical_url": "={{ $json.canonical_url }}",
+            "title": "={{ $json.title }}",
+            "published_at": "={{ $json.published_at }}",
+            "run_id": "={{ $json.run_id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "triage_body",
+              "displayName": "triage_body",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "raw_doc_id",
+              "displayName": "raw_doc_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "canonical_url",
+              "displayName": "canonical_url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "title",
+              "displayName": "title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "published_at",
+              "displayName": "published_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "run_id",
+              "displayName": "run_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ]
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "noticegate",
+      "name": "Notice due?",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        600,
+        280
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "insert into notices (kind, last_sent) values ('feed_backlog', now()) on conflict (kind) do update set last_sent = now() where notices.last_sent < now() - interval '6 hours' returning kind",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "tzBuhu9KEXlaRRfW",
+          "name": "Postgres account"
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "sendnotice",
+      "name": "Send notice",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        800,
+        280
+      ],
+      "parameters": {
+        "chatId": "__TG_CHAT__",
+        "text": "=⚠ {{ $('Find backlog').first().json.backlog_total }} saved pages never got summarized, so they're missing from your feed. Fixing them in the background.",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "6RLwMp4ODoesGE4v",
+          "name": "telegram-scout-bot"
+        }
+      },
+      "onError": "continueRegularOutput"
     }
   ],
   "connections": {
@@ -136,6 +341,61 @@
         [
           {
             "node": "Get candidates",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Find backlog",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find backlog": {
+      "main": [
+        [
+          {
+            "node": "Has backlog?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has backlog?": {
+      "main": [
+        [
+          {
+            "node": "Build triage body",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Notice due?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Build triage body": {
+      "main": [
+        [
+          {
+            "node": "Drain triage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notice due?": {
+      "main": [
+        [
+          {
+            "node": "Send notice",
             "type": "main",
             "index": 0
           }

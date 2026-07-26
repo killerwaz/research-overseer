@@ -216,7 +216,7 @@
       ],
       "parameters": {
         "operation": "executeQuery",
-        "query": "insert into feed_items (raw_doc_id, canonical_url, title, summary, angle, relevance, tags, run_id, published_at) values ($1::bigint, $2, nullif($3,''), $4, nullif($5,''), nullif($6::text,'')::int, $7::text[], $8::bigint, nullif($9,'')::timestamptz) returning id as feed_item_id",
+        "query": "with del as (delete from feed_items where raw_doc_id = $1::bigint) insert into feed_items (raw_doc_id, canonical_url, title, summary, angle, relevance, tags, run_id, published_at) values ($1::bigint, $2, nullif($3,''), $4, nullif($5,''), nullif($6::text,'')::int, $7::text[], $8::bigint, nullif($9,'')::timestamptz) returning id as feed_item_id",
         "options": {
           "queryReplacement": "={{ $json.raw_doc_id }},{{ $json.canonical_url }},{{ $json.title }},{{ $json.summary }},{{ $json.angle }},{{ $json.relevance }},{{ $json.tags_pg }},{{ $json.run_id }},{{ $json.published_at }}"
         }
