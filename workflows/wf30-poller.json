@@ -140,7 +140,7 @@
       ],
       "parameters": {
         "operation": "executeQuery",
-        "query": "with backlog as (\n  select rd.id\n  from raw_docs rd\n  left join feed_items f on f.raw_doc_id = rd.id\n  group by rd.id\n  having count(f.id) <> 1\n)\nselect rd.id as raw_doc_id,\n       rd.canonical_url,\n       coalesce(rd.title, '') as title,\n       coalesce(to_char(rd.published_at, 'YYYY-MM-DD\"T\"HH24:MI:SSOF'), '') as published_at,\n       coalesce(rd.run_id, 0) as run_id,\n       left(rd.markdown, 6000) as markdown,\n       (select count(*) from backlog) as backlog_total\nfrom raw_docs rd\nwhere rd.id in (select id from backlog)\n  and not exists (\n    select 1 from runs r\n    where r.status = 'running' and r.started_at > now() - interval '15 minutes'\n  )\norder by rd.id\nlimit 2",
+        "query": "with backlog as (\n  select rd.id\n  from raw_docs rd\n  left join feed_items f on f.raw_doc_id = rd.id\n  group by rd.id\n  having count(f.id) <> 1\n)\nselect rd.id as raw_doc_id,\n       rd.canonical_url,\n       coalesce(rd.title, '') as title,\n       coalesce(to_char(rd.published_at, 'YYYY-MM-DD\"T\"HH24:MI:SSOF'), '') as published_at,\n       coalesce(rd.run_id, 0) as run_id,\n       left(rd.markdown, 6000) as markdown,\n       (select count(*) from backlog) as backlog_total\nfrom raw_docs rd\nwhere rd.id in (select id from backlog)\n  -- opt-in: does nothing at all unless the user switched it on (\"fix feed\")\n  and (select value from settings where key = 'drain_enabled') = 'true'\n  -- and never competes with a live run\n  and not exists (\n    select 1 from runs r\n    where r.status = 'running' and r.started_at > now() - interval '15 minutes'\n  )\norder by rd.id\nlimit 12",
         "options": {}
       },
       "credentials": {
@@ -288,13 +288,77 @@
       "onError": "continueRegularOutput"
     },
     {
+      "id": "idlecheck",
+      "name": "Check idle backlog",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        200,
+        320
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select (select count(*) from (\n          select rd.id from raw_docs rd\n          left join feed_items f on f.raw_doc_id = rd.id\n          group by rd.id having count(f.id) <> 1\n        ) a) as backlog_total,\n       (select value from settings where key = 'drain_enabled') as drain_enabled",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "tzBuhu9KEXlaRRfW",
+          "name": "Postgres account"
+        }
+      },
+      "executeOnce": true,
+      "alwaysOutputData": true
+    },
+    {
+      "id": "shouldask",
+      "name": "Should ask?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        400,
+        320
+      ],
+      "parameters": {
+        "options": {},
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "s1",
+              "leftValue": "={{ Number($json.backlog_total) }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            },
+            {
+              "id": "s2",
+              "leftValue": "={{ String($json.drain_enabled) }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
       "id": "noticegate",
       "name": "Notice due?",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.4,
       "position": [
         600,
-        280
+        320
       ],
       "parameters": {
         "operation": "executeQuery",
@@ -316,11 +380,11 @@
       "typeVersion": 1.2,
       "position": [
         800,
-        280
+        320
       ],
       "parameters": {
         "chatId": "__TG_CHAT__",
-        "text": "=⚠ {{ $('Find backlog').first().json.backlog_total }} saved pages never got summarized, so they're missing from your feed. Fixing them in the background.",
+        "text": "={{ $('Check idle backlog').first().json.backlog_total }} saved pages never got summarized, so they're missing from your feed.\n\nReply \"fix feed\" and I'll work through them. Reply \"stop feed\" any time to stop.",
         "additionalFields": {
           "appendAttribution": false,
           "parse_mode": "HTML"
@@ -348,6 +412,11 @@
             "node": "Find backlog",
             "type": "main",
             "index": 0
+          },
+          {
+            "node": "Check idle backlog",
+            "type": "main",
+            "index": 0
           }
         ]
       ]
@@ -370,11 +439,6 @@
             "node": "Build triage body",
             "type": "main",
             "index": 0
-          },
-          {
-            "node": "Notice due?",
-            "type": "main",
-            "index": 0
           }
         ],
         []
@@ -389,6 +453,29 @@
             "index": 0
           }
         ]
+      ]
+    },
+    "Check idle backlog": {
+      "main": [
+        [
+          {
+            "node": "Should ask?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should ask?": {
+      "main": [
+        [
+          {
+            "node": "Notice due?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
       ]
     },
     "Notice due?": {
