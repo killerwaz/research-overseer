@@ -182,12 +182,14 @@ return [{ json: { chat_id, output: text } }];
     "Read EXISTING triaged results. Use for 'what did you find', 'show me', 'anything good last night'. NEVER triggers a new run. " +
     "CRITICAL: if the question implies ANY time window — today, tonight, last night, this morning, yesterday, this week, recently, just now — you MUST pass `since` as an ISO timestamp you compute from the current time given above. Omitting it returns the whole archive, and you will report old items as if they were new. " +
     "Only omit `since` for questions with no time element at all ('show me the best stuff', 'anything on agents'). " +
-    "Params: since (ISO timestamp), min_relevance (1-5), tag, limit (default 20).",
+    "Items are scored on two axes: specificity (1-5, how concrete and verifiable the claims are — vendor SEO content scores low) and angle_strength (1-5, how non-obvious the publishable hook is). score = the two added, 2-10. Use min_score 7+ for 'the good stuff', 8+ for 'only the best'. " +
+    "Params: since (ISO timestamp), min_score (2-10), tag, limit (default 20), min_relevance (legacy, avoid).",
     WF.query_feed,
-    { since: { desc: 'ISO timestamp lower bound for created_at, empty for none' },
-      min_relevance: { desc: 'minimum relevance 1-5, empty for none' },
+    { since: { desc: 'ISO timestamp lower bound, empty for none' },
+      min_score: { desc: 'minimum combined score 2-10, empty for none' },
       tag: { desc: 'single lowercase tag to filter by, empty for none' },
-      limit: { desc: 'max items to return, empty for default 20' } }, [1720, 320]),
+      limit: { desc: 'max items to return, empty for default 20' },
+      min_relevance: { desc: 'legacy 1-5 filter, leave empty' } }, [1720, 320]),
 
   tool('run_status',
     "Report recent runs: when, scope, counts, ok/partial/failed. Use for 'did last night's run work', 'when did you last run', 'did anything break'.",

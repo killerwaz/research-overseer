@@ -109,7 +109,13 @@ if ($json.results) {
   title = (d.metadata && d.metadata.title) || orig.title || '';
 }
 const sys = __TRIAGE_SYSTEM__;
-const user = 'TITLE: ' + title + '\\n' + 'URL: ' + orig.canonical_url + '\\n\\nCONTENT:\\n' + markdown.slice(0, 6000);
+// Dates are stated, never inferred: the sandbox clock is UTC and the model has
+// none, so without these it invents recency inside the summary.
+const dhaka = new Date(Date.now() + 6 * 3600 * 1000).toISOString().slice(0, 10);
+const pub = orig.published_at ? String(orig.published_at).slice(0, 10) : 'unknown';
+const user = 'TODAY: ' + dhaka + '\\n' + 'PUBLISHED: ' + pub + '\\n' +
+  'TITLE: ' + title + '\\n' + 'URL: ' + orig.canonical_url +
+  '\\n\\nCONTENT:\\n' + markdown.slice(0, 6000);
 const triage_body = JSON.stringify({ model: 'qwen/qwen3.5-9b', temperature: 0.2, max_tokens: 4000,
   response_format: __TRIAGE_SCHEMA__,
   messages: [ { role: 'system', content: sys }, { role: 'user', content: user } ] });
@@ -144,8 +150,10 @@ function parseContent(j) {
     if (!c) return null;
     c = c.trim().replace(/^\\\`\\\`\\\`(json)?/i, '').replace(/\\\`\\\`\\\`$/, '').trim();
     const o = JSON.parse(c);
-    if (o && typeof o.summary === 'string' && Number.isInteger(o.relevance) &&
-        o.relevance >= 1 && o.relevance <= 5 && Array.isArray(o.tags) && o.tags.length >= 1) return o;
+    const ok = (v) => Number.isInteger(v) && v >= 1 && v <= 5;
+    if (o && typeof o.summary === 'string' && ok(o.relevance) &&
+        ok(o.specificity) && ok(o.angle_strength) &&
+        Array.isArray(o.tags) && o.tags.length >= 1) return o;
     return null;
   } catch (e) { return null; }
 }
@@ -161,17 +169,19 @@ const VALIDATE_1 = VALIDATE_COMMON + `
 const o = parseContent($json);
 if (!o) return { json: { __invalid: true } };
 return { json: { __invalid: false, raw_doc_id: rawDocId, canonical_url: doc.canonical_url, title: doc.title,
-  summary: o.summary, angle: o.angle || '', relevance: o.relevance, tags_pg: tagsPg(o.tags),
+  summary: o.summary, angle: o.angle || '', relevance: o.relevance,
+  specificity: o.specificity, angle_strength: o.angle_strength, tags_pg: tagsPg(o.tags),
   published_at: doc.published_at || '', run_id: doc.run_id } };
 `;
 
 const VALIDATE_2 = VALIDATE_COMMON + `
 const o = parseContent($json);
 if (!o) return { json: { raw_doc_id: rawDocId, canonical_url: doc.canonical_url, title: doc.title,
-  summary: 'TRIAGE_FAILED', angle: '', relevance: '', tags_pg: '{}',
+  summary: 'TRIAGE_FAILED', angle: '', relevance: '', specificity: '', angle_strength: '', tags_pg: '{}',
   published_at: doc.published_at || '', run_id: doc.run_id } };
 return { json: { raw_doc_id: rawDocId, canonical_url: doc.canonical_url, title: doc.title,
-  summary: o.summary, angle: o.angle || '', relevance: o.relevance, tags_pg: tagsPg(o.tags),
+  summary: o.summary, angle: o.angle || '', relevance: o.relevance,
+  specificity: o.specificity, angle_strength: o.angle_strength, tags_pg: tagsPg(o.tags),
   published_at: doc.published_at || '', run_id: doc.run_id } };
 `;
 
@@ -321,7 +331,7 @@ const nodes = [
   codeNode('Collect stats', 'stats', [3800, 0], 'runOnceForAllItems', COLLECT_STATS),
 
   pgNode('Finalize run', 'finalize', [4000, 0],
-    "update runs set finished_at = now(), urls_new = $2::int, urls_scraped = (select count(*) from raw_docs where run_id = $1::bigint), items_created = (select count(*) from feed_items where run_id = $1::bigint), error = nullif($3,''), status = case when $2::int = 0 and $3 = '' then 'ok' when (select count(*) from raw_docs where run_id = $1::bigint) = 0 and $2::int > 0 then 'failed' when (select count(*) from raw_docs where run_id = $1::bigint) < $2::int then 'partial' when (select count(*) from feed_items where run_id = $1::bigint) < (select count(*) from raw_docs where run_id = $1::bigint) then 'partial' else 'ok' end where id = $1::bigint returning id as run_id, status, scope, urls_found, urls_new, urls_scraped, items_created, error, (select title from feed_items where run_id = $1::bigint order by relevance desc nulls last, id desc limit 1) as top_title",
+    "update runs set finished_at = now(), urls_new = $2::int, urls_scraped = (select count(*) from raw_docs where run_id = $1::bigint), items_created = (select count(*) from feed_items where run_id = $1::bigint), error = nullif($3,''), status = case when $2::int = 0 and $3 = '' then 'ok' when (select count(*) from raw_docs where run_id = $1::bigint) = 0 and $2::int > 0 then 'failed' when (select count(*) from raw_docs where run_id = $1::bigint) < $2::int then 'partial' when (select count(*) from feed_items where run_id = $1::bigint) < (select count(*) from raw_docs where run_id = $1::bigint) then 'partial' else 'ok' end where id = $1::bigint returning id as run_id, status, scope, urls_found, urls_new, urls_scraped, items_created, error, (select title from feed_items where run_id = $1::bigint order by score desc, relevance desc nulls last, id desc limit 1) as top_title",
     "={{ $json.run_id }},{{ $json.urls_new }},{{ $json.error }}",
     { executeOnce: true }),
 
@@ -466,8 +476,8 @@ return $input.all();
     // one. No-op on the normal path (new docs have none) and makes re-triage
     // idempotent, so the WF-30 drain never needs a separate delete step.
     pgNode('Insert feed', 'insertfeed', [1400, 0],
-      "with del as (delete from feed_items where raw_doc_id = $1::bigint) insert into feed_items (raw_doc_id, canonical_url, title, summary, angle, relevance, tags, run_id, published_at) values ($1::bigint, $2, nullif($3,''), $4, nullif($5,''), nullif($6::text,'')::int, $7::text[], $8::bigint, nullif($9,'')::timestamptz) returning id as feed_item_id",
-      "={{ $json.raw_doc_id }},{{ $json.canonical_url }},{{ $json.title }},{{ $json.summary }},{{ $json.angle }},{{ $json.relevance }},{{ $json.tags_pg }},{{ $json.run_id }},{{ $json.published_at }}")
+      "with del as (delete from feed_items where raw_doc_id = $1::bigint) insert into feed_items (raw_doc_id, canonical_url, title, summary, angle, relevance, tags, run_id, published_at, specificity, angle_strength) values ($1::bigint, $2, nullif($3,''), $4, nullif($5,''), nullif($6::text,'')::int, $7::text[], $8::bigint, nullif($9,'')::timestamptz, nullif($10::text,'')::int, nullif($11::text,'')::int) returning id as feed_item_id",
+      "={{ $json.raw_doc_id }},{{ $json.canonical_url }},{{ $json.title }},{{ $json.summary }},{{ $json.angle }},{{ $json.relevance }},{{ $json.tags_pg }},{{ $json.run_id }},{{ $json.published_at }},{{ $json.specificity }},{{ $json.angle_strength }}")
   ],
   connections: {
     'WF Input': { main: [[{ node: 'Guard single item', type: 'main', index: 0 }]] },
