@@ -111,6 +111,41 @@ return out;`.trim() } },
 const b = $input.first().json.body || {};
 return [{ json: { chat_id: Number(b.chat_id) || ${CHAT_ID}, text: String(b.text || ''), test: true } }];`.trim() } },
 
+  // Deterministic switch, handled before the LLM: no tokens, no mis-routing,
+  // and it keeps the router at the 7 tools the spec caps it at.
+  { id: 'iscmd', name: 'Feed switch?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1060, 100],
+    parameters: { options: {}, conditions: {
+      options: { caseSensitive: false, leftValue: '', typeValidation: 'loose' },
+      combinator: 'and',
+      conditions: [ { id: 'k1',
+        leftValue: "={{ ($json.text || '').trim().toLowerCase().replace(/[.!]+$/, '') }}",
+        rightValue: '^(fix|stop) feed$',
+        operator: { type: 'string', operation: 'regex' } } ] } } },
+
+  { id: 'toggle', name: 'Toggle drain', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [1240, -60],
+    parameters: { operation: 'executeQuery',
+      query: "insert into settings (key, value, updated_at) values ('drain_enabled', $1, now()) on conflict (key) do update set value = excluded.value, updated_at = now() returning value, (select count(*) from (select rd.id from raw_docs rd left join feed_items f on f.raw_doc_id = rd.id group by rd.id having count(f.id) <> 1) a) as backlog_total",
+      options: { queryReplacement: "={{ ($json.text || '').trim().toLowerCase().startsWith('fix') ? 'true' : 'false' }}" } },
+    credentials: { postgres: CRED_PG } },
+
+  { id: 'switchreply', name: 'Switch reply', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1420, -60],
+    parameters: { mode: 'runOnceForAllItems', jsCode: `
+const r = $input.first().json;
+const n = Number(r.backlog_total) || 0;
+const on = String(r.value) === 'true';
+let text;
+if (on && n === 0) text = "Nothing to fix — every saved page already has a summary.";
+else if (on) text = "On it. Working through " + n + " page" + (n === 1 ? '' : 's') +
+  ", about " + Math.max(1, Math.round(n * 20 / 60)) + " min while your PC stays on. Say \\"stop feed\\" to stop.";
+else text = n === 0 ? "Stopped. Nothing left to fix anyway." :
+  "Stopped. " + n + " page" + (n === 1 ? '' : 's') + " still unsummarized — say \\"fix feed\\" when you want them done.";
+let chat_id = ${CHAT_ID};
+try { chat_id = $('Record update').first().json.chat_id || chat_id; } catch (e) {
+  try { chat_id = $('Test normalize').first().json.chat_id || chat_id; } catch (e2) {}
+}
+return [{ json: { chat_id, output: text } }];
+`.trim() } },
+
   { id: 'agent', name: 'Scout Agent', type: '@n8n/n8n-nodes-langchain.agent', typeVersion: 3.1, position: [1120, 100],
     parameters: { promptType: 'define', text: '={{ $json.text }}',
       options: { systemMessage: SYSTEM, maxIterations: 6 } } },
@@ -196,11 +231,17 @@ const connections = {
   'Extract messages': { main: [[{ node: 'Record update', type: 'main', index: 0 }]] },
   'Record update': { main: [[{ node: 'Allowlisted?', type: 'main', index: 0 }]] },
   'Allowlisted?': { main: [
-    [{ node: 'Scout Agent', type: 'main', index: 0 }],
+    [{ node: 'Feed switch?', type: 'main', index: 0 }],
     []
   ] },
   'Test webhook': { main: [[{ node: 'Test normalize', type: 'main', index: 0 }]] },
-  'Test normalize': { main: [[{ node: 'Scout Agent', type: 'main', index: 0 }]] },
+  'Test normalize': { main: [[{ node: 'Feed switch?', type: 'main', index: 0 }]] },
+  'Feed switch?': { main: [
+    [{ node: 'Toggle drain', type: 'main', index: 0 }],
+    [{ node: 'Scout Agent', type: 'main', index: 0 }]
+  ] },
+  'Toggle drain': { main: [[{ node: 'Switch reply', type: 'main', index: 0 }]] },
+  'Switch reply': { main: [[{ node: 'Send reply', type: 'main', index: 0 }]] },
   'OpenRouter Haiku': { ai_languageModel: [[{ node: 'Scout Agent', type: 'ai_languageModel', index: 0 }]] },
   'Chat memory': { ai_memory: [[{ node: 'Scout Agent', type: 'ai_memory', index: 0 }]] },
   'run_discovery': { ai_tool: [[{ node: 'Scout Agent', type: 'ai_tool', index: 0 }]] },

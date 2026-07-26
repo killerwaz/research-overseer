@@ -31,12 +31,25 @@ select rd.id as raw_doc_id,
        (select count(*) from backlog) as backlog_total
 from raw_docs rd
 where rd.id in (select id from backlog)
+  -- opt-in: does nothing at all unless the user switched it on ("fix feed")
+  and (select value from settings where key = 'drain_enabled') = 'true'
+  -- and never competes with a live run
   and not exists (
     select 1 from runs r
     where r.status = 'running' and r.started_at > now() - interval '15 minutes'
   )
 order by rd.id
-limit 2
+limit 12
+`.trim();
+
+// Backlog exists but the switch is off — ask once, then stay quiet for 6h.
+const FIND_IDLE_BACKLOG = `
+select (select count(*) from (
+          select rd.id from raw_docs rd
+          left join feed_items f on f.raw_doc_id = rd.id
+          group by rd.id having count(f.id) <> 1
+        ) a) as backlog_total,
+       (select value from settings where key = 'drain_enabled') as drain_enabled
 `.trim();
 
 const BUILD_BODY = `
@@ -155,17 +168,32 @@ const workflow = {
       },
       onError: 'continueRegularOutput' },
 
+    { id: 'idlecheck', name: 'Check idle backlog', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [200, 320],
+      parameters: { operation: 'executeQuery', query: FIND_IDLE_BACKLOG, options: {} },
+      credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true },
+
+    { id: 'shouldask', name: 'Should ask?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [400, 320],
+      parameters: { options: {}, conditions: {
+        options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' },
+        combinator: 'and',
+        conditions: [
+          { id: 's1', leftValue: '={{ Number($json.backlog_total) }}', rightValue: 0,
+            operator: { type: 'number', operation: 'gt' } },
+          { id: 's2', leftValue: '={{ String($json.drain_enabled) }}', rightValue: 'true',
+            operator: { type: 'string', operation: 'notEquals' } }
+        ] } } },
+
     // Fires at most once per 6h even though the condition persists across ticks
-    { id: 'noticegate', name: 'Notice due?', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [600, 280],
+    { id: 'noticegate', name: 'Notice due?', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [600, 320],
       parameters: { operation: 'executeQuery',
         query: "insert into notices (kind, last_sent) values ('feed_backlog', now()) on conflict (kind) do update set last_sent = now() where notices.last_sent < now() - interval '6 hours' returning kind",
         options: {} },
       credentials: { postgres: CRED_PG }, executeOnce: true },
 
-    { id: 'sendnotice', name: 'Send notice', type: 'n8n-nodes-base.telegram', typeVersion: 1.2, position: [800, 280],
+    { id: 'sendnotice', name: 'Send notice', type: 'n8n-nodes-base.telegram', typeVersion: 1.2, position: [800, 320],
       parameters: {
         chatId: CHAT_ID,
-        text: "=\u{26A0} {{ $('Find backlog').first().json.backlog_total }} saved pages never got summarized, so they're missing from your feed. Fixing them in the background.",
+        text: "={{ $('Check idle backlog').first().json.backlog_total }} saved pages never got summarized, so they're missing from your feed.\n\nReply \"fix feed\" and I'll work through them. Reply \"stop feed\" any time to stop.",
         additionalFields: { appendAttribution: false, parse_mode: 'HTML' } },
       credentials: { telegramApi: CRED_TG },
       onError: 'continueRegularOutput' }
@@ -173,17 +201,14 @@ const workflow = {
   connections: {
     'Every 5 min': { main: [[
       { node: 'Get candidates', type: 'main', index: 0 },
-      { node: 'Find backlog', type: 'main', index: 0 }
+      { node: 'Find backlog', type: 'main', index: 0 },
+      { node: 'Check idle backlog', type: 'main', index: 0 }
     ]] },
     'Find backlog': { main: [[{ node: 'Has backlog?', type: 'main', index: 0 }]] },
-    'Has backlog?': { main: [
-      [
-        { node: 'Build triage body', type: 'main', index: 0 },
-        { node: 'Notice due?', type: 'main', index: 0 }
-      ],
-      []
-    ] },
+    'Has backlog?': { main: [[{ node: 'Build triage body', type: 'main', index: 0 }], []] },
     'Build triage body': { main: [[{ node: 'Drain triage', type: 'main', index: 0 }]] },
+    'Check idle backlog': { main: [[{ node: 'Should ask?', type: 'main', index: 0 }]] },
+    'Should ask?': { main: [[{ node: 'Notice due?', type: 'main', index: 0 }], []] },
     'Notice due?': { main: [[{ node: 'Send notice', type: 'main', index: 0 }]] },
     'Get candidates': { main: [[{ node: 'Evaluate due', type: 'main', index: 0 }]] },
     'Evaluate due': { main: [[{ node: 'Mark fired', type: 'main', index: 0 }]] },

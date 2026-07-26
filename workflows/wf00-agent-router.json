@@ -172,6 +172,75 @@
       }
     },
     {
+      "id": "iscmd",
+      "name": "Feed switch?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1060,
+        100
+      ],
+      "parameters": {
+        "options": {},
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "k1",
+              "leftValue": "={{ ($json.text || '').trim().toLowerCase().replace(/[.!]+$/, '') }}",
+              "rightValue": "^(fix|stop) feed$",
+              "operator": {
+                "type": "string",
+                "operation": "regex"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "toggle",
+      "name": "Toggle drain",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        1240,
+        -60
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "insert into settings (key, value, updated_at) values ('drain_enabled', $1, now()) on conflict (key) do update set value = excluded.value, updated_at = now() returning value, (select count(*) from (select rd.id from raw_docs rd left join feed_items f on f.raw_doc_id = rd.id group by rd.id having count(f.id) <> 1) a) as backlog_total",
+        "options": {
+          "queryReplacement": "={{ ($json.text || '').trim().toLowerCase().startsWith('fix') ? 'true' : 'false' }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "tzBuhu9KEXlaRRfW",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "switchreply",
+      "name": "Switch reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1420,
+        -60
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const r = $input.first().json;\nconst n = Number(r.backlog_total) || 0;\nconst on = String(r.value) === 'true';\nlet text;\nif (on && n === 0) text = \"Nothing to fix — every saved page already has a summary.\";\nelse if (on) text = \"On it. Working through \" + n + \" page\" + (n === 1 ? '' : 's') +\n  \", about \" + Math.max(1, Math.round(n * 20 / 60)) + \" min while your PC stays on. Say \\\"stop feed\\\" to stop.\";\nelse text = n === 0 ? \"Stopped. Nothing left to fix anyway.\" :\n  \"Stopped. \" + n + \" page\" + (n === 1 ? '' : 's') + \" still unsummarized — say \\\"fix feed\\\" when you want them done.\";\nlet chat_id = __TG_CHAT__;\ntry { chat_id = $('Record update').first().json.chat_id || chat_id; } catch (e) {\n  try { chat_id = $('Test normalize').first().json.chat_id || chat_id; } catch (e2) {}\n}\nreturn [{ json: { chat_id, output: text } }];"
+      }
+    },
+    {
       "id": "agent",
       "name": "Scout Agent",
       "type": "@n8n/n8n-nodes-langchain.agent",
@@ -724,7 +793,7 @@
       "main": [
         [
           {
-            "node": "Scout Agent",
+            "node": "Feed switch?",
             "type": "main",
             "index": 0
           }
@@ -747,7 +816,47 @@
       "main": [
         [
           {
+            "node": "Feed switch?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Feed switch?": {
+      "main": [
+        [
+          {
+            "node": "Toggle drain",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
             "node": "Scout Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Toggle drain": {
+      "main": [
+        [
+          {
+            "node": "Switch reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch reply": {
+      "main": [
+        [
+          {
+            "node": "Send reply",
             "type": "main",
             "index": 0
           }
