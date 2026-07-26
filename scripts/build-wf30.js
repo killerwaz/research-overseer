@@ -4,7 +4,62 @@ const fs = require('fs');
 const path = require('path');
 
 const CRED_PG = { id: 'tzBuhu9KEXlaRRfW', name: 'Postgres account' };
+const CRED_TG = { id: '6RLwMp4ODoesGE4v', name: 'telegram-scout-bot' };
 const WF40_ID = '__WF40_ID__'; // substituted at deploy time
+const WF21_ID = 'HISagmvZYi6O7N5u'; // triage_one
+const CHAT_ID = '__TG_CHAT__';
+
+const { TRIAGE_SYSTEM, TRIAGE_SCHEMA, TRIAGE_MODEL } = require('../shared/triage-config.js');
+
+// Backlog = any scraped doc that does not have exactly one feed_item: either it
+// was never triaged, or it carries stale rows from the mode:'once' fan-out bug.
+// Yields entirely while a run is in flight so live triage never queues behind it.
+const FIND_BACKLOG = `
+with backlog as (
+  select rd.id
+  from raw_docs rd
+  left join feed_items f on f.raw_doc_id = rd.id
+  group by rd.id
+  having count(f.id) <> 1
+)
+select rd.id as raw_doc_id,
+       rd.canonical_url,
+       coalesce(rd.title, '') as title,
+       coalesce(to_char(rd.published_at, 'YYYY-MM-DD"T"HH24:MI:SSOF'), '') as published_at,
+       coalesce(rd.run_id, 0) as run_id,
+       left(rd.markdown, 6000) as markdown,
+       (select count(*) from backlog) as backlog_total
+from raw_docs rd
+where rd.id in (select id from backlog)
+  and not exists (
+    select 1 from runs r
+    where r.status = 'running' and r.started_at > now() - interval '15 minutes'
+  )
+order by rd.id
+limit 2
+`.trim();
+
+const BUILD_BODY = `
+const sys = ${JSON.stringify(TRIAGE_SYSTEM)};
+const schema = ${JSON.stringify(TRIAGE_SCHEMA)};
+return $input.all().map(i => {
+  const d = i.json;
+  const user = 'TITLE: ' + (d.title || '') + '\\n' + 'URL: ' + d.canonical_url +
+    '\\n\\nCONTENT:\\n' + (d.markdown || '');
+  return { json: {
+    raw_doc_id: d.raw_doc_id,
+    canonical_url: d.canonical_url,
+    title: d.title || '',
+    published_at: d.published_at || '',
+    run_id: d.run_id,
+    triage_body: JSON.stringify({
+      model: ${JSON.stringify(TRIAGE_MODEL)}, temperature: 0.2, max_tokens: 4000,
+      response_format: schema,
+      messages: [ { role: 'system', content: sys }, { role: 'user', content: user } ]
+    })
+  } };
+});
+`.trim();
 
 let cronLib = fs.readFileSync(path.join(__dirname, '..', 'shared', 'cron-match.js'), 'utf8');
 cronLib = cronLib.slice(0, cronLib.indexOf('if (typeof module')); // strip exports
@@ -60,10 +115,76 @@ const workflow = {
           ]
         },
         options: { waitForSubWorkflow: false }
-      } }
+      } },
+
+    // ---- backlog drain (independent of scheduling) ----
+    { id: 'findbacklog', name: 'Find backlog', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [200, 200],
+      parameters: { operation: 'executeQuery', query: FIND_BACKLOG, options: {} },
+      credentials: { postgres: CRED_PG }, alwaysOutputData: true },
+
+    { id: 'hasbacklog', name: 'Has backlog?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [400, 200],
+      parameters: { options: {}, conditions: {
+        options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' },
+        combinator: 'and',
+        conditions: [ { id: 'b1', leftValue: '={{ $json.raw_doc_id }}', rightValue: 0,
+          operator: { type: 'number', operation: 'gt' } } ] } } },
+
+    { id: 'buildbody', name: 'Build triage body', type: 'n8n-nodes-base.code', typeVersion: 2, position: [600, 140],
+      parameters: { mode: 'runOnceForAllItems', jsCode: BUILD_BODY } },
+
+    { id: 'draintriage', name: 'Drain triage', type: 'n8n-nodes-base.executeWorkflow', typeVersion: 1.2, position: [800, 140],
+      parameters: {
+        mode: 'each', // one doc per sub-workflow call — see WF-21 guard
+        workflowId: { __rl: true, value: WF21_ID, mode: 'id' },
+        workflowInputs: {
+          mappingMode: 'defineBelow',
+          value: {
+            triage_body: '={{ $json.triage_body }}',
+            raw_doc_id: '={{ $json.raw_doc_id }}',
+            canonical_url: '={{ $json.canonical_url }}',
+            title: '={{ $json.title }}',
+            published_at: '={{ $json.published_at }}',
+            run_id: '={{ $json.run_id }}'
+          },
+          matchingColumns: [],
+          schema: ['triage_body', 'raw_doc_id', 'canonical_url', 'title', 'published_at', 'run_id']
+            .map(f => ({ id: f, displayName: f, required: false, defaultMatch: false,
+              display: true, canBeUsedToMatch: true, type: 'string' }))
+        },
+        options: { waitForSubWorkflow: true }
+      },
+      onError: 'continueRegularOutput' },
+
+    // Fires at most once per 6h even though the condition persists across ticks
+    { id: 'noticegate', name: 'Notice due?', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [600, 280],
+      parameters: { operation: 'executeQuery',
+        query: "insert into notices (kind, last_sent) values ('feed_backlog', now()) on conflict (kind) do update set last_sent = now() where notices.last_sent < now() - interval '6 hours' returning kind",
+        options: {} },
+      credentials: { postgres: CRED_PG }, executeOnce: true },
+
+    { id: 'sendnotice', name: 'Send notice', type: 'n8n-nodes-base.telegram', typeVersion: 1.2, position: [800, 280],
+      parameters: {
+        chatId: CHAT_ID,
+        text: "=\u{26A0} {{ $('Find backlog').first().json.backlog_total }} saved pages never got summarized, so they're missing from your feed. Fixing them in the background.",
+        additionalFields: { appendAttribution: false, parse_mode: 'HTML' } },
+      credentials: { telegramApi: CRED_TG },
+      onError: 'continueRegularOutput' }
   ],
   connections: {
-    'Every 5 min': { main: [[{ node: 'Get candidates', type: 'main', index: 0 }]] },
+    'Every 5 min': { main: [[
+      { node: 'Get candidates', type: 'main', index: 0 },
+      { node: 'Find backlog', type: 'main', index: 0 }
+    ]] },
+    'Find backlog': { main: [[{ node: 'Has backlog?', type: 'main', index: 0 }]] },
+    'Has backlog?': { main: [
+      [
+        { node: 'Build triage body', type: 'main', index: 0 },
+        { node: 'Notice due?', type: 'main', index: 0 }
+      ],
+      []
+    ] },
+    'Build triage body': { main: [[{ node: 'Drain triage', type: 'main', index: 0 }]] },
+    'Notice due?': { main: [[{ node: 'Send notice', type: 'main', index: 0 }]] },
     'Get candidates': { main: [[{ node: 'Evaluate due', type: 'main', index: 0 }]] },
     'Evaluate due': { main: [[{ node: 'Mark fired', type: 'main', index: 0 }]] },
     'Mark fired': { main: [[{ node: 'Fire full sweep', type: 'main', index: 0 }]] }

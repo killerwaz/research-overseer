@@ -129,25 +129,7 @@ base.messages.push({ role: 'user', content: 'Your previous output was not valid 
 return { json: { retry_body: JSON.stringify(base) } };
 `.trim();
 
-const TRIAGE_SYSTEM = 'You are a research triage assistant. You read one scraped article and return ONLY a JSON object with exactly these fields: summary (2-3 sentence summary of the article substance), angle (one sentence - the content angle or hook that makes this usable for research/writing, or null), relevance (integer 1-5, 5 = directly useful now, 1 = noise), tags (array of 1-5 short lowercase topic tags). Return nothing except the JSON object.';
-
-const TRIAGE_SCHEMA = {
-  type: 'json_schema',
-  json_schema: {
-    name: 'triage', strict: true,
-    schema: {
-      type: 'object',
-      properties: {
-        summary: { type: 'string' },
-        angle: { type: ['string', 'null'] },
-        relevance: { type: 'integer', minimum: 1, maximum: 5 },
-        tags: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 5 }
-      },
-      required: ['summary', 'angle', 'relevance', 'tags'],
-      additionalProperties: false
-    }
-  }
-};
+const { TRIAGE_SYSTEM, TRIAGE_SCHEMA } = require('../shared/triage-config.js');
 
 // Triage request bodies are prebuilt in Code nodes (Prep doc / Build retry) because
 // n8n expressions reject multi-statement code. Substitute the constants into PREP_DOC.
@@ -343,10 +325,38 @@ const nodes = [
     "={{ $json.run_id }},{{ $json.urls_new }},{{ $json.error }}",
     { executeOnce: true }),
 
-  { id: 'tgsummary', name: 'Telegram summary', type: 'n8n-nodes-base.telegram', typeVersion: 1.2, position: [4200, 0],
+  // Plain-language summary. No run numbers, no "items", no scope codes — those
+  // are for run_status when something actually needs looking at.
+  codeNode('Compose summary', 'compose', [4180, 0], 'runOnceForAllItems', `
+const r = $('Finalize run').first().json;
+let brief = '';
+try { brief = $('Collect stats').first().json.error_brief || ''; } catch (e) {}
+const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const made = Number(r.items_created) || 0;
+const failed = Number((brief.match(/^(\\d+) failed/) || [])[1] || 0);
+const plural = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
+
+let text;
+if (made === 0 && failed === 0) {
+  text = '\u{1F52D} Nothing new — everything found was already in your feed.';
+} else if (made === 0) {
+  text = '\u{1F52D} Nothing added. ' + plural(failed, 'page') + " couldn't be read.";
+} else {
+  text = '\u{1F52D} Found ' + plural(made, 'new page') + ', all summarized.';
+  if (failed) text += ' ' + plural(failed, 'other') + " couldn't be read.";
+}
+if (r.top_title) text += '\\nTop: ' + esc(r.top_title);
+if (brief) {
+  const hosts = brief.replace(/^\\d+ failed: /, '');
+  text += '\\n\u{26A0} ' + esc(hosts);
+}
+return [{ json: { text } }];
+`.trim()),
+
+  { id: 'tgsummary', name: 'Telegram summary', type: 'n8n-nodes-base.telegram', typeVersion: 1.2, position: [4380, 0],
     parameters: {
       chatId: '__TG_CHAT__',
-      text: "=\u{1F52D} Run #{{ $json.run_id }} ({{ $json.scope }}) {{ $json.status }}: {{ $json.urls_new }} new, {{ $json.items_created }} items{{ $json.top_title ? '\\nTop: ' + String($json.top_title).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') : '' }}{{ $('Collect stats').first().json.error_brief ? '\\n⚠️ ' + String($('Collect stats').first().json.error_brief).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') : '' }}",
+      text: '={{ $json.text }}',
       additionalFields: { appendAttribution: false, parse_mode: 'HTML' } },
     credentials: { telegramApi: { id: '6RLwMp4ODoesGE4v', name: 'telegram-scout-bot' } },
     onError: 'continueRegularOutput' },
@@ -386,7 +396,8 @@ const connections = {
   'Log failure': { main: [[{ node: 'Merge for stats', type: 'main', index: 1 }]] },
   'Merge for stats': { main: [[{ node: 'Collect stats', type: 'main', index: 0 }]] },
   'Collect stats': { main: [[{ node: 'Finalize run', type: 'main', index: 0 }]] },
-  'Finalize run': { main: [[{ node: 'Telegram summary', type: 'main', index: 0 }]] },
+  'Finalize run': { main: [[{ node: 'Compose summary', type: 'main', index: 0 }]] },
+  'Compose summary': { main: [[{ node: 'Telegram summary', type: 'main', index: 0 }]] },
   'Telegram summary': { main: [[{ node: 'Return summary', type: 'main', index: 0 }]] }
 };
 
@@ -451,8 +462,11 @@ return $input.all();
     { id: 'mergetriage', name: 'Merge triaged', type: 'n8n-nodes-base.merge', typeVersion: 3, position: [1200, 0],
       parameters: { mode: 'append', numberInputs: 2 } },
 
+    // Atomic replace: clears any prior rows for this doc, then inserts the fresh
+    // one. No-op on the normal path (new docs have none) and makes re-triage
+    // idempotent, so the WF-30 drain never needs a separate delete step.
     pgNode('Insert feed', 'insertfeed', [1400, 0],
-      "insert into feed_items (raw_doc_id, canonical_url, title, summary, angle, relevance, tags, run_id, published_at) values ($1::bigint, $2, nullif($3,''), $4, nullif($5,''), nullif($6::text,'')::int, $7::text[], $8::bigint, nullif($9,'')::timestamptz) returning id as feed_item_id",
+      "with del as (delete from feed_items where raw_doc_id = $1::bigint) insert into feed_items (raw_doc_id, canonical_url, title, summary, angle, relevance, tags, run_id, published_at) values ($1::bigint, $2, nullif($3,''), $4, nullif($5,''), nullif($6::text,'')::int, $7::text[], $8::bigint, nullif($9,'')::timestamptz) returning id as feed_item_id",
       "={{ $json.raw_doc_id }},{{ $json.canonical_url }},{{ $json.title }},{{ $json.summary }},{{ $json.angle }},{{ $json.relevance }},{{ $json.tags_pg }},{{ $json.run_id }},{{ $json.published_at }}")
   ],
   connections: {
