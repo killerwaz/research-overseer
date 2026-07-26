@@ -5,6 +5,7 @@ const path = require('path');
 
 const CRED_PG = { id: 'tzBuhu9KEXlaRRfW', name: 'Postgres account' };
 const CRED_TG = { id: '6RLwMp4ODoesGE4v', name: 'telegram-scout-bot' };
+const CRED_LM = { id: 'JsTIc0R9trd31PsV', name: 'lmstudio-bearer' };
 const WF40_ID = '__WF40_ID__'; // substituted at deploy time
 const WF21_ID = 'HISagmvZYi6O7N5u'; // triage_one
 const CHAT_ID = '__TG_CHAT__';
@@ -178,6 +179,29 @@ const workflow = {
       },
       onError: 'continueRegularOutput' },
 
+    // ---- LM Studio watch: clears the notice mute when the model comes back ----
+    { id: 'lmping', name: 'Ping LM Studio', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [200, 460],
+      parameters: { method: 'GET', url: 'http://host.docker.internal:1234/v1/models',
+        authentication: 'genericCredentialType', genericAuthType: 'httpBearerAuth',
+        options: { timeout: 4000 } },
+      credentials: { httpBearerAuth: CRED_LM },
+      retryOnFail: false, onError: 'continueRegularOutput', alwaysOutputData: true },
+
+    { id: 'lmstate', name: 'LM state', type: 'n8n-nodes-base.code', typeVersion: 2, position: [400, 460],
+      parameters: { mode: 'runOnceForAllItems', jsCode: `
+const j = $input.first().json || {};
+// a loaded model list means it is genuinely servable, not merely listening
+const up = !j.error && Array.isArray(j.data) && j.data.length > 0;
+return [{ json: { lm_state: up ? 'up' : 'down' } }];
+`.trim() } },
+
+    // Single statement so the compare-and-set cannot race the next tick
+    { id: 'lmrecord', name: 'Record LM state', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [600, 460],
+      parameters: { operation: 'executeQuery',
+        query: "with prev as (select value from settings where key = 'lm_state'), upd as (insert into settings (key, value, updated_at) values ('lm_state', $1, now()) on conflict (key) do update set value = excluded.value, updated_at = now()), unmute as (update notices set last_sent = now() - interval '7 hours' where kind = 'feed_backlog' and $1 = 'up' and coalesce((select value from prev), 'up') = 'down') select coalesce((select value from prev), 'unknown') as was, $1 as now_state",
+        options: { queryReplacement: '={{ $json.lm_state }}' } },
+      credentials: { postgres: CRED_PG }, executeOnce: true },
+
     { id: 'idlecheck', name: 'Check idle backlog', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [200, 320],
       parameters: { operation: 'executeQuery', query: FIND_IDLE_BACKLOG, options: {} },
       credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true },
@@ -214,8 +238,11 @@ const workflow = {
     'Every 5 min': { main: [[
       { node: 'Get candidates', type: 'main', index: 0 },
       { node: 'Find backlog', type: 'main', index: 0 },
-      { node: 'Check idle backlog', type: 'main', index: 0 }
+      { node: 'Check idle backlog', type: 'main', index: 0 },
+      { node: 'Ping LM Studio', type: 'main', index: 0 }
     ]] },
+    'Ping LM Studio': { main: [[{ node: 'LM state', type: 'main', index: 0 }]] },
+    'LM state': { main: [[{ node: 'Record LM state', type: 'main', index: 0 }]] },
     'Find backlog': { main: [[{ node: 'Has backlog?', type: 'main', index: 0 }]] },
     'Has backlog?': { main: [[{ node: 'Build triage body', type: 'main', index: 0 }], []] },
     'Build triage body': { main: [[{ node: 'Drain triage', type: 'main', index: 0 }]] },

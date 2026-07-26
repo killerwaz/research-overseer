@@ -288,6 +288,72 @@
       "onError": "continueRegularOutput"
     },
     {
+      "id": "lmping",
+      "name": "Ping LM Studio",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        200,
+        460
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://host.docker.internal:1234/v1/models",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "options": {
+          "timeout": 4000
+        }
+      },
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "JsTIc0R9trd31PsV",
+          "name": "lmstudio-bearer"
+        }
+      },
+      "retryOnFail": false,
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "id": "lmstate",
+      "name": "LM state",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        460
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const j = $input.first().json || {};\n// a loaded model list means it is genuinely servable, not merely listening\nconst up = !j.error && Array.isArray(j.data) && j.data.length > 0;\nreturn [{ json: { lm_state: up ? 'up' : 'down' } }];"
+      }
+    },
+    {
+      "id": "lmrecord",
+      "name": "Record LM state",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        600,
+        460
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "with prev as (select value from settings where key = 'lm_state'), upd as (insert into settings (key, value, updated_at) values ('lm_state', $1, now()) on conflict (key) do update set value = excluded.value, updated_at = now()), unmute as (update notices set last_sent = now() - interval '7 hours' where kind = 'feed_backlog' and $1 = 'up' and coalesce((select value from prev), 'up') = 'down') select coalesce((select value from prev), 'unknown') as was, $1 as now_state",
+        "options": {
+          "queryReplacement": "={{ $json.lm_state }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "tzBuhu9KEXlaRRfW",
+          "name": "Postgres account"
+        }
+      },
+      "executeOnce": true
+    },
+    {
       "id": "idlecheck",
       "name": "Check idle backlog",
       "type": "n8n-nodes-base.postgres",
@@ -424,6 +490,33 @@
           },
           {
             "node": "Check idle backlog",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Ping LM Studio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ping LM Studio": {
+      "main": [
+        [
+          {
+            "node": "LM state",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LM state": {
+      "main": [
+        [
+          {
+            "node": "Record LM state",
             "type": "main",
             "index": 0
           }
