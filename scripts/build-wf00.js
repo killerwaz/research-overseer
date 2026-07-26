@@ -124,7 +124,9 @@ return [{ json: { chat_id: Number(b.chat_id) || ${CHAT_ID}, text: String(b.text 
 
   { id: 'toggle', name: 'Toggle drain', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [1240, -60],
     parameters: { operation: 'executeQuery',
-      query: "insert into settings (key, value, updated_at) values ('drain_enabled', $1, now()) on conflict (key) do update set value = excluded.value, updated_at = now() returning value, (select count(*) from (select rd.id from raw_docs rd left join feed_items f on f.raw_doc_id = rd.id group by rd.id having count(f.id) <> 1) a) as backlog_total",
+      // Switching OFF also mutes the backlog notice for a week — an explicit
+      // "stop feed" means stop asking, not ask again in six hours.
+      query: "with t as (insert into settings (key, value, updated_at) values ('drain_enabled', $1, now()) on conflict (key) do update set value = excluded.value, updated_at = now() returning value), m as (insert into notices (kind, last_sent) select 'feed_backlog', now() + interval '7 days' where $1 = 'false' on conflict (kind) do update set last_sent = now() + interval '7 days') select (select value from t) as value, (select count(*) from (select rd.id from raw_docs rd left join feed_items f on f.raw_doc_id = rd.id group by rd.id having count(f.id) <> 1) a) as backlog_total",
       options: { queryReplacement: "={{ ($json.text || '').trim().toLowerCase().startsWith('fix') ? 'true' : 'false' }}" } },
     credentials: { postgres: CRED_PG } },
 
@@ -137,8 +139,7 @@ let text;
 if (on && n === 0) text = "Nothing to fix — every saved page already has a summary.";
 else if (on) text = "On it. Working through " + n + " page" + (n === 1 ? '' : 's') +
   ", about " + Math.max(1, Math.round(n * 20 / 60)) + " min while your PC stays on. Say \\"stop feed\\" to stop.";
-else text = n === 0 ? "Stopped. Nothing left to fix anyway." :
-  "Stopped. " + n + " page" + (n === 1 ? '' : 's') + " still unsummarized — say \\"fix feed\\" when you want them done.";
+else text = "Stopped. I won't bring it up again — say \\"fix feed\\" whenever you want.";
 let chat_id = ${CHAT_ID};
 try { chat_id = $('Record update').first().json.chat_id || chat_id; } catch (e) {
   try { chat_id = $('Test normalize').first().json.chat_id || chat_id; } catch (e2) {}
