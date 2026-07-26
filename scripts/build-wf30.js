@@ -57,7 +57,10 @@ const sys = ${JSON.stringify(TRIAGE_SYSTEM)};
 const schema = ${JSON.stringify(TRIAGE_SCHEMA)};
 return $input.all().map(i => {
   const d = i.json;
-  const user = 'TITLE: ' + (d.title || '') + '\\n' + 'URL: ' + d.canonical_url +
+  const dhaka = new Date(Date.now() + 6 * 3600 * 1000).toISOString().slice(0, 10);
+  const pub = d.published_at ? String(d.published_at).slice(0, 10) : 'unknown';
+  const user = 'TODAY: ' + dhaka + '\\n' + 'PUBLISHED: ' + pub + '\\n' +
+    'TITLE: ' + (d.title || '') + '\\n' + 'URL: ' + d.canonical_url +
     '\\n\\nCONTENT:\\n' + (d.markdown || '');
   return { json: {
     raw_doc_id: d.raw_doc_id,
