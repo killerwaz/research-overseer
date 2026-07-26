@@ -183,10 +183,12 @@ return [{ json: { chat_id, output: text } }];
     "CRITICAL: if the question implies ANY time window — today, tonight, last night, this morning, yesterday, this week, recently, just now — you MUST pass `since` as an ISO timestamp you compute from the current time given above. Omitting it returns the whole archive, and you will report old items as if they were new. " +
     "Only omit `since` for questions with no time element at all ('show me the best stuff', 'anything on agents'). " +
     "Items are scored on two axes: specificity (1-5, how concrete and verifiable the claims are — vendor SEO content scores low) and angle_strength (1-5, how non-obvious the publishable hook is). score = the two added, 2-10. Use min_score 7+ for 'the good stuff', 8+ for 'only the best'. " +
-    "Params: since (ISO timestamp), min_score (2-10), tag, limit (default 20), min_relevance (legacy, avoid).",
+    "Quality and recency are separate knobs and combine freely: min_score filters how good, max_age_days filters how fresh. 'anything good this week' = min_score 7 + max_age_days 7. Results always come back best-first. " +
+    "Params: max_age_days (days since publication), min_score (2-10), since (ISO timestamp, for an exact cutoff), tag, limit (default 20), min_relevance (legacy, leave empty).",
     WF.query_feed,
-    { since: { desc: 'ISO timestamp lower bound, empty for none' },
+    { max_age_days: { desc: 'only items published within this many days, empty for any age' },
       min_score: { desc: 'minimum combined score 2-10, empty for none' },
+      since: { desc: 'ISO timestamp lower bound, empty for none' },
       tag: { desc: 'single lowercase tag to filter by, empty for none' },
       limit: { desc: 'max items to return, empty for default 20' },
       min_relevance: { desc: 'legacy 1-5 filter, leave empty' } }, [1720, 320]),

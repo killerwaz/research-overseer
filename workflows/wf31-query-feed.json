@@ -9,7 +9,8 @@
             { "name": "min_relevance", "type": "string" },
             { "name": "tag", "type": "string" },
             { "name": "limit", "type": "string" },
-            { "name": "min_score", "type": "string" }
+            { "name": "min_score", "type": "string" },
+            { "name": "max_age_days", "type": "string" }
           ]
         }
       },
@@ -22,9 +23,9 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "select f.id, f.canonical_url, f.title, f.summary, f.angle, f.relevance, f.specificity, f.angle_strength, f.score, f.tags, f.created_at, f.published_at, case when f.published_at is null then null else greatest(0, extract(day from now() - f.published_at)::int) end as age_days from feed_items f where (nullif($1,'') is null or coalesce(f.published_at, f.created_at) >= nullif($1,'')::timestamptz) and (nullif($2,'') is null or f.relevance >= nullif($2,'')::int) and (nullif($3,'') is null or lower(nullif($3,'')) = any(f.tags)) and (nullif($5,'') is null or f.score >= nullif($5,'')::int) order by (case when nullif($1,'') is null then f.score end) desc nulls last, (case when nullif($1,'') is null then f.relevance end) desc nulls last, coalesce(f.published_at, f.created_at) desc limit coalesce(nullif($4,'')::int, 20)",
+        "query": "select f.id, f.canonical_url, f.title, f.summary, f.angle, f.relevance, f.specificity, f.angle_strength, f.score, f.tags, f.created_at, f.published_at, case when f.published_at is null then null else greatest(0, extract(day from now() - f.published_at)::int) end as age_days from feed_items f where (nullif($1,'') is null or coalesce(f.published_at, f.created_at) >= nullif($1,'')::timestamptz) and (nullif($2,'') is null or f.relevance >= nullif($2,'')::int) and (nullif($3,'') is null or lower(nullif($3,'')) = any(f.tags)) and (nullif($5,'') is null or f.score >= nullif($5,'')::int) and (nullif($6,'') is null or coalesce(f.published_at, f.created_at) >= now() - (nullif($6,'')::int * interval '1 day')) order by f.score desc nulls last, coalesce(f.published_at, f.created_at) desc limit coalesce(nullif($4,'')::int, 20)",
         "options": {
-          "queryReplacement": "={{ $json.since || '' }},{{ $json.min_relevance || '' }},{{ $json.tag || '' }},{{ $json.limit || '' }},{{ $json.min_score || '' }}"
+          "queryReplacement": "={{ $json.since || '' }},{{ $json.min_relevance || '' }},{{ $json.tag || '' }},{{ $json.limit || '' }},{{ $json.min_score || '' }},{{ $json.max_age_days || '' }}"
         }
       },
       "id": "select",

@@ -59,14 +59,18 @@
             "since": "={{ $json.body.since || '' }}",
             "min_relevance": "={{ $json.body.min_relevance || '' }}",
             "tag": "={{ $json.body.tag || '' }}",
-            "limit": "={{ $json.body.limit || '' }}"
+            "limit": "={{ $json.body.limit || '' }}",
+            "min_score": "={{ $json.body.min_score || '' }}",
+            "max_age_days": "={{ $json.body.max_age_days || '' }}"
           },
           "matchingColumns": [],
           "schema": [
             { "id": "since", "displayName": "since", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" },
             { "id": "min_relevance", "displayName": "min_relevance", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" },
             { "id": "tag", "displayName": "tag", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" },
-            { "id": "limit", "displayName": "limit", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" }
+            { "id": "limit", "displayName": "limit", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" },
+            { "id": "min_score", "displayName": "min_score", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" },
+            { "id": "max_age_days", "displayName": "max_age_days", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" }
           ]
         },
         "options": { "waitForSubWorkflow": true }

@@ -194,7 +194,7 @@
       ],
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const sys = \"You are a research triage assistant for a writer covering __BEAT__. Score every article against that beat, not general interest.\\n\\nYou read one scraped article and return ONLY a JSON object with exactly these\\nfields, in this order:\\n\\nsummary: 2-3 sentences on what the article actually says. Substance only — no\\nmeta-commentary about the article itself.\\n\\nangle: one sentence naming the specific, publishable hook this gives the writer\\nfor that audience. Use null if there is no defensible angle beyond restating\\nthe article.\\n\\nrelevance (integer 1-5): overall usefulness to that beat.\\n\\nspecificity (integer 1-5): how well anchored the claims are.\\n  5 = concrete data points, named companies and people, quantified outcomes,\\n      verifiable claims.\\n  3 = a mix — some claims backed, some asserted.\\n  1 = entirely abstract commentary, opinion, or speculation with nothing to\\n      check. Vendor content marketing and SEO listicles that recycle public\\n      figures without sourcing belong at 1-2.\\n\\nangle_strength (integer 1-5): how good the angle you just wrote actually is.\\n  5 = supports a contrarian, non-obvious, or counterintuitive take that most\\n      commentators would miss.\\n  3 = a viable angle, but the obvious one most people would write.\\n  1 = no defensible angle. If angle is null, angle_strength is 1.\\n\\ntags: array of 1-5 short lowercase kebab-case topic tags (e.g. \\\"ai-agents\\\",\\n\\\"frontier-markets\\\", \\\"inference-cost\\\"). No spaces, no punctuation.\\n\\nScoring rules:\\n- specificity and angle_strength are independent. Judge each on its own\\n  evidence and do not let one pull the other. An article often deserves a high\\n  score on one and a low score on the other; that spread is the point.\\n- Most articles are not 5s. A typical useful article lands at 2-4. Reserve 5\\n  for cases that clearly meet its anchor.\\n- If the content is unusable — a paywall stub, error page, login wall, or a\\n  navigation/index/listing page with no article body — set angle to null, set\\n  all scores to 1, and say so in the summary.\\n\\nReturn nothing except the JSON object.\";\nconst schema = {\"type\":\"json_schema\",\"json_schema\":{\"name\":\"triage\",\"strict\":true,\"schema\":{\"type\":\"object\",\"properties\":{\"summary\":{\"type\":\"string\"},\"angle\":{\"type\":[\"string\",\"null\"]},\"relevance\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":5},\"specificity\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":5},\"angle_strength\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":5},\"tags\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"minItems\":1,\"maxItems\":5}},\"required\":[\"summary\",\"angle\",\"relevance\",\"specificity\",\"angle_strength\",\"tags\"],\"additionalProperties\":false}}};\nreturn $input.all().map(i => {\n  const d = i.json;\n  const dhaka = new Date(Date.now() + 6 * 3600 * 1000).toISOString().slice(0, 10);\n  const pub = d.published_at ? String(d.published_at).slice(0, 10) : 'unknown';\n  const user = 'TODAY: ' + dhaka + '\\n' + 'PUBLISHED: ' + pub + '\\n' +\n    'TITLE: ' + (d.title || '') + '\\n' + 'URL: ' + d.canonical_url +\n    '\\n\\nCONTENT:\\n' + (d.markdown || '');\n  return { json: {\n    raw_doc_id: d.raw_doc_id,\n    canonical_url: d.canonical_url,\n    title: d.title || '',\n    published_at: d.published_at || '',\n    run_id: d.run_id,\n    triage_body: JSON.stringify({\n      model: \"qwen/qwen3.5-9b\", temperature: 0.2, max_tokens: 4000,\n      response_format: schema,\n      messages: [ { role: 'system', content: sys }, { role: 'user', content: user } ]\n    })\n  } };\n});"
+        "jsCode": "const sys = \"You are a research triage assistant for a writer covering __BEAT__. Score every article against that beat, not general interest.\\n\\nYou read one scraped article and return ONLY a JSON object with exactly these\\nfields, in this order:\\n\\nsummary: 2-3 sentences on what the article actually says. Substance only — no\\nmeta-commentary about the article itself.\\n\\nangle: one sentence naming the specific, publishable hook this gives the writer\\nfor that audience. Use null if there is no defensible angle beyond restating\\nthe article.\\n\\nrelevance (integer 1-5): overall usefulness to that beat.\\n\\nspecificity (integer 1-5): how well anchored the claims are.\\n  5 = concrete data points, named companies and people, quantified outcomes,\\n      verifiable claims.\\n  3 = a mix — some claims backed, some asserted.\\n  1 = entirely abstract commentary, opinion, or speculation with nothing to\\n      check. Vendor content marketing and SEO listicles that recycle public\\n      figures without sourcing belong at 1-2.\\n\\nangle_strength (integer 1-5): how good the angle you just wrote actually is.\\n  5 = supports a contrarian, non-obvious, or counterintuitive take that most\\n      commentators would miss.\\n  3 = a viable angle, but the obvious one most people would write.\\n  1 = no defensible angle. If angle is null, angle_strength is 1.\\n\\ntags: array of 1-5 short lowercase kebab-case topic tags (e.g. \\\"ai-agents\\\",\\n\\\"frontier-markets\\\", \\\"inference-cost\\\"). No spaces, no punctuation.\\n\\nScoring rules:\\n- specificity and angle_strength are independent. Judge each on its own\\n  evidence and do not let one pull the other. An article often deserves a high\\n  score on one and a low score on the other; that spread is the point.\\n- Most articles are not 5s. A typical useful article lands at 2-4. Reserve 5\\n  for cases that clearly meet its anchor.\\n- If the content is unusable — a paywall stub, error page, login wall, or a\\n  navigation/index/listing page with no article body — set angle to null, set\\n  all scores to 1, and say so in the summary.\\n\\nReturn nothing except the JSON object.\";\nconst schema = {\"type\":\"json_schema\",\"json_schema\":{\"name\":\"triage\",\"strict\":true,\"schema\":{\"type\":\"object\",\"properties\":{\"summary\":{\"type\":\"string\"},\"angle\":{\"type\":[\"string\",\"null\"]},\"relevance\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":5},\"specificity\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":5},\"angle_strength\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":5},\"tags\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"minItems\":1,\"maxItems\":5}},\"required\":[\"summary\",\"angle\",\"relevance\",\"specificity\",\"angle_strength\",\"tags\"],\"additionalProperties\":false}}};\nreturn $input.all().map(i => {\n  const d = i.json;\n  const dhaka = new Date(Date.now() + 6 * 3600 * 1000).toISOString().slice(0, 10);\n  const pub = d.published_at ? String(d.published_at).slice(0, 10) : 'unknown';\n  const user = 'TODAY: ' + dhaka + '\\n' + 'PUBLISHED: ' + pub + '\\n' +\n    'TITLE: ' + (d.title || '') + '\\n' + 'URL: ' + d.canonical_url +\n    '\\n\\nCONTENT:\\n' + (d.markdown || '');\n  return { json: {\n    raw_doc_id: d.raw_doc_id,\n    canonical_url: d.canonical_url,\n    title: d.title || '',\n    published_at: d.published_at || '',\n    run_id: d.run_id,\n    triage_body: JSON.stringify({\n      model: \"qwen/qwen3.5-9b\", temperature: 0.2, max_tokens: 6000,\n      response_format: schema,\n      messages: [ { role: 'system', content: sys }, { role: 'user', content: user } ]\n    })\n  } };\n});"
       }
     },
     {
@@ -298,7 +298,7 @@
       ],
       "parameters": {
         "operation": "executeQuery",
-        "query": "select (select count(*) from (\n          select rd.id from raw_docs rd\n          left join feed_items f on f.raw_doc_id = rd.id\n          group by rd.id having count(f.id) <> 1\n        ) a) as backlog_total,\n       (select value from settings where key = 'drain_enabled') as drain_enabled",
+        "query": "select (select count(*) from (\n          select rd.id from raw_docs rd\n          left join feed_items f on f.raw_doc_id = rd.id\n          group by rd.id having count(f.id) <> 1\n        ) a) as backlog_total,\n       (select value from settings where key = 'drain_enabled') as drain_enabled,\n       coalesce(\n         (select last_sent < now() - interval '6 hours' from notices where kind = 'feed_backlog'),\n         true\n       ) as notice_due",
         "options": {}
       },
       "credentials": {
@@ -346,6 +346,15 @@
                 "type": "string",
                 "operation": "notEquals"
               }
+            },
+            {
+              "id": "s3",
+              "leftValue": "={{ String($json.notice_due) }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
             }
           ]
         }
@@ -353,7 +362,7 @@
     },
     {
       "id": "noticegate",
-      "name": "Notice due?",
+      "name": "Stamp notice",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.4,
       "position": [
@@ -362,7 +371,7 @@
       ],
       "parameters": {
         "operation": "executeQuery",
-        "query": "insert into notices (kind, last_sent) values ('feed_backlog', now()) on conflict (kind) do update set last_sent = now() where notices.last_sent < now() - interval '6 hours' returning kind",
+        "query": "insert into notices (kind, last_sent) values ('feed_backlog', now()) on conflict (kind) do update set last_sent = now()",
         "options": {}
       },
       "credentials": {
@@ -470,7 +479,7 @@
       "main": [
         [
           {
-            "node": "Notice due?",
+            "node": "Stamp notice",
             "type": "main",
             "index": 0
           }
@@ -478,7 +487,7 @@
         []
       ]
     },
-    "Notice due?": {
+    "Stamp notice": {
       "main": [
         [
           {
