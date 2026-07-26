@@ -116,7 +116,7 @@ const pub = orig.published_at ? String(orig.published_at).slice(0, 10) : 'unknow
 const user = 'TODAY: ' + dhaka + '\\n' + 'PUBLISHED: ' + pub + '\\n' +
   'TITLE: ' + title + '\\n' + 'URL: ' + orig.canonical_url +
   '\\n\\nCONTENT:\\n' + markdown.slice(0, 6000);
-const triage_body = JSON.stringify({ model: 'qwen/qwen3.5-9b', temperature: 0.2, max_tokens: 4000,
+const triage_body = JSON.stringify({ model: 'qwen/qwen3.5-9b', temperature: 0.2, max_tokens: 6000,
   response_format: __TRIAGE_SCHEMA__,
   messages: [ { role: 'system', content: sys }, { role: 'user', content: user } ] });
 return { json: { canonical_url: orig.canonical_url, source: orig.source || '', title,
@@ -146,7 +146,15 @@ const PREP_DOC_FINAL = PREP_DOC
 const VALIDATE_COMMON = `
 function parseContent(j) {
   try {
-    let c = j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
+    const msg = (j.choices && j.choices[0] && j.choices[0].message) || {};
+    let c = msg.content;
+    // Qwen puts chain-of-thought in reasoning_content; when it thinks past the
+    // token budget, content comes back empty and the JSON is stranded in there.
+    // Recover the last complete object rather than burning a retry.
+    if (!c && msg.reasoning_content) {
+      const m = String(msg.reasoning_content).match(/\\{[\\s\\S]*\\}/);
+      if (m) c = m[0];
+    }
     if (!c) return null;
     c = c.trim().replace(/^\\\`\\\`\\\`(json)?/i, '').replace(/\\\`\\\`\\\`$/, '').trim();
     const o = JSON.parse(c);

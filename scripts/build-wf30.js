@@ -43,13 +43,20 @@ limit 12
 `.trim();
 
 // Backlog exists but the switch is off — ask once, then stay quiet for 6h.
+// The debounce is evaluated HERE, as a boolean, not by relying on a gating
+// query returning zero rows: the n8n Postgres node emits {success:true} for a
+// no-row result, which reads as one item downstream and fires the send anyway.
 const FIND_IDLE_BACKLOG = `
 select (select count(*) from (
           select rd.id from raw_docs rd
           left join feed_items f on f.raw_doc_id = rd.id
           group by rd.id having count(f.id) <> 1
         ) a) as backlog_total,
-       (select value from settings where key = 'drain_enabled') as drain_enabled
+       (select value from settings where key = 'drain_enabled') as drain_enabled,
+       coalesce(
+         (select last_sent < now() - interval '6 hours' from notices where kind = 'feed_backlog'),
+         true
+       ) as notice_due
 `.trim();
 
 const BUILD_BODY = `
@@ -69,7 +76,7 @@ return $input.all().map(i => {
     published_at: d.published_at || '',
     run_id: d.run_id,
     triage_body: JSON.stringify({
-      model: ${JSON.stringify(TRIAGE_MODEL)}, temperature: 0.2, max_tokens: 4000,
+      model: ${JSON.stringify(TRIAGE_MODEL)}, temperature: 0.2, max_tokens: 6000,
       response_format: schema,
       messages: [ { role: 'system', content: sys }, { role: 'user', content: user } ]
     })
@@ -183,13 +190,15 @@ const workflow = {
           { id: 's1', leftValue: '={{ Number($json.backlog_total) }}', rightValue: 0,
             operator: { type: 'number', operation: 'gt' } },
           { id: 's2', leftValue: '={{ String($json.drain_enabled) }}', rightValue: 'true',
-            operator: { type: 'string', operation: 'notEquals' } }
+            operator: { type: 'string', operation: 'notEquals' } },
+          { id: 's3', leftValue: '={{ String($json.notice_due) }}', rightValue: 'true',
+            operator: { type: 'string', operation: 'equals' } }
         ] } } },
 
-    // Fires at most once per 6h even though the condition persists across ticks
-    { id: 'noticegate', name: 'Notice due?', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [600, 320],
+    // Gating already happened in Should ask? — this only stamps the clock
+    { id: 'noticegate', name: 'Stamp notice', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [600, 320],
       parameters: { operation: 'executeQuery',
-        query: "insert into notices (kind, last_sent) values ('feed_backlog', now()) on conflict (kind) do update set last_sent = now() where notices.last_sent < now() - interval '6 hours' returning kind",
+        query: "insert into notices (kind, last_sent) values ('feed_backlog', now()) on conflict (kind) do update set last_sent = now()",
         options: {} },
       credentials: { postgres: CRED_PG }, executeOnce: true },
 
@@ -211,8 +220,8 @@ const workflow = {
     'Has backlog?': { main: [[{ node: 'Build triage body', type: 'main', index: 0 }], []] },
     'Build triage body': { main: [[{ node: 'Drain triage', type: 'main', index: 0 }]] },
     'Check idle backlog': { main: [[{ node: 'Should ask?', type: 'main', index: 0 }]] },
-    'Should ask?': { main: [[{ node: 'Notice due?', type: 'main', index: 0 }], []] },
-    'Notice due?': { main: [[{ node: 'Send notice', type: 'main', index: 0 }]] },
+    'Should ask?': { main: [[{ node: 'Stamp notice', type: 'main', index: 0 }], []] },
+    'Stamp notice': { main: [[{ node: 'Send notice', type: 'main', index: 0 }]] },
     'Get candidates': { main: [[{ node: 'Evaluate due', type: 'main', index: 0 }]] },
     'Evaluate due': { main: [[{ node: 'Mark fired', type: 'main', index: 0 }]] },
     'Mark fired': { main: [[{ node: 'Fire full sweep', type: 'main', index: 0 }]] }
