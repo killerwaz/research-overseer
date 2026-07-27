@@ -12,38 +12,14 @@ const CRED_FC = { id: 'J7cbHkpEdHeUIhif', name: 'firecrawl-api' };
 // (that loop silently skipped items when scrape branches produced multiple batches).
 const WF21_ID = 'HISagmvZYi6O7N5u';
 
-// NOTE: no URL/URLSearchParams in the n8n task-runner sandbox — manual parsing only.
-const CANONICALIZE = `
-const STRIP = /^(utm_.*|fbclid|gclid|ref|source|mc_cid|mc_eid|igshid)$/i;
+// Pure functions are inlined from shared/ rather than duplicated here, so the
+// committed tests exercise exactly the code that ships into the n8n nodes.
+// (readFileSync, not a template literal — these modules contain backticks.)
+const inline = (f) => fs.readFileSync(path.join(__dirname, '..', 'shared', f), 'utf8')
+  .replace(/module\.exports[\s\S]*$/, '');
+
+const CANONICALIZE = inline('canonicalize.js') + `
 let lastErr = null;
-function canon(rawUrl) {
-  try {
-    const s = String(rawUrl).trim();
-    const m = s.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):\\/\\/([^/?#]+)([^?#]*)(\\?[^#]*)?(#.*)?$/);
-    if (!m) { lastErr = 'unparseable: ' + s.slice(0, 100); return null; }
-    const scheme = m[1].toLowerCase();
-    let hostport = m[2];
-    let path = m[3] || '/';
-    const query = m[4] ? m[4].slice(1) : '';
-    let userinfo = '';
-    const at = hostport.lastIndexOf('@');
-    if (at !== -1) { userinfo = hostport.slice(0, at + 1); hostport = hostport.slice(at + 1); }
-    let host = hostport;
-    let port = '';
-    const ci = hostport.lastIndexOf(':');
-    if (ci !== -1 && /^\\d+$/.test(hostport.slice(ci + 1))) { host = hostport.slice(0, ci); port = hostport.slice(ci); }
-    host = host.toLowerCase();
-    if (host.startsWith('amp.')) host = host.slice(4);
-    if ((scheme === 'http' && port === ':80') || (scheme === 'https' && port === ':443')) port = '';
-    path = path.replace(/\\/amp(\\/|$)/, '$1');
-    path = path.replace(/\\/{2,}/g, '/');
-    if (path.length > 1 && path.endsWith('/')) path = path.slice(0, -1);
-    if (!path) path = '/';
-    const params = query ? query.split('&').filter(p => p !== '' && !STRIP.test(p.split('=')[0])) : [];
-    const qs = params.length ? '?' + params.join('&') : '';
-    return scheme + '://' + userinfo + host + port + path + qs;
-  } catch (e) { lastErr = String(e); return null; }
-}
 const runId = $input.first().json.run_id;
 const urls = $('WF Input').first().json.urls || [];
 const out = [];
@@ -143,32 +119,7 @@ const PREP_DOC_FINAL = PREP_DOC
   .replace('__TRIAGE_SYSTEM__', JSON.stringify(TRIAGE_SYSTEM))
   .replace('__TRIAGE_SCHEMA__', JSON.stringify(TRIAGE_SCHEMA));
 
-const VALIDATE_COMMON = `
-function parseContent(j) {
-  try {
-    const msg = (j.choices && j.choices[0] && j.choices[0].message) || {};
-    let c = msg.content;
-    // Qwen puts chain-of-thought in reasoning_content; when it thinks past the
-    // token budget, content comes back empty and the JSON is stranded in there.
-    // Recover the last complete object rather than burning a retry.
-    if (!c && msg.reasoning_content) {
-      const m = String(msg.reasoning_content).match(/\\{[\\s\\S]*\\}/);
-      if (m) c = m[0];
-    }
-    if (!c) return null;
-    c = c.trim().replace(/^\\\`\\\`\\\`(json)?/i, '').replace(/\\\`\\\`\\\`$/, '').trim();
-    const o = JSON.parse(c);
-    const ok = (v) => Number.isInteger(v) && v >= 1 && v <= 5;
-    if (o && typeof o.summary === 'string' && ok(o.relevance) &&
-        ok(o.specificity) && ok(o.angle_strength) &&
-        Array.isArray(o.tags) && o.tags.length >= 1) return o;
-    return null;
-  } catch (e) { return null; }
-}
-function tagsPg(tags) {
-  const clean = (tags || []).slice(0, 5).map(t => String(t).toLowerCase().replace(/[{}",\\\\]/g, '').trim()).filter(Boolean);
-  return '{' + clean.join(',') + '}';
-}
+const VALIDATE_COMMON = inline('triage-validate.js') + `
 const doc = $('WF Input').first().json;
 const rawDocId = doc.raw_doc_id;
 `.trim();
