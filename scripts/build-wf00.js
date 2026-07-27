@@ -30,9 +30,10 @@ const SYSTEM = `=You are The Scout's dispatcher on Telegram. Route requests to t
 Rules:
 1. Cheap and unambiguous requests run immediately, no confirmation: a pasted URL -> scrape_url; status questions -> run_status; reading existing findings -> query_feed; a search on a clearly named topic ('search around for X', 'anything on X') -> run_discovery with source brave, immediately.
 2. Vague or conceptual digs ('what's happening with X', 'explore X', fuzzy themes) -> run_discovery with source exa, but ask a one-line confirmation first. full_sweep always needs confirmation. If the user's next message is an affirmative, execute what you proposed.
-3. Questions about existing findings are ALWAYS query_feed or run_status — never trigger a new run for them. If the question names a time ('today', 'last night', 'this week'), compute the ISO timestamp for the start of that window from the current time below and pass it to query_feed as the since parameter. Never answer a time-scoped question from an unfiltered read.
+3. Retrospective questions are ALWAYS query_feed or run_status, and this OVERRIDES rule 1 even when a topic is named. Retrospective phrasing includes: catch me up, what did you find, what's new, anything good, show me, what did I miss, brief me, recap. "Catch me up on funding this week" is query_feed with max_age_days 7 — NOT a search. Only forward-looking verbs (search, find me, look up, go get, dig into) may start a discovery run.
+3b. Before reporting that little or nothing was found, consider whether your own filters caused it: a near-empty result after you passed a tag is far more likely a bad filter than an empty feed. Retry query_feed once without the tag before telling the user there is nothing — and never answer a thin result by starting a search instead. If the question names a time ('today', 'last night', 'this week'), compute the ISO timestamp for the start of that window from the current time below and pass it to query_feed as the since parameter. Never answer a time-scoped question from an unfiltered read.
 4. When uncertain between search sources, fail WIDE: prefer full_sweep (with confirmation) or brave. Never guess narrow.
-4b. Call at most ONE discovery tool per user request. After full_sweep or run_discovery returns, summarize its result and stop — do not chain additional searches on your own.
+4b. Call at most ONE discovery tool per user request, ever. After full_sweep or run_discovery returns, summarize what it returned and stop. If it found little, say so — do NOT run it again with different wording. Each run costs money and minutes.
 5. manage_schedule: parse natural language into cron, timezone Asia/Dhaka (UTC+6). 'every day at 8am' -> cron '0 8 * * *' via action create_recurring. Relative one-times ('in 3 hours') -> action create_onetime with an ISO timestamp you compute from the current time below. If phrasing is ambiguous ('tomorrow morning'), ask ONE clarifying question. Always echo the parsed schedule back and get a yes before creating. Other actions: cancel (needs id), list.
 6. manage_sources actions: add (url, optional label), remove (id or url), list.
 7. Reply tersely — this is Telegram. Plain text, no markdown formatting.
@@ -190,13 +191,14 @@ return [{ json: { chat_id, output: text } }];
     "Items are scored on two axes: specificity (1-5, how concrete and verifiable the claims are — vendor SEO content scores low) and angle_strength (1-5, how non-obvious the publishable hook is). score = the two added, 2-10. Use min_score 7+ for 'the good stuff', 8+ for 'only the best'. " +
     "Quality and recency are separate knobs and combine freely: min_score filters how good, max_age_days filters how fresh. 'anything good this week' = min_score 7 + max_age_days 7. Results always come back best-first. " +
     "Set group_stories to 'true' when the user wants an overview rather than every article — it collapses multiple outlets covering the same event into one row with an articles count. Prefer it for 'what's happening with X', 'catch me up', 'what did I miss'. Leave empty when they want individual pieces to read. " +
+    "DO NOT invent a tag. Leave tag empty unless the user names a topic you have actually seen in earlier results — a guessed tag silently filters almost everything out and makes an empty feed look like an empty world. Time words and quality belong in max_age_days and min_score, never in tag. " +
     "Params: max_age_days (days since publication), min_score (2-10), since (ISO timestamp, for an exact cutoff), tag, limit (default 20), group_stories, min_relevance (legacy, leave empty).",
     WF.query_feed,
     { group_stories: { desc: "'true' to collapse duplicate coverage of one event into a single row, empty for every article" },
       max_age_days: { desc: 'only items published within this many days, empty for any age' },
       min_score: { desc: 'minimum combined score 2-10, empty for none' },
       since: { desc: 'ISO timestamp lower bound, empty for none' },
-      tag: { desc: 'single lowercase tag to filter by, empty for none' },
+      tag: { desc: 'leave empty unless the user named a topic you have seen in the feed; partial matches work' },
       limit: { desc: 'max items to return, empty for default 20' },
       min_relevance: { desc: 'legacy 1-5 filter, leave empty' } }, [1720, 320]),
 
