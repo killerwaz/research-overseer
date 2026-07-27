@@ -189,9 +189,11 @@ return [{ json: { chat_id, output: text } }];
     "Only omit `since` for questions with no time element at all ('show me the best stuff', 'anything on agents'). " +
     "Items are scored on two axes: specificity (1-5, how concrete and verifiable the claims are — vendor SEO content scores low) and angle_strength (1-5, how non-obvious the publishable hook is). score = the two added, 2-10. Use min_score 7+ for 'the good stuff', 8+ for 'only the best'. " +
     "Quality and recency are separate knobs and combine freely: min_score filters how good, max_age_days filters how fresh. 'anything good this week' = min_score 7 + max_age_days 7. Results always come back best-first. " +
-    "Params: max_age_days (days since publication), min_score (2-10), since (ISO timestamp, for an exact cutoff), tag, limit (default 20), min_relevance (legacy, leave empty).",
+    "Set group_stories to 'true' when the user wants an overview rather than every article — it collapses multiple outlets covering the same event into one row with an articles count. Prefer it for 'what's happening with X', 'catch me up', 'what did I miss'. Leave empty when they want individual pieces to read. " +
+    "Params: max_age_days (days since publication), min_score (2-10), since (ISO timestamp, for an exact cutoff), tag, limit (default 20), group_stories, min_relevance (legacy, leave empty).",
     WF.query_feed,
-    { max_age_days: { desc: 'only items published within this many days, empty for any age' },
+    { group_stories: { desc: "'true' to collapse duplicate coverage of one event into a single row, empty for every article" },
+      max_age_days: { desc: 'only items published within this many days, empty for any age' },
       min_score: { desc: 'minimum combined score 2-10, empty for none' },
       since: { desc: 'ISO timestamp lower bound, empty for none' },
       tag: { desc: 'single lowercase tag to filter by, empty for none' },
