@@ -219,9 +219,14 @@ const nodes = [
   { id: 'scrape', name: 'Scrape', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [1400, -100],
     parameters: { method: 'POST', url: 'http://crawl4ai:11235/crawl',
       authentication: 'genericCredentialType', genericAuthType: 'httpBearerAuth',
-      sendBody: true, specifyBody: 'json', jsonBody: CRAWL_BODY, options: { timeout: 10000 } },
+      sendBody: true, specifyBody: 'json', jsonBody: CRAWL_BODY,
+      // Crawl4AI runs 4 workers. Firing a whole RSS batch at once queues most
+      // requests past the timeout, so they ALL fall through to Firecrawl and
+      // trip its rate limit — run 54 lost 50 URLs that way. Single URLs take
+      // ~2.4s, so 4 at a time with a pause keeps us inside the timeout.
+      options: { timeout: 20000, batching: { batch: { batchSize: 4, batchInterval: 1000 } } } },
     credentials: { httpBearerAuth: CRED_CRAWL },
-    retryOnFail: true, maxTries: 2, waitBetweenTries: 1000, onError: 'continueRegularOutput' },
+    retryOnFail: true, maxTries: 2, waitBetweenTries: 2000, onError: 'continueRegularOutput' },
 
   { id: 'scrapeok', name: 'Scrape OK?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1600, -100],
     parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' },
@@ -243,9 +248,11 @@ const nodes = [
       authentication: 'genericCredentialType', genericAuthType: 'httpBearerAuth',
       sendBody: true, specifyBody: 'json',
       jsonBody: "={{ JSON.stringify({ url: $('Filter new').item.json.canonical_url, formats: ['markdown'] }) }}",
-      options: { timeout: 45000 } },
+      // Fallback only, and the free tier is rate limited — one at a time with a
+      // 6s gap stays under ~10/min even if a whole batch needs rescuing.
+      options: { timeout: 45000, batching: { batch: { batchSize: 1, batchInterval: 6000 } } } },
     credentials: { httpBearerAuth: CRED_FC },
-    retryOnFail: true, maxTries: 2, waitBetweenTries: 2000, onError: 'continueRegularOutput' },
+    retryOnFail: true, maxTries: 2, waitBetweenTries: 5000, onError: 'continueRegularOutput' },
 
   { id: 'fcok', name: 'Firecrawl OK?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1850, 50],
     parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' },

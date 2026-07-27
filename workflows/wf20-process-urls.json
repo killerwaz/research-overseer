@@ -172,7 +172,13 @@
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ urls: [$json.canonical_url], crawler_config: { type: 'CrawlerRunConfig', params: { markdown_generator: { type: 'DefaultMarkdownGenerator', params: { content_filter: { type: 'PruningContentFilter', params: {} } } } } } }) }}",
         "options": {
-          "timeout": 10000
+          "timeout": 20000,
+          "batching": {
+            "batch": {
+              "batchSize": 4,
+              "batchInterval": 1000
+            }
+          }
         }
       },
       "credentials": {
@@ -183,7 +189,7 @@
       },
       "retryOnFail": true,
       "maxTries": 2,
-      "waitBetweenTries": 1000,
+      "waitBetweenTries": 2000,
       "onError": "continueRegularOutput"
     },
     {
@@ -268,7 +274,13 @@
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ url: $('Filter new').item.json.canonical_url, formats: ['markdown'] }) }}",
         "options": {
-          "timeout": 45000
+          "timeout": 45000,
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 6000
+            }
+          }
         }
       },
       "credentials": {
@@ -279,7 +291,7 @@
       },
       "retryOnFail": true,
       "maxTries": 2,
-      "waitBetweenTries": 2000,
+      "waitBetweenTries": 5000,
       "onError": "continueRegularOutput"
     },
     {
