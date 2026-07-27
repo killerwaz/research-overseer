@@ -6,6 +6,10 @@
 const fs = require('fs');
 const path = require('path');
 
+// Inlined from shared/ so the committed tests cover what actually ships.
+const inline = (f) => fs.readFileSync(path.join(__dirname, '..', 'shared', f), 'utf8')
+  .replace(/module\.exports[\s\S]*$/, '');
+
 const CRED_PG = { id: 'tzBuhu9KEXlaRRfW', name: 'Postgres account' };
 const CRED_OR = { id: 'CZJ5Mo20Hr8BNBxG', name: 'openrouter-api' };
 const CRED_TG = { id: '6RLwMp4ODoesGE4v', name: 'telegram-scout-bot' };
@@ -217,21 +221,12 @@ return [{ json: { chat_id, output: text } }];
       id: { desc: 'source id for remove, else empty' } }, [2140, 320]),
 
   { id: 'prepreply', name: 'Prep reply', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1400, 100],
-    parameters: { mode: 'runOnceForEachItem', jsCode: `
+    parameters: { mode: 'runOnceForEachItem', jsCode: inline('telegram-format.js') + `
 let chat_id = ${CHAT_ID};
 try { chat_id = $('Record update').item.json.chat_id || chat_id; } catch (e) {
   try { chat_id = $('Test normalize').item.json.chat_id || chat_id; } catch (e2) {}
 }
-// Telegram node sends parse_mode HTML — escape or any < > & kills the send.
-// Also strip markdown the model emits despite instructions: under HTML mode
-// **bold** and _italics_ would show up as literal punctuation.
-const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-const demd = (s) => String(s)
-  .replace(/\\*\\*(.+?)\\*\\*/g, '$1')
-  .replace(/(^|\\s)\\*(?!\\s)(.+?)(?<!\\s)\\*(?=\\s|$)/g, '$1$2')
-  .replace(/(^|\\s)_(?!\\s)(.+?)(?<!\\s)_(?=\\s|$)/g, '$1$2')
-  .replace(/^\\s{0,3}#{1,6}\\s+/gm, '');
-return { json: { chat_id, output: esc(demd(String($json.output || '').slice(0, 4000))) || '(empty reply)' } };`.trim() } },
+return { json: { chat_id, output: forTelegram($json.output) || '(empty reply)' } };`.trim() } },
 
   { id: 'reply', name: 'Send reply', type: 'n8n-nodes-base.telegram', typeVersion: 1.2, position: [1600, 100],
     parameters: { chatId: '={{ $json.chat_id }}', text: '={{ $json.output }}',
