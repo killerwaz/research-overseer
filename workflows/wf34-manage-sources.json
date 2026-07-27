@@ -1,43 +1,415 @@
 {
   "name": "WF-34 manage_sources",
   "nodes": [
-    { "id": "trigger", "name": "WF Input", "type": "n8n-nodes-base.executeWorkflowTrigger", "typeVersion": 1.1, "position": [0, 0],
-      "parameters": { "workflowInputs": { "values": [
-        { "name": "action", "type": "string" }, { "name": "url", "type": "string" },
-        { "name": "label", "type": "string" }, { "name": "id", "type": "string" } ] } } },
-    { "id": "switch", "name": "Action", "type": "n8n-nodes-base.switch", "typeVersion": 3.2, "position": [200, 0],
-      "parameters": { "rules": { "values": [
-        { "conditions": { "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" }, "combinator": "and", "conditions": [ { "id": "c1", "leftValue": "={{ $json.action }}", "rightValue": "add", "operator": { "type": "string", "operation": "equals" } } ] }, "renameOutput": true, "outputKey": "add" },
-        { "conditions": { "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" }, "combinator": "and", "conditions": [ { "id": "c2", "leftValue": "={{ $json.action }}", "rightValue": "remove", "operator": { "type": "string", "operation": "equals" } } ] }, "renameOutput": true, "outputKey": "remove" },
-        { "conditions": { "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" }, "combinator": "and", "conditions": [ { "id": "c3", "leftValue": "={{ $json.action }}", "rightValue": "list", "operator": { "type": "string", "operation": "equals" } } ] }, "renameOutput": true, "outputKey": "list" }
-      ] }, "options": {} } },
-    { "id": "add", "name": "Add source", "type": "n8n-nodes-base.postgres", "typeVersion": 2.4, "position": [420, -120],
-      "parameters": { "operation": "executeQuery",
-        "query": "insert into sources (kind, url, label) values ('rss', $1, nullif($2,'')) on conflict (url) do update set active = true, label = coalesce(nullif($2,''), sources.label) returning id, url, label, active",
-        "options": { "queryReplacement": "={{ $json.url }},{{ $json.label || '' }}" } },
-      "credentials": { "postgres": { "id": "tzBuhu9KEXlaRRfW", "name": "Postgres account" } } },
-    { "id": "remove", "name": "Remove source", "type": "n8n-nodes-base.postgres", "typeVersion": 2.4, "position": [420, 0],
-      "parameters": { "operation": "executeQuery",
+    {
+      "id": "trigger",
+      "name": "WF Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "action",
+              "type": "string"
+            },
+            {
+              "name": "url",
+              "type": "string"
+            },
+            {
+              "name": "label",
+              "type": "string"
+            },
+            {
+              "name": "id",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "switch",
+      "name": "Action",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        200,
+        0
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "c0",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "add",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "add"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "c1",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "remove",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "remove"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "c2",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "list",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "list"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "add",
+      "name": "Add source",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        420,
+        -160
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "insert into sources (kind, url, label) values ('rss', $1, nullif($2,'')) on conflict (url) do update set active = true, label = coalesce(nullif($2,''), sources.label) returning id, url, label, active, coalesce(to_char(bootstrapped_at, 'YYYY-MM-DD'), '') as bootstrapped_at",
+        "options": {
+          "queryReplacement": "={{ $json.url }},{{ $json.label || '' }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "tzBuhu9KEXlaRRfW",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "needsboot",
+      "name": "Needs bootstrap?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        620,
+        -160
+      ],
+      "parameters": {
+        "options": {},
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "nb1",
+              "leftValue": "={{ $json.bootstrapped_at }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "readfeed",
+      "name": "Read feed once",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.2,
+      "position": [
+        820,
+        -240
+      ],
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": {}
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "id": "collect",
+      "name": "Collect seen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1020,
+        -240
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Canonical URL form used for dedupe (spec §5.2).\n//\n// This file is the single source of truth: scripts/build-wf20.js inlines the\n// function body into WF-20's Canonicalize node, so the tests in\n// tests/canonicalize.test.js exercise exactly what runs in production.\n//\n// No URL/URLSearchParams — the n8n task-runner sandbox has neither.\n\nconst STRIP = /^(utm_.*|fbclid|gclid|ref|source|mc_cid|mc_eid|igshid)$/i;\n\nfunction canon(rawUrl) {\n  try {\n    const s = String(rawUrl).trim();\n    const m = s.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):\\/\\/([^/?#]+)([^?#]*)(\\?[^#]*)?(#.*)?$/);\n    if (!m) return null;\n    const scheme = m[1].toLowerCase();\n    let hostport = m[2];\n    let path = m[3] || '/';\n    const query = m[4] ? m[4].slice(1) : '';\n    let userinfo = '';\n    const at = hostport.lastIndexOf('@');\n    if (at !== -1) { userinfo = hostport.slice(0, at + 1); hostport = hostport.slice(at + 1); }\n    let host = hostport;\n    let port = '';\n    const ci = hostport.lastIndexOf(':');\n    if (ci !== -1 && /^\\d+$/.test(hostport.slice(ci + 1))) { host = hostport.slice(0, ci); port = hostport.slice(ci); }\n    host = host.toLowerCase();\n    if (host.startsWith('amp.')) host = host.slice(4);\n    if ((scheme === 'http' && port === ':80') || (scheme === 'https' && port === ':443')) port = '';\n    path = path.replace(/\\/amp(\\/|$)/, '$1');\n    path = path.replace(/\\/{2,}/g, '/');\n    if (path.length > 1 && path.endsWith('/')) path = path.slice(0, -1);\n    if (!path) path = '/';\n    const params = query ? query.split('&').filter(p => p !== '' && !STRIP.test(p.split('=')[0])) : [];\n    const qs = params.length ? '?' + params.join('&') : '';\n    return scheme + '://' + userinfo + host + port + path + qs;\n  } catch (e) { return null; }\n}\n\nconst src = $('Add source').first().json;\nconst seen = [];\nfor (const item of $input.all()) {\n  const j = item.json || {};\n  if (j.error) continue;\n  const link = j.link || j.url;\n  const c = link ? canon(link) : null;\n  if (c) seen.push(c);\n}\nconst uniq = [...new Set(seen)];\nif (!uniq.length) return [{ json: { source_id: src.id, count: 0, values: '' } }];\nconst esc = (u) => String(u).replace(/'/g, \"''\");\n// one multi-row VALUES list rather than a round trip per URL\nconst values = uniq.map(u => \"('\" + esc(u) + \"','rss')\").join(',');\nreturn [{ json: { source_id: src.id, count: uniq.length, values } }];"
+      }
+    },
+    {
+      "id": "recordseen",
+      "name": "Record as seen",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        1220,
+        -240
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "with ins as (insert into seen_urls (canonical_url, source) select v.u, v.s from (values {{ $json.values || \"('','')\" }}) as v(u,s) where v.u <> '' on conflict (canonical_url) do nothing) update sources set bootstrapped_at = now() where id = {{ $json.source_id }}::bigint returning id, url, label, active",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "tzBuhu9KEXlaRRfW",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "remove",
+      "name": "Remove source",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        420,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
         "query": "update sources set active = false where (nullif($1,'') is not null and id = nullif($1,'')::bigint) or (nullif($2,'') is not null and url = $2) returning id, url, label, active",
-        "options": { "queryReplacement": "={{ $json.id || '' }},{{ $json.url || '' }}" } },
-      "credentials": { "postgres": { "id": "tzBuhu9KEXlaRRfW", "name": "Postgres account" } } },
-    { "id": "list", "name": "List sources", "type": "n8n-nodes-base.postgres", "typeVersion": 2.4, "position": [420, 120],
-      "parameters": { "operation": "executeQuery", "query": "select id, url, label, active from sources order by id", "options": {} },
-      "credentials": { "postgres": { "id": "tzBuhu9KEXlaRRfW", "name": "Postgres account" } },
-      "executeOnce": true, "alwaysOutputData": true },
-    { "id": "shape", "name": "Shape result", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [640, 0],
-      "parameters": { "mode": "runOnceForAllItems", "jsCode": "const rows = $input.all().map(i => i.json).filter(j => j && Object.keys(j).length);\nreturn [{ json: { count: rows.length, result: rows } }];" } }
+        "options": {
+          "queryReplacement": "={{ $json.id || '' }},{{ $json.url || '' }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "tzBuhu9KEXlaRRfW",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "list",
+      "name": "List sources",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        420,
+        160
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select id, url, label, active from sources order by id",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "tzBuhu9KEXlaRRfW",
+          "name": "Postgres account"
+        }
+      },
+      "executeOnce": true,
+      "alwaysOutputData": true
+    },
+    {
+      "id": "shape",
+      "name": "Shape result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const rows = $input.all().map(i => i.json).filter(j => j && Object.keys(j).length);\nlet bootstrapped = null;\ntry { bootstrapped = $('Collect seen').first().json.count; } catch (e) {}\nconst out = { count: rows.length, result: rows };\nif (bootstrapped !== null) {\n  out.bootstrapped = bootstrapped;\n  out.note = bootstrapped + ' existing items marked as already seen; only new posts from now on';\n}\nreturn [{ json: out }];"
+      }
+    }
   ],
   "connections": {
-    "WF Input": { "main": [[{ "node": "Action", "type": "main", "index": 0 }]] },
-    "Action": { "main": [
-      [{ "node": "Add source", "type": "main", "index": 0 }],
-      [{ "node": "Remove source", "type": "main", "index": 0 }],
-      [{ "node": "List sources", "type": "main", "index": 0 }]
-    ] },
-    "Add source": { "main": [[{ "node": "Shape result", "type": "main", "index": 0 }]] },
-    "Remove source": { "main": [[{ "node": "Shape result", "type": "main", "index": 0 }]] },
-    "List sources": { "main": [[{ "node": "Shape result", "type": "main", "index": 0 }]] }
+    "WF Input": {
+      "main": [
+        [
+          {
+            "node": "Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Action": {
+      "main": [
+        [
+          {
+            "node": "Add source",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Remove source",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "List sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add source": {
+      "main": [
+        [
+          {
+            "node": "Needs bootstrap?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs bootstrap?": {
+      "main": [
+        [
+          {
+            "node": "Read feed once",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Shape result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read feed once": {
+      "main": [
+        [
+          {
+            "node": "Collect seen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect seen": {
+      "main": [
+        [
+          {
+            "node": "Record as seen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record as seen": {
+      "main": [
+        [
+          {
+            "node": "Shape result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Remove source": {
+      "main": [
+        [
+          {
+            "node": "Shape result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List sources": {
+      "main": [
+        [
+          {
+            "node": "Shape result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
   },
-  "settings": { "executionOrder": "v1", "errorWorkflow": "PNJMA4NbQGmp1xKv" }
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "PNJMA4NbQGmp1xKv"
+  }
 }
