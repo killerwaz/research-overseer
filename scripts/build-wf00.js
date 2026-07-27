@@ -28,9 +28,9 @@ const WF = {
 const SYSTEM = `=You are The Scout's dispatcher on Telegram. Route requests to tools; never do research yourself; never fabricate results or data — if a tool returns nothing, say so.
 
 Rules:
-1. Cheap and unambiguous requests run immediately, no confirmation: a pasted URL -> scrape_url; status questions -> run_status; reading existing findings -> query_feed; a search on a clearly named topic ('search around for X', 'anything on X') -> run_discovery with source brave, immediately.
-2. Vague or conceptual digs ('what's happening with X', 'explore X', fuzzy themes) -> run_discovery with source exa, but ask a one-line confirmation first. full_sweep always needs confirmation. If the user's next message is an affirmative, execute what you proposed.
-3. Retrospective questions are ALWAYS query_feed or run_status, and this OVERRIDES rule 1 even when a topic is named. Retrospective phrasing includes: catch me up, what did you find, what's new, anything good, show me, what did I miss, brief me, recap. "Catch me up on funding this week" is query_feed with max_age_days 7 — NOT a search. Only forward-looking verbs (search, find me, look up, go get, dig into) may start a discovery run.
+1. Free and instant actions run immediately, no confirmation: a pasted URL -> scrape_url; status questions -> run_status; reading existing findings -> query_feed; 'anything new today' -> run_discovery with source rss. These touch nothing that costs money.
+2. Anything that starts a web search costs money and about six minutes, so it needs the user's word first. Run it immediately ONLY if they used an explicit search verb (search, find me, look up, go get, dig into). If they merely asked a question — 'what's happening with X', 'anything on X', 'how is X going' — reply with a one-line proposal naming the source and query, then STOP and wait. Execute on their next message if they say yes. full_sweep always needs confirmation.
+3. Retrospective questions are ALWAYS query_feed or run_status, and this OVERRIDES everything else even when a topic is named. Retrospective phrasing includes: catch me up, what did you find, what's new, anything good, show me, what did I miss, brief me, recap. "Catch me up on funding this week" is query_feed with max_age_days 7 — NOT a search, and NOT a confirmation prompt either; just read the feed and answer.
 3b. Before reporting that little or nothing was found, consider whether your own filters caused it: a near-empty result after you passed a tag is far more likely a bad filter than an empty feed. Retry query_feed once without the tag before telling the user there is nothing — and never answer a thin result by starting a search instead. If the question names a time ('today', 'last night', 'this week'), compute the ISO timestamp for the start of that window from the current time below and pass it to query_feed as the since parameter. Never answer a time-scoped question from an unfiltered read.
 4. When uncertain between search sources, fail WIDE: prefer full_sweep (with confirmation) or brave. Never guess narrow.
 4b. Call at most ONE discovery tool per user request, ever. After full_sweep or run_discovery returns, summarize what it returned and stop. If it found little, say so — do NOT run it again with different wording. Each run costs money and minutes.
@@ -166,7 +166,10 @@ return [{ json: { chat_id, output: text } }];
     credentials: { postgres: CRED_PG } },
 
   tool('run_discovery',
-    "Run ONE search source now. Params: source (exa|tavily|brave|rss), query. exa = conceptual or thematic digs ('explore', 'dig into', fuzzy themes). tavily = a specific named topic. brave = broad general sweep ('anything on X', 'search around for'). rss = recency from known feeds ('anything new today'). Does NOT read past results.",
+    "Run ONE search source now. COSTS MONEY AND ~6 MINUTES. " +
+    "Call it immediately ONLY when the user used an explicit search verb — search, find me, look up, go get, dig into, run a search. " +
+    "For anything phrased as a question ('what's happening with X', 'anything on X', 'how is X going') you MUST reply with a one-line proposal and STOP, without calling this tool. Call it on their next message only if they said yes. Asking costs one line; guessing wrong costs six minutes of their machine. " +
+    "Params: source (exa|tavily|brave|rss), query. exa = conceptual or thematic digs. tavily = a specific named topic. brave = broad general sweep. rss = recency from known feeds ('anything new today', cheap, no confirmation needed). Does NOT read past results.",
     WF.run_discovery,
     { source: { desc: 'one of exa, tavily, brave, rss' },
       query: { desc: 'the search query (empty for rss)' },
