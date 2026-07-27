@@ -34,10 +34,13 @@ create index if not exists feed_items_structured_idx
 insert into skills (name, description, extra_prompt, extra_schema) values (
   'funding',
   'Deal terms from startup funding announcements',
-  'This article may describe a startup funding event. In addition to the standard fields, extract: company (the company raising the money, or null if the article is not about a specific raise); round (seed, series-a, series-b, debt, grant, or null); amount_usd (the raise size as a plain number in US dollars, converting from other currencies where the article states a rate, or null if not stated); investors (array of named investors or lead firms, empty array if none are named). Never guess a number that is not in the text.',
+  'This article may describe a startup funding event. In addition to the standard fields, extract: company (the company raising the money, or null if the article is not about a specific raise); round (lowercase, one of the allowed values — map "Series A" to series-a, "Seed round" to seed, and so on); amount_usd (the raise size as a plain number in US dollars, converting from other currencies where the article states a rate, or null if not stated); investors (array of named investors or lead firms, empty array if none are named). Never guess a number that is not in the text.',
+  -- round is an enum, not free text: the model otherwise echoes the article''s
+  -- casing ("Series A" vs "series-a") and breaks equality filters
   '{
      "company":    {"type": ["string","null"]},
-     "round":      {"type": ["string","null"]},
+     "round":      {"type": ["string","null"],
+                    "enum": ["pre-seed","seed","series-a","series-b","series-c","series-d","series-e","growth","debt","grant","acquisition",null]},
      "amount_usd": {"type": ["number","null"]},
      "investors":  {"type": "array", "items": {"type": "string"}}
    }'::jsonb
