@@ -28,7 +28,9 @@ select rd.id as raw_doc_id,
        coalesce(rd.title, '') as title,
        coalesce(to_char(rd.published_at, 'YYYY-MM-DD"T"HH24:MI:SSOF'), '') as published_at,
        coalesce(rd.run_id, 0) as run_id,
-       left(rd.markdown, 6000) as markdown,
+       -- raw_docs has no source column; seen_urls records it at ingest
+       coalesce((select su.source from seen_urls su where su.canonical_url = rd.canonical_url), '') as source,
+       left(rd.markdown, 8000) as markdown,
        (select count(*) from backlog) as backlog_total
 from raw_docs rd
 where rd.id in (select id from backlog)
@@ -60,16 +62,20 @@ select (select count(*) from (
        ) as notice_due
 `.trim();
 
-const BUILD_BODY = `
-const sys = ${JSON.stringify(TRIAGE_SYSTEM)};
-const schema = ${JSON.stringify(TRIAGE_SCHEMA)};
+const inlineShared = (f) => fs.readFileSync(path.join(__dirname, '..', 'shared', f), 'utf8')
+  .replace(/module\.exports[\s\S]*$/, '');
+
+// Same profiles as the live pipeline — the drain must not score documents on
+// different settings than a normal run would have.
+const BUILD_BODY = inlineShared('triage-config.js') + `
 return $input.all().map(i => {
   const d = i.json;
+  const prof = profileFor(d.source);
   const dhaka = new Date(Date.now() + 6 * 3600 * 1000).toISOString().slice(0, 10);
   const pub = d.published_at ? String(d.published_at).slice(0, 10) : 'unknown';
   const user = 'TODAY: ' + dhaka + '\\n' + 'PUBLISHED: ' + pub + '\\n' +
     'TITLE: ' + (d.title || '') + '\\n' + 'URL: ' + d.canonical_url +
-    '\\n\\nCONTENT:\\n' + (d.markdown || '');
+    '\\n\\nCONTENT:\\n' + String(d.markdown || '').slice(0, prof.content_chars);
   return { json: {
     raw_doc_id: d.raw_doc_id,
     canonical_url: d.canonical_url,
@@ -77,9 +83,9 @@ return $input.all().map(i => {
     published_at: d.published_at || '',
     run_id: d.run_id,
     triage_body: JSON.stringify({
-      model: ${JSON.stringify(TRIAGE_MODEL)}, temperature: 0.2, max_tokens: 6000,
-      response_format: schema,
-      messages: [ { role: 'system', content: sys }, { role: 'user', content: user } ]
+      model: prof.model, temperature: 0.2, max_tokens: prof.max_tokens,
+      response_format: TRIAGE_SCHEMA,
+      messages: [ { role: 'system', content: TRIAGE_SYSTEM }, { role: 'user', content: user } ]
     })
   } };
 });

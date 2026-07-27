@@ -85,18 +85,19 @@ if ($json.results) {
   title = (d.metadata && d.metadata.title) || orig.title || '';
 }
 const sys = __TRIAGE_SYSTEM__;
+const prof = profileFor(orig.source);
 // Dates are stated, never inferred: the sandbox clock is UTC and the model has
 // none, so without these it invents recency inside the summary.
 const dhaka = new Date(Date.now() + 6 * 3600 * 1000).toISOString().slice(0, 10);
 const pub = orig.published_at ? String(orig.published_at).slice(0, 10) : 'unknown';
 const user = 'TODAY: ' + dhaka + '\\n' + 'PUBLISHED: ' + pub + '\\n' +
   'TITLE: ' + title + '\\n' + 'URL: ' + orig.canonical_url +
-  '\\n\\nCONTENT:\\n' + markdown.slice(0, 6000);
-const triage_body = JSON.stringify({ model: 'qwen/qwen3.5-9b', temperature: 0.2, max_tokens: 6000,
+  '\\n\\nCONTENT:\\n' + markdown.slice(0, prof.content_chars);
+const triage_body = JSON.stringify({ model: prof.model, temperature: 0.2, max_tokens: prof.max_tokens,
   response_format: __TRIAGE_SCHEMA__,
   messages: [ { role: 'system', content: sys }, { role: 'user', content: user } ] });
 return { json: { canonical_url: orig.canonical_url, source: orig.source || '', title,
-  markdown, scraper, run_id: orig.run_id, triage_body,
+  markdown, scraper, run_id: orig.run_id, triage_body, triage_profile: prof.model + '/' + prof.content_chars,
   published_at: orig.published_at || '' } };
 `.trim();
 
@@ -115,9 +116,9 @@ const { TRIAGE_SYSTEM, TRIAGE_SCHEMA } = require('../shared/triage-config.js');
 
 // Triage request bodies are prebuilt in Code nodes (Prep doc / Build retry) because
 // n8n expressions reject multi-statement code. Substitute the constants into PREP_DOC.
-const PREP_DOC_FINAL = PREP_DOC
-  .replace('__TRIAGE_SYSTEM__', JSON.stringify(TRIAGE_SYSTEM))
-  .replace('__TRIAGE_SCHEMA__', JSON.stringify(TRIAGE_SCHEMA));
+const PREP_DOC_FINAL = inline('triage-config.js') + '\n' + PREP_DOC
+  .replace('__TRIAGE_SYSTEM__', 'TRIAGE_SYSTEM')
+  .replace('__TRIAGE_SCHEMA__', 'TRIAGE_SCHEMA');
 
 const VALIDATE_COMMON = inline('triage-validate.js') + `
 const doc = $('WF Input').first().json;

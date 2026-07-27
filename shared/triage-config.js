@@ -85,4 +85,46 @@ const TRIAGE_SCHEMA = {
 
 const TRIAGE_MODEL = 'qwen/qwen3.5-9b';
 
-module.exports = { TRIAGE_SYSTEM, TRIAGE_SCHEMA, TRIAGE_MODEL };
+// Per-source triage profiles.
+//
+// MEASURED, 2026-07-27 — read this before tuning, it is counter-intuitive:
+// triage time tracks the model's REASONING OUTPUT, not how much you feed it.
+// Same document at three read lengths: 2500 chars/2835 tokens/38.7s,
+// 6000/4113/47.4s, 8000/2779/32.3s. The longest read was the fastest.
+// Qwen spends ~3000 tokens thinking to produce ~120 tokens of JSON, and that
+// is where the ~33s goes.
+//
+// Suppressing the thinking does not work on this model: enable_thinking via
+// chat_template_kwargs, a /no_think suffix, and reasoning_effort:minimal were
+// all tried and all ignored (2900-3300 tokens, 32-38s, no change).
+//
+// So `content_chars` does NOT buy speed. It buys judgement quality and context
+// budget, which is still worth varying: a feed blurb has nothing after 2500
+// chars, a hand-picked URL deserves the full read.
+//
+// The one real speed/cost lever is `model`. LM Studio serves every loaded
+// model on the same endpoint with the same key, so pointing a source at a
+// different model needs no new credential or URL — just `lms load <id>` first.
+// If the named model is not loaded the request fails, retries, and falls back
+// to TRIAGE_FAILED, so a missing model degrades rather than breaks.
+//
+// max_tokens is a ceiling, not a target — the model stops on its own well
+// below it. Keep it above ~2500 or the reasoning strands the JSON.
+const TRIAGE_PROFILES = {
+  // Feed items are short and mostly low-signal; a smaller read is plenty.
+  rss:     { model: TRIAGE_MODEL, content_chars: 2500, max_tokens: 3000 },
+  // Search hits on the standing queries are the material worth thinking about.
+  exa:     { model: TRIAGE_MODEL, content_chars: 6000, max_tokens: 6000 },
+  tavily:  { model: TRIAGE_MODEL, content_chars: 6000, max_tokens: 6000 },
+  brave:   { model: TRIAGE_MODEL, content_chars: 6000, max_tokens: 6000 },
+  // A URL pasted by hand was chosen deliberately — read it properly.
+  manual:  { model: TRIAGE_MODEL, content_chars: 8000, max_tokens: 6000 },
+  default: { model: TRIAGE_MODEL, content_chars: 6000, max_tokens: 6000 }
+};
+
+function profileFor(source) {
+  const key = String(source || '').toLowerCase().trim();
+  return TRIAGE_PROFILES[key] || TRIAGE_PROFILES.default;
+}
+
+module.exports = { TRIAGE_SYSTEM, TRIAGE_SCHEMA, TRIAGE_MODEL, TRIAGE_PROFILES, profileFor };
