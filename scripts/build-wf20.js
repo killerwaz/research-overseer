@@ -84,7 +84,14 @@ if ($json.results) {
   markdown = d.markdown || '';
   title = (d.metadata && d.metadata.title) || orig.title || '';
 }
-const sys = __TRIAGE_SYSTEM__;
+// A skill (resolved from the run's query) appends to the prompt and widens the
+// schema — one model call still, standard fields unchanged.
+const run = $('Create run').first().json;
+const sys = TRIAGE_SYSTEM + (run.skill_prompt ? '\\n\\nADDITIONAL EXTRACTION\\n' + run.skill_prompt : '');
+let schema = TRIAGE_SCHEMA;
+if (run.skill_schema) {
+  try { schema = withSkill(TRIAGE_SCHEMA, JSON.parse(run.skill_schema)); } catch (e) {}
+}
 const prof = profileFor(orig.source);
 // Dates are stated, never inferred: the sandbox clock is UTC and the model has
 // none, so without these it invents recency inside the summary.
@@ -94,7 +101,7 @@ const user = 'TODAY: ' + dhaka + '\\n' + 'PUBLISHED: ' + pub + '\\n' +
   'TITLE: ' + title + '\\n' + 'URL: ' + orig.canonical_url +
   '\\n\\nCONTENT:\\n' + markdown.slice(0, prof.content_chars);
 const triage_body = JSON.stringify({ model: prof.model, temperature: 0.2, max_tokens: prof.max_tokens,
-  response_format: __TRIAGE_SCHEMA__,
+  response_format: schema,
   messages: [ { role: 'system', content: sys }, { role: 'user', content: user } ] });
 return { json: { canonical_url: orig.canonical_url, source: orig.source || '', title,
   markdown, scraper, run_id: orig.run_id, triage_body, triage_profile: prof.model + '/' + prof.content_chars,
@@ -116,9 +123,7 @@ const { TRIAGE_SYSTEM, TRIAGE_SCHEMA } = require('../shared/triage-config.js');
 
 // Triage request bodies are prebuilt in Code nodes (Prep doc / Build retry) because
 // n8n expressions reject multi-statement code. Substitute the constants into PREP_DOC.
-const PREP_DOC_FINAL = inline('triage-config.js') + '\n' + PREP_DOC
-  .replace('__TRIAGE_SYSTEM__', 'TRIAGE_SYSTEM')
-  .replace('__TRIAGE_SCHEMA__', 'TRIAGE_SCHEMA');
+const PREP_DOC_FINAL = inline('triage-config.js') + '\n' + inline('triage-validate.js') + '\n' + PREP_DOC;
 
 const VALIDATE_COMMON = inline('triage-validate.js') + `
 const doc = $('WF Input').first().json;
@@ -131,6 +136,7 @@ if (!o) return { json: { __invalid: true } };
 return { json: { __invalid: false, raw_doc_id: rawDocId, canonical_url: doc.canonical_url, title: doc.title,
   summary: o.summary, angle: o.angle || '', relevance: o.relevance,
   specificity: o.specificity, angle_strength: o.angle_strength, tags_pg: tagsPg(o.tags),
+  structured_json: (splitStructured(o).structured ? JSON.stringify(splitStructured(o).structured) : ''),
   published_at: doc.published_at || '', run_id: doc.run_id } };
 `;
 
@@ -138,10 +144,11 @@ const VALIDATE_2 = VALIDATE_COMMON + `
 const o = parseContent($json);
 if (!o) return { json: { raw_doc_id: rawDocId, canonical_url: doc.canonical_url, title: doc.title,
   summary: 'TRIAGE_FAILED', angle: '', relevance: '', specificity: '', angle_strength: '', tags_pg: '{}',
-  published_at: doc.published_at || '', run_id: doc.run_id } };
+  structured_json: '', published_at: doc.published_at || '', run_id: doc.run_id } };
 return { json: { raw_doc_id: rawDocId, canonical_url: doc.canonical_url, title: doc.title,
   summary: o.summary, angle: o.angle || '', relevance: o.relevance,
   specificity: o.specificity, angle_strength: o.angle_strength, tags_pg: tagsPg(o.tags),
+  structured_json: (splitStructured(o).structured ? JSON.stringify(splitStructured(o).structured) : ''),
   published_at: doc.published_at || '', run_id: doc.run_id } };
 `;
 
@@ -186,11 +193,14 @@ function codeNode(name, id, pos, mode, jsCode, extra = {}) {
 const nodes = [
   { id: 'trigger', name: 'WF Input', type: 'n8n-nodes-base.executeWorkflowTrigger', typeVersion: 1.1, position: [0, 0],
     parameters: { workflowInputs: { values: [
-      { name: 'urls', type: 'array' }, { name: 'trigger', type: 'string' }, { name: 'scope', type: 'string' } ] } } },
+      { name: 'urls', type: 'array' }, { name: 'trigger', type: 'string' },
+      { name: 'scope', type: 'string' }, { name: 'query', type: 'string' } ] } } },
 
+  // Resolves the skill in the same statement that opens the run, so Prep doc
+  // needs no database access of its own.
   pgNode('Create run', 'createrun', [200, 0],
-    "insert into runs (trigger, scope, urls_found) values ($1, $2, $3::int) returning id as run_id",
-    "={{ $json.trigger }},{{ $json.scope }},{{ ($json.urls || []).length }}",
+    "insert into runs (trigger, scope, urls_found, query) values ($1, $2, $3::int, nullif($4,'')) returning id as run_id, (select s.extra_prompt from queries q join skills s on s.name = q.skill where lower(q.text) = lower(nullif($4,''))) as skill_prompt, (select s.extra_schema::text from queries q join skills s on s.name = q.skill where lower(q.text) = lower(nullif($4,''))) as skill_schema, (select q.skill from queries q where lower(q.text) = lower(nullif($4,''))) as skill_name",
+    "={{ $json.trigger }},{{ $json.scope }},{{ ($json.urls || []).length }},{{ $json.query || '' }}",
     { executeOnce: true }),
 
   codeNode('Canonicalize', 'canon', [400, 0], 'runOnceForAllItems', CANONICALIZE),
@@ -436,8 +446,8 @@ return $input.all();
     // one. No-op on the normal path (new docs have none) and makes re-triage
     // idempotent, so the WF-30 drain never needs a separate delete step.
     pgNode('Insert feed', 'insertfeed', [1400, 0],
-      "with del as (delete from feed_items where raw_doc_id = $1::bigint) insert into feed_items (raw_doc_id, canonical_url, title, summary, angle, relevance, tags, run_id, published_at, specificity, angle_strength) values ($1::bigint, $2, nullif($3,''), $4, nullif($5,''), nullif($6::text,'')::int, $7::text[], $8::bigint, nullif($9,'')::timestamptz, nullif($10::text,'')::int, nullif($11::text,'')::int) returning id as feed_item_id",
-      "={{ $json.raw_doc_id }},{{ $json.canonical_url }},{{ $json.title }},{{ $json.summary }},{{ $json.angle }},{{ $json.relevance }},{{ $json.tags_pg }},{{ $json.run_id }},{{ $json.published_at }},{{ $json.specificity }},{{ $json.angle_strength }}")
+      "with del as (delete from feed_items where raw_doc_id = $1::bigint) insert into feed_items (raw_doc_id, canonical_url, title, summary, angle, relevance, tags, run_id, published_at, specificity, angle_strength, structured) values ($1::bigint, $2, nullif($3,''), $4, nullif($5,''), nullif($6::text,'')::int, $7::text[], $8::bigint, nullif($9,'')::timestamptz, nullif($10::text,'')::int, nullif($11::text,'')::int, nullif($12,'')::jsonb) returning id as feed_item_id",
+      "={{ $json.raw_doc_id }},{{ $json.canonical_url }},{{ $json.title }},{{ $json.summary }},{{ $json.angle }},{{ $json.relevance }},{{ $json.tags_pg }},{{ $json.run_id }},{{ $json.published_at }},{{ $json.specificity }},{{ $json.angle_strength }},{{ $json.structured_json }}")
   ],
   connections: {
     'WF Input': { main: [[{ node: 'Guard single item', type: 'main', index: 0 }]] },
