@@ -33,6 +33,12 @@ test('strips every known tracker but nothing else', () => {
   assert.equal(canon('https://h.com/a?id=7&page=2'), 'https://h.com/a?id=7&page=2');
 });
 
+test('referrer tags do not split one page into two items', () => {
+  // ?src=twitter vs ?src=rss is the same article
+  assert.equal(canon('https://h.com/a?src=twitter'), canon('https://h.com/a?src=rss'));
+  assert.equal(canon('https://h.com/a?src=x'), 'https://h.com/a');
+});
+
 test('unparseable input returns null rather than throwing', () => {
   for (const bad of ['notaurl', '', null, undefined, 'javascript:alert(1)']) {
     assert.equal(canon(bad), null, JSON.stringify(bad));

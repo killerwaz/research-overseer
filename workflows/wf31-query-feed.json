@@ -5,12 +5,34 @@
       "parameters": {
         "workflowInputs": {
           "values": [
-            { "name": "since", "type": "string" },
-            { "name": "min_relevance", "type": "string" },
-            { "name": "tag", "type": "string" },
-            { "name": "limit", "type": "string" },
-            { "name": "min_score", "type": "string" },
-            { "name": "max_age_days", "type": "string" }
+            {
+              "name": "since",
+              "type": "string"
+            },
+            {
+              "name": "min_relevance",
+              "type": "string"
+            },
+            {
+              "name": "tag",
+              "type": "string"
+            },
+            {
+              "name": "limit",
+              "type": "string"
+            },
+            {
+              "name": "min_score",
+              "type": "string"
+            },
+            {
+              "name": "max_age_days",
+              "type": "string"
+            },
+            {
+              "name": "group_stories",
+              "type": "string"
+            }
           ]
         }
       },
@@ -18,23 +40,32 @@
       "name": "WF Input",
       "type": "n8n-nodes-base.executeWorkflowTrigger",
       "typeVersion": 1.1,
-      "position": [0, 0]
+      "position": [
+        0,
+        0
+      ]
     },
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "select f.id, f.canonical_url, f.title, f.summary, f.angle, f.relevance, f.specificity, f.angle_strength, f.score, f.tags, f.created_at, f.published_at, case when f.published_at is null then null else greatest(0, extract(day from now() - f.published_at)::int) end as age_days from feed_items f where (nullif($1,'') is null or coalesce(f.published_at, f.created_at) >= nullif($1,'')::timestamptz) and (nullif($2,'') is null or f.relevance >= nullif($2,'')::int) and (nullif($3,'') is null or lower(nullif($3,'')) = any(f.tags)) and (nullif($5,'') is null or f.score >= nullif($5,'')::int) and (nullif($6,'') is null or coalesce(f.published_at, f.created_at) >= now() - (nullif($6,'')::int * interval '1 day')) order by f.score desc nulls last, coalesce(f.published_at, f.created_at) desc limit coalesce(nullif($4,'')::int, 20)",
+        "query": "select f.id, f.canonical_url, f.title, f.summary, f.angle, f.relevance, f.specificity, f.angle_strength, f.score, f.tags, f.created_at, f.published_at, f.structured, 1 as articles, case when f.published_at is null then null else greatest(0, extract(day from now() - f.published_at)::int) end as age_days from feed_items f where nullif($7,'') is null and (nullif($1,'') is null or coalesce(f.published_at, f.created_at) >= nullif($1,'')::timestamptz) and (nullif($2,'') is null or f.relevance >= nullif($2,'')::int) and (nullif($3,'') is null or lower(nullif($3,'')) = any(f.tags)) and (nullif($5,'') is null or f.score >= nullif($5,'')::int) and (nullif($6,'') is null or coalesce(f.published_at, f.created_at) >= now() - (nullif($6,'')::int * interval '1 day')) union all select null::bigint as id, s.canonical_url, s.title, s.summary, s.angle, null::int as relevance, s.specificity, s.angle_strength, s.score, s.tags, s.created_at, s.last_published as published_at, s.structured, s.articles, case when s.last_published is null then null else greatest(0, extract(day from now() - s.last_published)::int) end as age_days from feed_stories s where nullif($7,'') is not null and (nullif($1,'') is null or coalesce(s.last_published, s.created_at) >= nullif($1,'')::timestamptz) and (nullif($3,'') is null or lower(nullif($3,'')) = any(s.tags)) and (nullif($5,'') is null or s.score >= nullif($5,'')::int) and (nullif($6,'') is null or coalesce(s.last_published, s.created_at) >= now() - (nullif($6,'')::int * interval '1 day')) order by score desc nulls last, published_at desc limit coalesce(nullif($4,'')::int, 20)",
         "options": {
-          "queryReplacement": "={{ $json.since || '' }},{{ $json.min_relevance || '' }},{{ $json.tag || '' }},{{ $json.limit || '' }},{{ $json.min_score || '' }},{{ $json.max_age_days || '' }}"
+          "queryReplacement": "={{ $json.since || '' }},{{ $json.min_relevance || '' }},{{ $json.tag || '' }},{{ $json.limit || '' }},{{ $json.min_score || '' }},{{ $json.max_age_days || '' }},{{ $json.group_stories || '' }}"
         }
       },
       "id": "select",
       "name": "Select feed",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.4,
-      "position": [220, 0],
+      "position": [
+        220,
+        0
+      ],
       "credentials": {
-        "postgres": { "id": "tzBuhu9KEXlaRRfW", "name": "Postgres account" }
+        "postgres": {
+          "id": "tzBuhu9KEXlaRRfW",
+          "name": "Postgres account"
+        }
       },
       "executeOnce": true,
       "alwaysOutputData": true
@@ -42,18 +73,44 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const rows = $input.all().map(i => i.json).filter(j => j && j.id);\nif (!rows.length) return [{ json: { count: 0, items: [], note: 'no feed items matched the filters' } }];\nreturn [{ json: { count: rows.length, items: rows } }];"
+        "jsCode": "const rows = $input.all().map(i => i.json).filter(j => j && (j.canonical_url || j.id));\nif (!rows.length) return [{ json: { count: 0, items: [], note: 'no feed items matched the filters' } }];\nconst grouped = rows.some(r => Number(r.articles) > 1);\nreturn [{ json: { count: rows.length, grouped_by_story: Boolean($('WF Input').first().json.group_stories), items: rows, note: grouped ? 'articles > 1 means several outlets covered the same story' : undefined } }];"
       },
       "id": "shape",
       "name": "Shape result",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [440, 0]
+      "position": [
+        440,
+        0
+      ]
     }
   ],
   "connections": {
-    "WF Input": { "main": [[{ "node": "Select feed", "type": "main", "index": 0 }]] },
-    "Select feed": { "main": [[{ "node": "Shape result", "type": "main", "index": 0 }]] }
+    "WF Input": {
+      "main": [
+        [
+          {
+            "node": "Select feed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select feed": {
+      "main": [
+        [
+          {
+            "node": "Shape result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
   },
-  "settings": { "executionOrder": "v1", "errorWorkflow": "PNJMA4NbQGmp1xKv" }
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "PNJMA4NbQGmp1xKv"
+  }
 }

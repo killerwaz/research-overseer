@@ -6,7 +6,10 @@
 //
 // No URL/URLSearchParams — the n8n task-runner sandbox has neither.
 
-const STRIP = /^(utm_.*|fbclid|gclid|ref|source|mc_cid|mc_eid|igshid)$/i;
+// `src` joins the list for the same reason as `source`: it is overwhelmingly a
+// referrer tag (?src=twitter), and leaving it in split one page into two feed
+// items during testing.
+const STRIP = /^(utm_.*|fbclid|gclid|ref|source|src|mc_cid|mc_eid|igshid)$/i;
 
 function canon(rawUrl) {
   try {
