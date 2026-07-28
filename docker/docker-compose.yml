@@ -1,12 +1,12 @@
-# The Scout's two containers. n8n and Crawl4AI share the user-defined network
-# "scout" (n8n reaches Crawl4AI as http://crawl4ai:11235). LM Studio runs
+# Research Overseer's two containers. n8n and Crawl4AI share the user-defined network
+# "overseer" (n8n reaches Crawl4AI as http://crawl4ai:11235). LM Studio runs
 # natively on the host and is reached as http://host.docker.internal:1234 —
 # it is NOT a container, see README.
 #
 # The volume and network are external so this file can adopt an existing
 # installation without recreating anything. Fresh machine, one-time:
 #   docker volume create n8n_data
-#   docker network create scout
+#   docker network create overseer
 # Then, from the repo root:
 #   docker compose -f docker/docker-compose.yml --env-file .env up -d
 #
@@ -30,7 +30,7 @@ services:
     volumes:
       - n8n_data:/home/node/.n8n
     networks:
-      - scout
+      - overseer
 
   crawl4ai:
     image: unclecode/crawl4ai:latest
@@ -46,12 +46,12 @@ services:
       # Overrides the image default, which binds 127.0.0.1 only.
       - ./crawl4ai.config.yml:/app/config.yml
     networks:
-      - scout
+      - overseer
 
 volumes:
   n8n_data:
     external: true
 
 networks:
-  scout:
+  overseer:
     external: true

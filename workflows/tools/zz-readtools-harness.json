@@ -1,10 +1,10 @@
 {
-  "name": "ZZ scout-readtools-harness (build tool)",
+  "name": "ZZ overseer-readtools-harness (build tool)",
   "nodes": [
     {
       "parameters": {
         "httpMethod": "POST",
-        "path": "scout-readtools-harness-__ZZ_SECRET__",
+        "path": "overseer-readtools-harness-__ZZ_SECRET__",
         "responseMode": "lastNode",
         "options": {}
       },

@@ -7,8 +7,8 @@ const path = require('path');
 const env = fs.readFileSync(path.join(__dirname, '..', '.env'), 'utf8');
 const SECRET = (env.match(/^ZZ_WEBHOOK_SECRET=(.+)$/m) || [])[1];
 if (!SECRET) throw new Error('ZZ_WEBHOOK_SECRET not in .env');
-const ROUTER = `http://localhost:5678/webhook/scout-router-test-${SECRET}`;
-const SQL = `http://localhost:5678/webhook/scout-sql-runner-${SECRET}`;
+const ROUTER = `http://localhost:5678/webhook/overseer-router-test-${SECRET}`;
+const SQL = `http://localhost:5678/webhook/overseer-sql-runner-${SECRET}`;
 
 async function maxRun() {
   const r = await fetch(SQL, { method: 'POST', headers: { 'Content-Type': 'application/json' },

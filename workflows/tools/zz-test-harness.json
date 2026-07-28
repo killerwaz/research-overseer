@@ -1,10 +1,10 @@
 {
-  "name": "ZZ scout-test-harness (build tool)",
+  "name": "ZZ overseer-test-harness (build tool)",
   "nodes": [
     {
       "parameters": {
         "httpMethod": "POST",
-        "path": "scout-test-harness-__ZZ_SECRET__",
+        "path": "overseer-test-harness-__ZZ_SECRET__",
         "responseMode": "lastNode",
         "options": {}
       },
