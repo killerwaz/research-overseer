@@ -6,3 +6,6 @@ node_modules/
 # Prompt rationale docs — historical reasoning, kept locally, not published
 shared/triage-prompt.md
 shared/triage-prompt-v2.md
+
+# Personal handoff doc — working notes, kept local
+CLAUDE.md
