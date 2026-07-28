@@ -1,0 +1,35 @@
+{
+  "_note": "Instance-local n8n IDs. These are references into ONE n8n instance, not secrets. A fresh clone replaces every value after creating its own credentials and importing the workflows — see README 'From scratch'.",
+  "credentials": {
+    "postgres":   { "id": "tzBuhu9KEXlaRRfW", "name": "Postgres account" },
+    "crawl4ai":   { "id": "avVVOMOhNmIhsK5n", "name": "crawl4ai-bearer" },
+    "lmstudio":   { "id": "JsTIc0R9trd31PsV", "name": "lmstudio-bearer" },
+    "firecrawl":  { "id": "J7cbHkpEdHeUIhif", "name": "firecrawl-api" },
+    "telegram":   { "id": "6RLwMp4ODoesGE4v", "name": "telegram-scout-bot" },
+    "openrouter": { "id": "CZJ5Mo20Hr8BNBxG", "name": "openrouter-api" }
+  },
+  "workflows": {
+    "wf00-agent-router": "VQha8UiuOesJYa11",
+    "wf10-exa": "AM0WjOKXpIemAzT6",
+    "wf11-tavily": "SujItqZD8LGV034c",
+    "wf12-brave": "8whU7voTeLMySR6l",
+    "wf13-rss": "HCnDeMk2Gkr1cut5",
+    "wf20-process-urls": "NXWu2wqU6ifrFIpd",
+    "wf21-triage-one": "HISagmvZYi6O7N5u",
+    "wf30-poller": "t8DQwXOuuHllDgJi",
+    "wf31-query-feed": "VaA4YM6N4ni7F6CB",
+    "wf32-run-status": "Ni3bddpEPN91ISg2",
+    "wf33-manage-schedule": "GiJSUs1kqil1jtsp",
+    "wf34-manage-sources": "qAGxheHskgw3Ki9A",
+    "wf40-full-sweep": "du4KagpWdi5AT84v",
+    "wf41-run-discovery": "ccdGJn47aX7PHBti",
+    "wf42-scrape-url": "fzgIhUYkPOaSdCUu",
+    "wf99-error-workflow": "PNJMA4NbQGmp1xKv",
+    "tools/zz-sql-runner": "8j9wepeJJdgAGiDQ",
+    "tools/zz-test-harness": "P1AzZsL482pg0euG",
+    "tools/zz-discovery-harness": "dOyiLquHV7UBQE2o",
+    "tools/zz-schedule-harness": "3HUQn7IyUhZ4c5tq",
+    "tools/zz-readtools-harness": "YWch3b8obeWYoofz",
+    "tools/zz-sources-harness": "JuvuePEMXnYyFPx6"
+  }
+}

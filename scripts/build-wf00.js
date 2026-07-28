@@ -10,19 +10,22 @@ const path = require('path');
 const inline = (f) => fs.readFileSync(path.join(__dirname, '..', 'shared', f), 'utf8')
   .replace(/module\.exports[\s\S]*$/, '');
 
-const CRED_PG = { id: 'tzBuhu9KEXlaRRfW', name: 'Postgres account' };
-const CRED_OR = { id: 'CZJ5Mo20Hr8BNBxG', name: 'openrouter-api' };
-const CRED_TG = { id: '6RLwMp4ODoesGE4v', name: 'telegram-scout-bot' };
+// Instance-local ids live in instance.json; personal values (chat id, webhook
+// secret) stay out of the committed JSON entirely — deploy.js substitutes them.
+const I = require('./instance.json');
+const CRED_PG = I.credentials.postgres;
+const CRED_OR = I.credentials.openrouter;
+const CRED_TG = I.credentials.telegram;
 const CHAT_ID = '__TG_CHAT__';
 
 const WF = {
-  run_discovery: 'ccdGJn47aX7PHBti',
-  full_sweep: 'du4KagpWdi5AT84v',
-  scrape_url: 'fzgIhUYkPOaSdCUu',
-  query_feed: 'VaA4YM6N4ni7F6CB',
-  run_status: 'Ni3bddpEPN91ISg2',
-  manage_schedule: 'GiJSUs1kqil1jtsp',
-  manage_sources: 'qAGxheHskgw3Ki9A'
+  run_discovery: I.workflows['wf41-run-discovery'],
+  full_sweep: I.workflows['wf40-full-sweep'],
+  scrape_url: I.workflows['wf42-scrape-url'],
+  query_feed: I.workflows['wf31-query-feed'],
+  run_status: I.workflows['wf32-run-status'],
+  manage_schedule: I.workflows['wf33-manage-schedule'],
+  manage_sources: I.workflows['wf34-manage-sources']
 };
 
 const SYSTEM = `=You are The Scout's dispatcher on Telegram. Route requests to tools; never do research yourself; never fabricate results or data — if a tool returns nothing, say so.
@@ -280,12 +283,9 @@ const repoOut = path.join(__dirname, '..', 'workflows', 'wf00-agent-router.json'
 fs.writeFileSync(repoOut, JSON.stringify(workflow, null, 2));
 console.log('wrote', repoOut);
 
-const deployDir = process.argv[2];
-if (deployDir) {
-  const env = fs.readFileSync(path.join(__dirname, '..', '.env'), 'utf8');
-  const token = (env.match(/^TELEGRAM_BOT_TOKEN=(.+)$/m) || [])[1];
-  if (!token) throw new Error('TELEGRAM_BOT_TOKEN not in .env');
-  const deployOut = path.join(deployDir, 'wf00-deploy.json');
-  fs.writeFileSync(deployOut, JSON.stringify(workflow).replaceAll('__TG_TOKEN__', token));
-  console.log('wrote', deployOut);
+// The old `build-wf00.js <dir>` deploy-copy flow is superseded by
+// scripts/deploy.js, which substitutes every placeholder from .env and PUTs.
+if (process.argv[2]) {
+  console.error('deploy copies are gone — run: node scripts/deploy.js wf00-agent-router');
+  process.exit(1);
 }

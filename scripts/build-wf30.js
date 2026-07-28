@@ -3,11 +3,14 @@
 const fs = require('fs');
 const path = require('path');
 
-const CRED_PG = { id: 'tzBuhu9KEXlaRRfW', name: 'Postgres account' };
-const CRED_TG = { id: '6RLwMp4ODoesGE4v', name: 'telegram-scout-bot' };
-const CRED_LM = { id: 'JsTIc0R9trd31PsV', name: 'lmstudio-bearer' };
+// Instance-local ids live in instance.json; chat id and WF-40 id are
+// substituted at deploy time by scripts/deploy.js.
+const I = require('./instance.json');
+const CRED_PG = I.credentials.postgres;
+const CRED_TG = I.credentials.telegram;
+const CRED_LM = I.credentials.lmstudio;
 const WF40_ID = '__WF40_ID__'; // substituted at deploy time
-const WF21_ID = 'HISagmvZYi6O7N5u'; // triage_one
+const WF21_ID = I.workflows['wf21-triage-one'];
 const CHAT_ID = '__TG_CHAT__';
 
 const { TRIAGE_SYSTEM, TRIAGE_SCHEMA, TRIAGE_MODEL } = require('../shared/triage-config.js');
