@@ -3,14 +3,17 @@
 const fs = require('fs');
 const path = require('path');
 
-const CRED_PG = { id: 'tzBuhu9KEXlaRRfW', name: 'Postgres account' };
-const CRED_CRAWL = { id: 'avVVOMOhNmIhsK5n', name: 'crawl4ai-bearer' };
-const CRED_LM = { id: 'JsTIc0R9trd31PsV', name: 'lmstudio-bearer' };
-const CRED_FC = { id: 'J7cbHkpEdHeUIhif', name: 'firecrawl-api' };
-// WF-21 triage_one — set after first deploy; per-item Execute Workflow calls run
-// sequentially, which serializes LM Studio traffic without a SplitInBatches loop
-// (that loop silently skipped items when scrape branches produced multiple batches).
-const WF21_ID = 'HISagmvZYi6O7N5u';
+// Instance-local ids live in instance.json; the chat id is substituted at
+// deploy time by scripts/deploy.js so it never lands in committed JSON.
+const I = require('./instance.json');
+const CRED_PG = I.credentials.postgres;
+const CRED_CRAWL = I.credentials.crawl4ai;
+const CRED_LM = I.credentials.lmstudio;
+const CRED_FC = I.credentials.firecrawl;
+// WF-21 triage_one — per-item Execute Workflow calls run sequentially, which
+// serializes LM Studio traffic without a SplitInBatches loop (that loop
+// silently skipped items when scrape branches produced multiple batches).
+const WF21_ID = I.workflows['wf21-triage-one'];
 
 // Pure functions are inlined from shared/ rather than duplicated here, so the
 // committed tests exercise exactly the code that ships into the n8n nodes.
@@ -345,7 +348,7 @@ return [{ json: { text } }];
       chatId: '__TG_CHAT__',
       text: '={{ $json.text }}',
       additionalFields: { appendAttribution: false, parse_mode: 'HTML' } },
-    credentials: { telegramApi: { id: '6RLwMp4ODoesGE4v', name: 'telegram-scout-bot' } },
+    credentials: { telegramApi: I.credentials.telegram },
     onError: 'continueRegularOutput' },
 
   codeNode('Return summary', 'retsummary', [4400, 0], 'runOnceForAllItems',

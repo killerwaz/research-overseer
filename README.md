@@ -1,30 +1,69 @@
-# The Scout — Research Overseer, Step 2
+# The Scout
 
-Telegram-driven research discovery pipeline on n8n + Supabase + Crawl4AI + Ollama.
-Spec: `Obsidian Vault/Research Agentic Architecture Summary/the-scout-build-spec.md`.
+Telegram-driven research discovery pipeline: a bot that searches (Exa, Tavily,
+Brave), watches RSS, scrapes (Crawl4AI, Firecrawl fallback), triages every
+document with a local LLM against a defined beat, stores the results in
+Postgres, and answers questions about what it found.
 
-## Layout
+Runs on self-hosted **n8n**, with **LM Studio** serving the triage model
+locally (`qwen/qwen3.5-9b`) and **Supabase** Postgres as the store. One
+Telegram chat is the entire UI.
 
-- `sql/` — Supabase DDL, numbered migrations. `001_init.sql` = spec §4.
-- `workflows/` — exported n8n workflow JSON, committed after each phase passes (spec §0).
-- `shared/` — Code-node sources and prompts referenced by workflows
-  (`canonicalize.js` = WF-20 canonicalizer, `triage-prompt.md` = Qwen triage).
-- `.mcp.json` — n8n-mcp server for Claude Code (needs `N8N_API_KEY` env var).
+## How this repo works
 
-## Build phases (spec §6)
+**Workflows are generated, not hand-edited.** `scripts/build-wf*.js` emit the
+JSON in `workflows/`; editing a workflow in the n8n UI gets overwritten on the
+next build. Pure logic lives in `shared/` and is inlined into Code nodes at
+build time — which is what makes the test suite meaningful: the tests exercise
+the code that actually ships inside n8n.
 
-1. WF-20 shared tail + DDL + WF-99 error workflow
-2. WF-10 Exa discovery
-3. WF-11..13 (Tavily, Brave, RSS) + direct scrape
-4. Read tools (query_feed, run_status)
-5. Scheduling (schedules CRUD + WF-30 poller)
-6. WF-00 agent router (Telegram, Claude Haiku)
+Committed workflow JSON carries no live values. Personal/instance values are
+placeholders (`__TG_TOKEN__`, `__TG_CHAT__`, `__ZZ_SECRET__`, `__WF40_ID__`)
+substituted at deploy time by `scripts/deploy.js` from `.env` and
+`scripts/instance.json`.
 
-## Services
+```
+sql/        numbered Supabase migrations, apply in order
+shared/     pure logic + triage prompt config, inlined into nodes at build
+scripts/    build-wf*.js (generators), deploy.js, instance.json (n8n ids)
+workflows/  generated + hand-maintained n8n JSON; tools/ = ZZ test harnesses
+tests/      node:test suite, no deps  (npm test — runs in ~100ms)
+docker/     docker-compose.yml + Crawl4AI config override
+```
 
-| Service | Where | Port |
-|---|---|---|
-| n8n | Docker `n8n` | 5678 |
-| Crawl4AI | Docker `crawl4ai` | 11235 |
-| LM Studio (replaces Ollama; model `qwen/qwen3.5-9b`) | native Windows, auth enabled | 1234 |
-| Postgres | Supabase cloud | pooler |
+## Everyday commands
+
+```bash
+npm test                                   # run before every deploy
+npm run build                              # regenerate workflows/ from scripts/
+node scripts/deploy.js wf20-process-urls   # deploy one workflow
+node scripts/deploy.js --all               # deploy everything
+```
+
+## From scratch
+
+1. **Containers** — one-time: `docker volume create n8n_data`,
+   `docker network create scout`, then
+   `docker compose -f docker/docker-compose.yml --env-file .env up -d`.
+2. **LM Studio** — native install (not a container), enable the server with
+   auth, then `lms server start && lms load qwen/qwen3.5-9b -y`. Needs ~7 GB
+   VRAM; auto-unloads after idle.
+3. **Database** — create a Supabase project, run `sql/001..009` in order.
+4. **Secrets** — copy `.env.example` to `.env` and fill it (n8n API key,
+   Telegram bot token + chat id, search API keys, webhook suffix).
+5. **n8n credentials** — create Postgres, Telegram, OpenRouter, Crawl4AI
+   bearer, LM Studio bearer, and Firecrawl credentials in the n8n UI, then put
+   their ids in `scripts/instance.json`.
+6. **Workflows** — import the JSON from `workflows/` (or create empty
+   workflows and note their ids), fill the ids into `scripts/instance.json`,
+   then `node scripts/deploy.js --all`. Publish everything — the error
+   workflow (WF-99) must stay published or it never fires.
+
+Inbound Telegram uses **getUpdates polling** — no public URL, no tunnel. Keep
+it that way: the ZZ helper webhooks (SQL runner, test harnesses) authenticate
+by path suffix only and must never be internet-reachable.
+
+## Operational notes
+
+The real operating manual — gotchas, measured triage behaviour, data model,
+recovery steps — is `CLAUDE.md`. Start there before changing anything.

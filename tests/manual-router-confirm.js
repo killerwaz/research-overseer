@@ -1,7 +1,14 @@
 // Does each phrasing take the right path? Watches runs.max_id to tell whether
 // a search actually started, rather than trusting the reply text.
-const ROUTER = 'http://localhost:5678/webhook/scout-router-test-__ZZ_SECRET__';
-const SQL = 'http://localhost:5678/webhook/scout-sql-runner-__ZZ_SECRET__';
+// Webhook suffix comes from .env (ZZ_WEBHOOK_SECRET) — the paths carry no
+// other auth, so the live suffix stays out of committed files.
+const fs = require('fs');
+const path = require('path');
+const env = fs.readFileSync(path.join(__dirname, '..', '.env'), 'utf8');
+const SECRET = (env.match(/^ZZ_WEBHOOK_SECRET=(.+)$/m) || [])[1];
+if (!SECRET) throw new Error('ZZ_WEBHOOK_SECRET not in .env');
+const ROUTER = `http://localhost:5678/webhook/scout-router-test-${SECRET}`;
+const SQL = `http://localhost:5678/webhook/scout-sql-runner-${SECRET}`;
 
 async function maxRun() {
   const r = await fetch(SQL, { method: 'POST', headers: { 'Content-Type': 'application/json' },
