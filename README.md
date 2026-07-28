@@ -18,9 +18,11 @@ build time — which is what makes the test suite meaningful: the tests exercise
 the code that actually ships inside n8n.
 
 Committed workflow JSON carries no live values. Personal/instance values are
-placeholders (`__TG_TOKEN__`, `__TG_CHAT__`, `__ZZ_SECRET__`, `__WF40_ID__`)
-substituted at deploy time by `scripts/deploy.js` from `.env` and
-`scripts/instance.json`.
+placeholders (`__TG_TOKEN__`, `__TG_CHAT__`, `__ZZ_SECRET__`, `__WF40_ID__`,
+`__BEAT__`) substituted at deploy time by `scripts/deploy.js` from `.env`,
+`scripts/instance.json`, and `beat.md`. The beat — the editorial definition of
+what the triage model scores against — is deliberately untracked: copy
+`beat.example.md` to `beat.md` and write your own.
 
 ```
 sql/        numbered Supabase migrations, apply in order
@@ -49,8 +51,10 @@ node scripts/deploy.js --all               # deploy everything
    auth, then `lms server start && lms load qwen/qwen3.5-9b -y`. Needs ~7 GB
    VRAM; auto-unloads after idle.
 3. **Database** — create a Supabase project, run `sql/001..009` in order.
-4. **Secrets** — copy `.env.example` to `.env` and fill it (n8n API key,
-   Telegram bot token + chat id, search API keys, webhook suffix).
+4. **Secrets and beat** — copy `.env.example` to `.env` and fill it (n8n API
+   key, Telegram bot token + chat id, search API keys, webhook suffix); copy
+   `beat.example.md` to `beat.md` and write the beat you want articles scored
+   against.
 5. **n8n credentials** — create Postgres, Telegram, OpenRouter, Crawl4AI
    bearer, LM Studio bearer, and Firecrawl credentials in the n8n UI, then put
    their ids in `scripts/instance.json`.

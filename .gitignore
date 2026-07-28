@@ -1,3 +1,4 @@
 .env
+beat.md
 .claude/settings.local.json
 node_modules/

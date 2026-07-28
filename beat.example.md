@@ -1,0 +1,1 @@
+Developer tooling and its economics; open-source infrastructure adoption in emerging markets; database startups and their funding; the engineering practice of building and operating data pipelines; and software supply-chain policy (regulation, disclosure rules, enforcement).
