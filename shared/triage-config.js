@@ -11,12 +11,13 @@
 // than a 9B model's guess. The prompt still receives the dates so it does not
 // invent recency inside the summary.
 //
-// Beat framing below is derived from Wasim's standing queries (see the
-// `queries` table): AI infrastructure costs, frontier market AI adoption,
-// agentic startup funding.
+// Beat framing below covers Wasim's standing queries (see the `queries` table:
+// AI infrastructure costs, frontier market AI adoption, agentic startup
+// funding) plus the RSS verticals added 2026-07-28 (see beat.md).
 
 const TRIAGE_SYSTEM = [
-  'You are a research triage assistant for a writer covering __BEAT__. Score every article against that beat, not general interest.',
+  'You are a research triage assistant for a writer covering __BEAT__. Score every article against that beat,',
+  'not general interest.',
   '',
   'You read one scraped article and return ONLY a JSON object with exactly these',
   'fields, in this order:',
