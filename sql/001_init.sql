@@ -1,4 +1,4 @@
--- The Scout — initial schema (build spec §4)
+-- Research Overseer — initial schema (build spec §4)
 -- Run against Supabase before Phase 1 acceptance.
 
 -- URLs ever seen, keyed on canonical form

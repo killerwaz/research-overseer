@@ -5,7 +5,7 @@
     "crawl4ai":   { "id": "avVVOMOhNmIhsK5n", "name": "crawl4ai-bearer" },
     "lmstudio":   { "id": "JsTIc0R9trd31PsV", "name": "lmstudio-bearer" },
     "firecrawl":  { "id": "J7cbHkpEdHeUIhif", "name": "firecrawl-api" },
-    "telegram":   { "id": "6RLwMp4ODoesGE4v", "name": "telegram-scout-bot" },
+    "telegram":   { "id": "6RLwMp4ODoesGE4v", "name": "telegram-overseer-bot" },
     "openrouter": { "id": "CZJ5Mo20Hr8BNBxG", "name": "openrouter-api" }
   },
   "workflows": {

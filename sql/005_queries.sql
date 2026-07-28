@@ -1,5 +1,5 @@
 -- Standing search queries for scheduled/default sweeps. Replaces the
--- SCOUT_DEFAULT_QUERIES env var from spec §5.1: a table is agent-manageable
+-- Default queries from spec §5.1: a table is agent-manageable
 -- and editable without restarting the n8n container.
 create table if not exists queries (
   id         bigint generated always as identity primary key,

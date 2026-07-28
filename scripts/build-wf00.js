@@ -28,7 +28,7 @@ const WF = {
   manage_sources: I.workflows['wf34-manage-sources']
 };
 
-const SYSTEM = `=You are The Scout's dispatcher on Telegram. Route requests to tools; never do research yourself; never fabricate results or data — if a tool returns nothing, say so.
+const SYSTEM = `=You are Research Overseer's dispatcher on Telegram. Route requests to tools; never do research yourself; never fabricate results or data — if a tool returns nothing, say so.
 
 Rules:
 1. Free and instant actions run immediately, no confirmation: a pasted URL -> scrape_url; status questions -> run_status; reading existing findings -> query_feed; 'anything new today' -> run_discovery with source rss. These touch nothing that costs money.
@@ -112,7 +112,7 @@ return out;`.trim() } },
 
   // ZZ test entry — same agent, returns the reply in the webhook response
   { id: 'testwh', name: 'Test webhook', type: 'n8n-nodes-base.webhook', typeVersion: 2, position: [720, 200],
-    parameters: { httpMethod: 'POST', path: 'scout-router-test-__ZZ_SECRET__', responseMode: 'lastNode', options: {} } },
+    parameters: { httpMethod: 'POST', path: 'overseer-router-test-__ZZ_SECRET__', responseMode: 'lastNode', options: {} } },
 
   { id: 'testnorm', name: 'Test normalize', type: 'n8n-nodes-base.code', typeVersion: 2, position: [900, 200],
     parameters: { mode: 'runOnceForAllItems', jsCode: `
@@ -156,7 +156,7 @@ try { chat_id = $('Record update').first().json.chat_id || chat_id; } catch (e) 
 return [{ json: { chat_id, output: text } }];
 `.trim() } },
 
-  { id: 'agent', name: 'Scout Agent', type: '@n8n/n8n-nodes-langchain.agent', typeVersion: 3.1, position: [1120, 100],
+  { id: 'agent', name: 'Overseer Agent', type: '@n8n/n8n-nodes-langchain.agent', typeVersion: 3.1, position: [1120, 100],
     parameters: { promptType: 'define', text: '={{ $json.text }}',
       options: { systemMessage: SYSTEM, maxIterations: 6 } } },
 
@@ -259,20 +259,20 @@ const connections = {
   'Test normalize': { main: [[{ node: 'Feed switch?', type: 'main', index: 0 }]] },
   'Feed switch?': { main: [
     [{ node: 'Toggle drain', type: 'main', index: 0 }],
-    [{ node: 'Scout Agent', type: 'main', index: 0 }]
+    [{ node: 'Overseer Agent', type: 'main', index: 0 }]
   ] },
   'Toggle drain': { main: [[{ node: 'Switch reply', type: 'main', index: 0 }]] },
   'Switch reply': { main: [[{ node: 'Send reply', type: 'main', index: 0 }]] },
-  'OpenRouter Haiku': { ai_languageModel: [[{ node: 'Scout Agent', type: 'ai_languageModel', index: 0 }]] },
-  'Chat memory': { ai_memory: [[{ node: 'Scout Agent', type: 'ai_memory', index: 0 }]] },
-  'run_discovery': { ai_tool: [[{ node: 'Scout Agent', type: 'ai_tool', index: 0 }]] },
-  'full_sweep': { ai_tool: [[{ node: 'Scout Agent', type: 'ai_tool', index: 0 }]] },
-  'scrape_url': { ai_tool: [[{ node: 'Scout Agent', type: 'ai_tool', index: 0 }]] },
-  'query_feed': { ai_tool: [[{ node: 'Scout Agent', type: 'ai_tool', index: 0 }]] },
-  'run_status': { ai_tool: [[{ node: 'Scout Agent', type: 'ai_tool', index: 0 }]] },
-  'manage_schedule': { ai_tool: [[{ node: 'Scout Agent', type: 'ai_tool', index: 0 }]] },
-  'manage_sources': { ai_tool: [[{ node: 'Scout Agent', type: 'ai_tool', index: 0 }]] },
-  'Scout Agent': { main: [[{ node: 'Prep reply', type: 'main', index: 0 }]] },
+  'OpenRouter Haiku': { ai_languageModel: [[{ node: 'Overseer Agent', type: 'ai_languageModel', index: 0 }]] },
+  'Chat memory': { ai_memory: [[{ node: 'Overseer Agent', type: 'ai_memory', index: 0 }]] },
+  'run_discovery': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }]] },
+  'full_sweep': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }]] },
+  'scrape_url': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }]] },
+  'query_feed': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }]] },
+  'run_status': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }]] },
+  'manage_schedule': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }]] },
+  'manage_sources': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }]] },
+  'Overseer Agent': { main: [[{ node: 'Prep reply', type: 'main', index: 0 }]] },
   'Prep reply': { main: [[{ node: 'Send reply', type: 'main', index: 0 }]] }
 };
 

@@ -1,6 +1,6 @@
 -- Small key/value store for user-toggled runtime switches.
 -- drain_enabled: whether the WF-30 poller may re-triage backlog documents.
--- Default OFF — the Scout asks before spending GPU time on cleanup.
+-- Default OFF — Research Overseer asks before spending GPU time on cleanup.
 create table if not exists settings (
   key        text primary key,
   value      text not null,

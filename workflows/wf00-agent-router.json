@@ -152,7 +152,7 @@
       ],
       "parameters": {
         "httpMethod": "POST",
-        "path": "scout-router-test-__ZZ_SECRET__",
+        "path": "overseer-router-test-__ZZ_SECRET__",
         "responseMode": "lastNode",
         "options": {}
       }
@@ -242,7 +242,7 @@
     },
     {
       "id": "agent",
-      "name": "Scout Agent",
+      "name": "Overseer Agent",
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 3.1,
       "position": [
@@ -253,7 +253,7 @@
         "promptType": "define",
         "text": "={{ $json.text }}",
         "options": {
-          "systemMessage": "=You are The Scout's dispatcher on Telegram. Route requests to tools; never do research yourself; never fabricate results or data — if a tool returns nothing, say so.\n\nRules:\n1. Free and instant actions run immediately, no confirmation: a pasted URL -> scrape_url; status questions -> run_status; reading existing findings -> query_feed; 'anything new today' -> run_discovery with source rss. These touch nothing that costs money.\n2. Anything that starts a web search costs money and about six minutes, so it needs the user's word first. Run it immediately ONLY if they used an explicit search verb (search, find me, look up, go get, dig into). If they merely asked a question — 'what's happening with X', 'anything on X', 'how is X going' — reply with a one-line proposal naming the source and query, then STOP and wait. Execute on their next message if they say yes. full_sweep always needs confirmation.\n3. Retrospective questions are ALWAYS query_feed or run_status, and this OVERRIDES everything else even when a topic is named. Retrospective phrasing includes: catch me up, what did you find, what's new, anything good, show me, what did I miss, brief me, recap. \"Catch me up on funding this week\" is query_feed with max_age_days 7 — NOT a search, and NOT a confirmation prompt either; just read the feed and answer.\n3b. Before reporting that little or nothing was found, consider whether your own filters caused it: a near-empty result after you passed a tag is far more likely a bad filter than an empty feed. Retry query_feed once without the tag before telling the user there is nothing — and never answer a thin result by starting a search instead. If the question names a time ('today', 'last night', 'this week'), compute the ISO timestamp for the start of that window from the current time below and pass it to query_feed as the since parameter. Never answer a time-scoped question from an unfiltered read.\n4. When uncertain between search sources, fail WIDE: prefer full_sweep (with confirmation) or brave. Never guess narrow.\n4b. Call at most ONE discovery tool per user request, ever. After full_sweep or run_discovery returns, summarize what it returned and stop. If it found little, say so — do NOT run it again with different wording. Each run costs money and minutes.\n5. manage_schedule: parse natural language into cron, timezone Asia/Dhaka (UTC+6). 'every day at 8am' -> cron '0 8 * * *' via action create_recurring. Relative one-times ('in 3 hours') -> action create_onetime with an ISO timestamp you compute from the current time below. If phrasing is ambiguous ('tomorrow morning'), ask ONE clarifying question. Always echo the parsed schedule back and get a yes before creating. Other actions: cancel (needs id), list.\n6. manage_sources actions: add (url, optional label), remove (id or url), list.\n7. Reply tersely — this is Telegram. Plain text, no markdown formatting.\n\nCurrent time: {{ $now.setZone('Asia/Dhaka').toFormat('cccc yyyy-MM-dd HH:mm') }} (Asia/Dhaka, UTC+6). This is the local date and time — use it directly, do not convert it.",
+          "systemMessage": "=You are Research Overseer's dispatcher on Telegram. Route requests to tools; never do research yourself; never fabricate results or data — if a tool returns nothing, say so.\n\nRules:\n1. Free and instant actions run immediately, no confirmation: a pasted URL -> scrape_url; status questions -> run_status; reading existing findings -> query_feed; 'anything new today' -> run_discovery with source rss. These touch nothing that costs money.\n2. Anything that starts a web search costs money and about six minutes, so it needs the user's word first. Run it immediately ONLY if they used an explicit search verb (search, find me, look up, go get, dig into). If they merely asked a question — 'what's happening with X', 'anything on X', 'how is X going' — reply with a one-line proposal naming the source and query, then STOP and wait. Execute on their next message if they say yes. full_sweep always needs confirmation.\n3. Retrospective questions are ALWAYS query_feed or run_status, and this OVERRIDES everything else even when a topic is named. Retrospective phrasing includes: catch me up, what did you find, what's new, anything good, show me, what did I miss, brief me, recap. \"Catch me up on funding this week\" is query_feed with max_age_days 7 — NOT a search, and NOT a confirmation prompt either; just read the feed and answer.\n3b. Before reporting that little or nothing was found, consider whether your own filters caused it: a near-empty result after you passed a tag is far more likely a bad filter than an empty feed. Retry query_feed once without the tag before telling the user there is nothing — and never answer a thin result by starting a search instead. If the question names a time ('today', 'last night', 'this week'), compute the ISO timestamp for the start of that window from the current time below and pass it to query_feed as the since parameter. Never answer a time-scoped question from an unfiltered read.\n4. When uncertain between search sources, fail WIDE: prefer full_sweep (with confirmation) or brave. Never guess narrow.\n4b. Call at most ONE discovery tool per user request, ever. After full_sweep or run_discovery returns, summarize what it returned and stop. If it found little, say so — do NOT run it again with different wording. Each run costs money and minutes.\n5. manage_schedule: parse natural language into cron, timezone Asia/Dhaka (UTC+6). 'every day at 8am' -> cron '0 8 * * *' via action create_recurring. Relative one-times ('in 3 hours') -> action create_onetime with an ISO timestamp you compute from the current time below. If phrasing is ambiguous ('tomorrow morning'), ask ONE clarifying question. Always echo the parsed schedule back and get a yes before creating. Other actions: cancel (needs id), list.\n6. manage_sources actions: add (url, optional label), remove (id or url), list.\n7. Reply tersely — this is Telegram. Plain text, no markdown formatting.\n\nCurrent time: {{ $now.setZone('Asia/Dhaka').toFormat('cccc yyyy-MM-dd HH:mm') }} (Asia/Dhaka, UTC+6). This is the local date and time — use it directly, do not convert it.",
           "maxIterations": 6
         }
       }
@@ -757,7 +757,7 @@
       "credentials": {
         "telegramApi": {
           "id": "6RLwMp4ODoesGE4v",
-          "name": "telegram-scout-bot"
+          "name": "telegram-overseer-bot"
         }
       },
       "onError": "continueRegularOutput"
@@ -864,7 +864,7 @@
         ],
         [
           {
-            "node": "Scout Agent",
+            "node": "Overseer Agent",
             "type": "main",
             "index": 0
           }
@@ -897,7 +897,7 @@
       "ai_languageModel": [
         [
           {
-            "node": "Scout Agent",
+            "node": "Overseer Agent",
             "type": "ai_languageModel",
             "index": 0
           }
@@ -908,7 +908,7 @@
       "ai_memory": [
         [
           {
-            "node": "Scout Agent",
+            "node": "Overseer Agent",
             "type": "ai_memory",
             "index": 0
           }
@@ -919,7 +919,7 @@
       "ai_tool": [
         [
           {
-            "node": "Scout Agent",
+            "node": "Overseer Agent",
             "type": "ai_tool",
             "index": 0
           }
@@ -930,7 +930,7 @@
       "ai_tool": [
         [
           {
-            "node": "Scout Agent",
+            "node": "Overseer Agent",
             "type": "ai_tool",
             "index": 0
           }
@@ -941,7 +941,7 @@
       "ai_tool": [
         [
           {
-            "node": "Scout Agent",
+            "node": "Overseer Agent",
             "type": "ai_tool",
             "index": 0
           }
@@ -952,7 +952,7 @@
       "ai_tool": [
         [
           {
-            "node": "Scout Agent",
+            "node": "Overseer Agent",
             "type": "ai_tool",
             "index": 0
           }
@@ -963,7 +963,7 @@
       "ai_tool": [
         [
           {
-            "node": "Scout Agent",
+            "node": "Overseer Agent",
             "type": "ai_tool",
             "index": 0
           }
@@ -974,7 +974,7 @@
       "ai_tool": [
         [
           {
-            "node": "Scout Agent",
+            "node": "Overseer Agent",
             "type": "ai_tool",
             "index": 0
           }
@@ -985,14 +985,14 @@
       "ai_tool": [
         [
           {
-            "node": "Scout Agent",
+            "node": "Overseer Agent",
             "type": "ai_tool",
             "index": 0
           }
         ]
       ]
     },
-    "Scout Agent": {
+    "Overseer Agent": {
       "main": [
         [
           {

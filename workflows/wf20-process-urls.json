@@ -553,7 +553,7 @@
       "credentials": {
         "telegramApi": {
           "id": "6RLwMp4ODoesGE4v",
-          "name": "telegram-scout-bot"
+          "name": "telegram-overseer-bot"
         }
       },
       "onError": "continueRegularOutput"

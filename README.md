@@ -1,4 +1,4 @@
-# The Scout
+# Research Overseer
 
 Telegram-driven research discovery pipeline: a bot that searches (Exa, Tavily,
 Brave), watches RSS, scrapes (Crawl4AI, Firecrawl fallback), triages every
@@ -45,7 +45,7 @@ node scripts/deploy.js --all               # deploy everything
 ## From scratch
 
 1. **Containers** — one-time: `docker volume create n8n_data`,
-   `docker network create scout`, then
+   `docker network create overseer`, then
    `docker compose -f docker/docker-compose.yml --env-file .env up -d`.
 2. **LM Studio** — native install (not a container), enable the server with
    auth, then `lms server start && lms load qwen/qwen3.5-9b -y`. Needs ~7 GB
