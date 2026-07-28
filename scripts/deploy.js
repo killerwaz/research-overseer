@@ -6,6 +6,7 @@
 //   __TG_CHAT__    <- .env TG_CHAT_ID             (wf00, wf20, wf30, wf99)
 //   __ZZ_SECRET__  <- .env ZZ_WEBHOOK_SECRET      (wf00 test hook, tools/*)
 //   __WF40_ID__    <- instance.json workflows     (wf30)
+//   __BEAT__       <- beat.md                     (wf20, wf30 triage prompt)
 //
 // The PUT body is {name, nodes, connections, settings} ONLY — n8n rejects the
 // full GET payload.
@@ -28,6 +29,18 @@ function loadEnv() {
   return out;
 }
 
+// The beat is substituted into both a JSON string (wf30's HTTP body) and JS
+// source inlined inside a Code node (wf20), so it must be plain prose — any
+// quote, backtick or backslash would need context-dependent escaping.
+function loadBeat() {
+  const p = path.join(ROOT, 'beat.md');
+  if (!fs.existsSync(p)) return undefined;
+  const beat = fs.readFileSync(p, 'utf8').replace(/\s+/g, ' ').trim();
+  if (!beat) throw new Error('beat.md is empty');
+  if (/['"\\`]/.test(beat)) throw new Error('beat.md must not contain quotes, backticks or backslashes');
+  return beat;
+}
+
 async function main() {
   const env = loadEnv();
   const apiKey = env.N8N_API_KEY;
@@ -37,7 +50,8 @@ async function main() {
   const subs = {
     __TG_TOKEN__: env.TELEGRAM_BOT_TOKEN,
     __TG_CHAT__: env.TG_CHAT_ID,
-    __ZZ_SECRET__: env.ZZ_WEBHOOK_SECRET
+    __ZZ_SECRET__: env.ZZ_WEBHOOK_SECRET,
+    __BEAT__: loadBeat()
   };
   // __WF31__ / __WF40_ID__ style tokens resolve to workflow ids by number.
   for (const [key, id] of Object.entries(instance.workflows)) {
@@ -58,7 +72,7 @@ async function main() {
     let body = JSON.stringify({ name: wf.name, nodes: wf.nodes, connections: wf.connections, settings: wf.settings });
     for (const [ph, val] of Object.entries(subs)) {
       if (!body.includes(ph)) continue;
-      if (!val) throw new Error(`${key} needs ${ph} but its .env value is missing`);
+      if (!val) throw new Error(`${key} needs ${ph} but no value is available (check .env; for __BEAT__, copy beat.example.md to beat.md)`);
       body = body.replaceAll(ph, val);
     }
 
