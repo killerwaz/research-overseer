@@ -2,3 +2,7 @@
 beat.md
 .claude/settings.local.json
 node_modules/
+
+# Prompt rationale docs — historical reasoning, kept locally, not published
+shared/triage-prompt.md
+shared/triage-prompt-v2.md
