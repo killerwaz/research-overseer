@@ -1,5 +1,7 @@
 ![Research Overseer — a ten-stage research pipeline, with only the triage and routing stages calling a model](docs/banner.svg)
 
+# Research Overseer
+
 A research discovery pipeline that runs on my own hardware. It searches (Exa, Tavily, Brave), watches RSS, scrapes what it finds, scores every document against a defined beat using a local 9B model, stores the results in Postgres, and answers questions about them over Telegram.
 
 Built on self-hosted [n8n](https://n8n.io), with [LM Studio](https://lmstudio.ai) serving the triage model and Supabase for storage. One Telegram chat is the entire interface.
