@@ -6,6 +6,16 @@ Built on self-hosted [n8n](https://n8n.io), with [LM Studio](https://lmstudio.ai
 
 **The repo is the source of truth.** Build scripts generate the workflow JSON, so editing a workflow in the n8n UI gets overwritten on the next build. The pure logic they inline is unit-tested.
 
+## What it looks like
+
+![Telegram reply listing a week of funding rounds, each with company, sector, investors and amount](docs/weekly-recap.png)
+
+Asking for a recap of the week. The company names, round sizes and investors are fields the triage step extracted into a `structured` column when each article was first read, so building the recap is a query over that column rather than a second pass over the articles.
+
+![Telegram reply analysing inference costs, citing token prices, memory cost share and hyperscaler capex](docs/analysis.png)
+
+Asking a question the stored feed can answer. The figures come from several separately triaged documents, pulled together at query time.
+
 ## Why I built this
 
 I read across six verticals and most of what arrives is unusable. The obvious fix is an LLM that reads everything and flags what matters. That fix failed in a specific way: ask a model "is this relevant, 1 to 5" and it answers 5. On one live query, ten of ten articles scored exactly 5. The filter discriminated nothing.
@@ -18,7 +28,7 @@ So nothing here is hand-edited in a UI. Scripts generate the workflows, and the 
 
 ## Where the model actually is
 
-Two of the ten pipeline stages call a model. The rest is code, which is what makes the behaviour reproducible and the tests meaningful.
+Two of the ten pipeline stages call a model. Everything else is code, which is why the test suite covers the parts that matter and why a rerun produces the same result.
 
 | # | Stage | Kind | Implementation |
 |---|---|---|---|
@@ -51,6 +61,10 @@ Numbers from the running system.
 
 261 documents triaged across 54 runs, 10 active RSS sources, 46 tests running in about 100ms with no dependencies.
 
+![Telegram reply listing five recent runs with per-run outcomes, one of them failed, followed by a backlog notice](docs/run-status.png)
+
+Failures stay in the ledger and stay visible. The second run there found 60 URLs and scraped none of them, because TechCrunch rate-limited the batch. The message underneath is the pipeline reporting its own backlog: pages that were saved but never triaged, drained on command.
+
 ## Limitations
 
 Wired but incomplete:
@@ -64,9 +78,9 @@ Deliberately deferred:
 - `relevance` still exists alongside the axes for comparison. It gets dropped once the axes have proven themselves over a longer run.
 - Firecrawl is wired as a scrape fallback but rarely fires. Crawl4AI handles almost everything.
 
-## How to read this repo
+## Start here
 
-About 15 minutes, in this order:
+Four files, in this order:
 
 1. `shared/triage-config.js`: the triage prompt, the response schema, and the reasoning behind both. Field order is load-bearing.
 2. `scripts/build-wf20.js`: how a workflow gets generated, and how `inline()` pastes tested source into a Code node.
@@ -107,3 +121,7 @@ The beat itself is untracked. It is the editorial definition of what the model s
 6. **Workflows.** Import from `workflows/`, put the resulting ids in `scripts/instance.json`, then `node scripts/deploy.js --all`. Publish everything: the error workflow has to stay published or it never fires.
 
 Inbound Telegram uses `getUpdates` polling, so n8n needs no public URL and no tunnel. Keep it that way. The ZZ helper webhooks authenticate by path suffix alone and must never be reachable from the internet.
+
+## Credits
+
+The stage-by-stage table is an idea borrowed from [regulated-rag](https://github.com/RZ-Logic/regulated-rag), which uses one to locate the LLM in a retrieval pipeline.
