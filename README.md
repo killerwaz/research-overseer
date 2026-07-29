@@ -1,4 +1,4 @@
-# Research Overseer
+![Research Overseer — a ten-stage research pipeline, with only the triage and routing stages calling a model](docs/banner.svg)
 
 A research discovery pipeline that runs on my own hardware. It searches (Exa, Tavily, Brave), watches RSS, scrapes what it finds, scores every document against a defined beat using a local 9B model, stores the results in Postgres, and answers questions about them over Telegram.
 

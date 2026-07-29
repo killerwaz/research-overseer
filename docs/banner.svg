@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 360" width="100%" role="img" aria-labelledby="banner-title banner-desc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif">
+  <title id="banner-title">Research Overseer</title>
+  <desc id="banner-desc">Research Overseer — a research discovery pipeline of ten stages. Discovery, canonicalization, dedupe, scrape, triage, validation, storage, recency, routing and formatting. Two of the ten stages call a model: triage on a local qwen3.5-9b, routing on Claude Haiku. The other eight are unit-tested code. Inset: of the first 175 items scored on a single 1 to 5 relevance axis, 71 percent scored exactly 5, which is why the axis was split into two.</desc>
+
+  <rect width="1280" height="360" fill="#0B0F14"/>
+
+  <rect x="80" y="64" width="44" height="3" fill="#A78BFA"/>
+
+  <text x="80" y="122" font-size="56" font-weight="500" fill="#F8FAFC" letter-spacing="-0.6">Research Overseer</text>
+
+  <text x="80" y="160" font-size="20" font-weight="400" fill="#CBD5E1" letter-spacing="0.1">Searches, scrapes and scores a research beat. Answers over Telegram.</text>
+
+  <g>
+    <text x="1200" y="67" font-size="11" font-weight="400" fill="#64748B" text-anchor="end" letter-spacing="0.3">the original 1&#8211;5 axis, 175 items</text>
+
+    <line x1="1054" y1="144.5" x2="1200" y2="144.5" stroke="#263243" stroke-width="1"/>
+
+    <g fill="#334155">
+      <rect x="1054" y="137" width="34" height="7"/>
+      <rect x="1110" y="123" width="34" height="21"/>
+    </g>
+    <rect x="1166" y="76" width="34" height="68" fill="#94A3B8"/>
+
+    <g font-size="10" font-weight="400" fill="#475569" text-anchor="middle">
+      <text x="1071" y="158">1&#8211;3</text>
+      <text x="1127" y="158">4</text>
+      <text x="1183" y="158">5</text>
+    </g>
+
+    <text x="1200" y="178" font-size="11" font-weight="400" fill="#64748B" text-anchor="end" letter-spacing="0.2">71% scored exactly 5 &#8212; so the axis was split in two</text>
+  </g>
+
+  <g stroke="#3B4A5E" stroke-width="0.75" stroke-dasharray="2 3">
+    <line x1="174"  y1="236" x2="194"  y2="236"/>
+    <line x1="288"  y1="236" x2="308"  y2="236"/>
+    <line x1="402"  y1="236" x2="422"  y2="236"/>
+    <line x1="516"  y1="236" x2="536"  y2="236"/>
+    <line x1="630"  y1="236" x2="650"  y2="236"/>
+    <line x1="744"  y1="236" x2="764"  y2="236"/>
+    <line x1="858"  y1="236" x2="878"  y2="236"/>
+    <line x1="972"  y1="236" x2="992"  y2="236"/>
+    <line x1="1086" y1="236" x2="1106" y2="236"/>
+  </g>
+
+  <g font-size="11" font-weight="500" letter-spacing="0.2">
+    <g>
+      <rect x="80" y="210" width="94" height="52" rx="6" fill="none" stroke="#334155" stroke-width="0.75"/>
+      <text x="127" y="240" fill="#94A3B8" text-anchor="middle">discovery</text>
+    </g>
+    <g>
+      <rect x="194" y="210" width="94" height="52" rx="6" fill="none" stroke="#334155" stroke-width="0.75"/>
+      <text x="241" y="240" fill="#94A3B8" text-anchor="middle">canonical</text>
+    </g>
+    <g>
+      <rect x="308" y="210" width="94" height="52" rx="6" fill="none" stroke="#334155" stroke-width="0.75"/>
+      <text x="355" y="240" fill="#94A3B8" text-anchor="middle">dedupe</text>
+    </g>
+    <g>
+      <rect x="422" y="210" width="94" height="52" rx="6" fill="none" stroke="#334155" stroke-width="0.75"/>
+      <text x="469" y="240" fill="#94A3B8" text-anchor="middle">scrape</text>
+    </g>
+
+    <g>
+      <rect x="536" y="204" width="94" height="64" rx="6" fill="#A78BFA" stroke="#C4B5FD" stroke-width="1"/>
+      <text x="583" y="231" fill="#1E1033" text-anchor="middle" font-size="11" font-weight="600" letter-spacing="0.4">triage</text>
+      <text x="583" y="249" fill="#1E1033" text-anchor="middle" font-size="9" font-weight="400" letter-spacing="0.2" opacity="0.72">qwen3.5-9b</text>
+    </g>
+
+    <g>
+      <rect x="650" y="210" width="94" height="52" rx="6" fill="none" stroke="#334155" stroke-width="0.75"/>
+      <text x="697" y="240" fill="#94A3B8" text-anchor="middle">validate</text>
+    </g>
+    <g>
+      <rect x="764" y="210" width="94" height="52" rx="6" fill="none" stroke="#334155" stroke-width="0.75"/>
+      <text x="811" y="240" fill="#94A3B8" text-anchor="middle">store</text>
+    </g>
+    <g>
+      <rect x="878" y="210" width="94" height="52" rx="6" fill="none" stroke="#334155" stroke-width="0.75"/>
+      <text x="925" y="240" fill="#94A3B8" text-anchor="middle">recency</text>
+    </g>
+
+    <g>
+      <rect x="992" y="204" width="94" height="64" rx="6" fill="#A78BFA" stroke="#C4B5FD" stroke-width="1"/>
+      <text x="1039" y="231" fill="#1E1033" text-anchor="middle" font-size="11" font-weight="600" letter-spacing="0.4">route</text>
+      <text x="1039" y="249" fill="#1E1033" text-anchor="middle" font-size="9" font-weight="400" letter-spacing="0.2" opacity="0.72">claude-haiku</text>
+    </g>
+
+    <g>
+      <rect x="1106" y="210" width="94" height="52" rx="6" fill="none" stroke="#334155" stroke-width="0.75"/>
+      <text x="1153" y="240" fill="#94A3B8" text-anchor="middle">format</text>
+    </g>
+  </g>
+
+  <path d="M 583 272 L 583 288 L 1039 288 L 1039 272" fill="none" stroke="#475569" stroke-width="0.75"/>
+  <text x="811" y="306" font-size="11" font-weight="400" fill="#94A3B8" text-anchor="middle" letter-spacing="0.3">the only two model stages</text>
+
+  <text x="80" y="338" font-size="12" font-weight="400" fill="#78899E" letter-spacing="0.2">Where is the model? &#8212; two stages of ten. The other eight are code, which is why a rerun produces the same result.</text>
+
+  <text x="1200" y="338" font-size="11" font-weight="400" fill="#475569" text-anchor="end" letter-spacing="0.4">killerwaz / 2026</text>
+</svg>
