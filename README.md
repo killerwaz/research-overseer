@@ -1,4 +1,4 @@
-![Research Overseer — a ten-stage research pipeline, with only the triage and routing stages calling a model](docs/banner.svg)
+![Research Overseer — searches, scrapes and scores a research beat, and answers over Telegram; shown returning a week of funding rounds](docs/banner.svg)
 
 # Research Overseer
 
