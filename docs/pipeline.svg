@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 160" width="100%" role="img" aria-labelledby="pipeline-title pipeline-desc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif">
+  <title id="pipeline-title">The ten pipeline stages</title>
+  <desc id="pipeline-desc">The ten stages in order: discovery, canonicalization, dedupe, scrape, triage, validation, storage, recency, routing and formatting. Two of them call a model — triage on a local qwen3.5-9b, and routing on Claude Haiku. The other eight are code.</desc>
+
+  <rect width="1280" height="160" fill="#0B0F14"/>
+
+  <g stroke="#3B4A5E" stroke-width="0.75" stroke-dasharray="2 3">
+    <line x1="174"  y1="66" x2="194"  y2="66"/>
+    <line x1="288"  y1="66" x2="308"  y2="66"/>
+    <line x1="402"  y1="66" x2="422"  y2="66"/>
+    <line x1="516"  y1="66" x2="536"  y2="66"/>
+    <line x1="630"  y1="66" x2="650"  y2="66"/>
+    <line x1="744"  y1="66" x2="764"  y2="66"/>
+    <line x1="858"  y1="66" x2="878"  y2="66"/>
+    <line x1="972"  y1="66" x2="992"  y2="66"/>
+    <line x1="1086" y1="66" x2="1106" y2="66"/>
+  </g>
+
+  <g font-size="11" font-weight="500" letter-spacing="0.2">
+    <g>
+      <rect x="80" y="40" width="94" height="52" rx="6" fill="none" stroke="#334155" stroke-width="0.75"/>
+      <text x="127" y="70" fill="#94A3B8" text-anchor="middle">discovery</text>
+    </g>
+    <g>
+      <rect x="194" y="40" width="94" height="52" rx="6" fill="none" stroke="#334155" stroke-width="0.75"/>
+      <text x="241" y="70" fill="#94A3B8" text-anchor="middle">canonical</text>
+    </g>
+    <g>
+      <rect x="308" y="40" width="94" height="52" rx="6" fill="none" stroke="#334155" stroke-width="0.75"/>
+      <text x="355" y="70" fill="#94A3B8" text-anchor="middle">dedupe</text>
+    </g>
+    <g>
+      <rect x="422" y="40" width="94" height="52" rx="6" fill="none" stroke="#334155" stroke-width="0.75"/>
+      <text x="469" y="70" fill="#94A3B8" text-anchor="middle">scrape</text>
+    </g>
+
+    <g>
+      <rect x="536" y="34" width="94" height="64" rx="6" fill="#A78BFA" stroke="#C4B5FD" stroke-width="1"/>
+      <text x="583" y="61" fill="#1E1033" text-anchor="middle" font-size="11" font-weight="600" letter-spacing="0.4">triage</text>
+      <text x="583" y="79" fill="#1E1033" text-anchor="middle" font-size="9" font-weight="400" letter-spacing="0.2" opacity="0.72">qwen3.5-9b</text>
+    </g>
+
+    <g>
+      <rect x="650" y="40" width="94" height="52" rx="6" fill="none" stroke="#334155" stroke-width="0.75"/>
+      <text x="697" y="70" fill="#94A3B8" text-anchor="middle">validate</text>
+    </g>
+    <g>
+      <rect x="764" y="40" width="94" height="52" rx="6" fill="none" stroke="#334155" stroke-width="0.75"/>
+      <text x="811" y="70" fill="#94A3B8" text-anchor="middle">store</text>
+    </g>
+    <g>
+      <rect x="878" y="40" width="94" height="52" rx="6" fill="none" stroke="#334155" stroke-width="0.75"/>
+      <text x="925" y="70" fill="#94A3B8" text-anchor="middle">recency</text>
+    </g>
+
+    <g>
+      <rect x="992" y="34" width="94" height="64" rx="6" fill="#A78BFA" stroke="#C4B5FD" stroke-width="1"/>
+      <text x="1039" y="61" fill="#1E1033" text-anchor="middle" font-size="11" font-weight="600" letter-spacing="0.4">route</text>
+      <text x="1039" y="79" fill="#1E1033" text-anchor="middle" font-size="9" font-weight="400" letter-spacing="0.2" opacity="0.72">claude-haiku</text>
+    </g>
+
+    <g>
+      <rect x="1106" y="40" width="94" height="52" rx="6" fill="none" stroke="#334155" stroke-width="0.75"/>
+      <text x="1153" y="70" fill="#94A3B8" text-anchor="middle">format</text>
+    </g>
+  </g>
+
+  <path d="M 583 102 L 583 118 L 1039 118 L 1039 102" fill="none" stroke="#475569" stroke-width="0.75"/>
+  <text x="811" y="136" font-size="11" font-weight="400" fill="#94A3B8" text-anchor="middle" letter-spacing="0.3">the only two model stages</text>
+</svg>

@@ -39,6 +39,8 @@ So nothing here is hand-edited in a UI. Scripts generate the workflows, and the 
 
 Two of the ten pipeline stages call a model. Everything else is code, which is why the test suite covers the parts that matter and why a rerun produces the same result.
 
+![The ten stages in order, with triage and routing marked as the only two that call a model](docs/pipeline.svg)
+
 | # | Stage | Kind | Implementation |
 |---|---|---|---|
 | 1 | Discovery | code | Exa, Tavily, Brave APIs; RSS reader (WF-10..13) |
