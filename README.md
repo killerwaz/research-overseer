@@ -2,12 +2,7 @@
 
 # Research Overseer
 
-![Orchestration: n8n](https://img.shields.io/badge/orchestration-n8n-EA4B71?style=flat-square&logo=n8n&logoColor=white&labelColor=0B0F14)
-![Triage: qwen3.5-9b, local](https://img.shields.io/badge/triage-qwen3.5--9b%20local-A78BFA?style=flat-square&labelColor=0B0F14)
-![Storage: Supabase Postgres](https://img.shields.io/badge/storage-Supabase%20Postgres-3FCF8E?style=flat-square&logo=supabase&logoColor=white&labelColor=0B0F14)
-![Interface: Telegram](https://img.shields.io/badge/interface-Telegram-229ED9?style=flat-square&logo=telegram&logoColor=white&labelColor=0B0F14)
-![Node 22](https://img.shields.io/badge/node-22-5FA04E?style=flat-square&logo=nodedotjs&logoColor=white&labelColor=0B0F14)
-![Tests: 46 passing](https://img.shields.io/badge/tests-46%20passing-3FCF8E?style=flat-square&labelColor=0B0F14)
+![Orchestration n8n · triage qwen3.5-9b local · routing claude-haiku · storage Supabase Postgres · interface Telegram · 46 tests passing](docs/stack.svg)
 
 A research discovery pipeline that runs on my own hardware. It searches (Exa, Tavily, Brave), watches RSS, scrapes what it finds, scores every document against a defined beat using a local 9B model, stores the results in Postgres, and answers questions about them over Telegram.
 
