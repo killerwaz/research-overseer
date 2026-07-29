@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 972 40" width="972" role="img" aria-labelledby="s-t s-d" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif">
+  <title id="s-t">Stack</title>
+  <desc id="s-d">Orchestration: n8n. Triage: qwen3.5-9b, local. Routing: claude-haiku. Storage: Supabase Postgres. Interface: Telegram. Tests: 46 passing. The two chips marked in violet are the two stages that call a model.</desc>
+  <g>
+    <rect x="0.0" y="4" width="130.1" height="32" rx="7" fill="#111820" stroke="#252F3D" stroke-width="1"/>
+    <circle cx="15.5" cy="20" r="2.5" fill="#64748B"/>
+    <text x="27.0" y="24" font-size="10.5" fill="#7C8BA1" letter-spacing="0.15">orchestration</text>
+    <text x="95.5" y="24" font-size="11.5" font-weight="600" fill="#E2E8F0" letter-spacing="0.1">n8n</text>
+  </g>
+  <g>
+    <rect x="140.1" y="4" width="178.0" height="32" rx="7" fill="#111820" stroke="#252F3D" stroke-width="1"/>
+    <circle cx="155.6" cy="20" r="2.5" fill="#A78BFA"/>
+    <text x="167.1" y="24" font-size="10.5" fill="#7C8BA1" letter-spacing="0.15">triage</text>
+    <text x="200.7" y="24" font-size="11.5" font-weight="600" fill="#E2E8F0" letter-spacing="0.1">qwen3.5-9b, local</text>
+  </g>
+  <g>
+    <rect x="328.0" y="4" width="153.0" height="32" rx="7" fill="#111820" stroke="#252F3D" stroke-width="1"/>
+    <circle cx="343.5" cy="20" r="2.5" fill="#A78BFA"/>
+    <text x="355.0" y="24" font-size="10.5" fill="#7C8BA1" letter-spacing="0.15">routing</text>
+    <text x="394.4" y="24" font-size="11.5" font-weight="600" fill="#E2E8F0" letter-spacing="0.1">claude-haiku</text>
+  </g>
+  <g>
+    <rect x="491.1" y="4" width="187.2" height="32" rx="7" fill="#111820" stroke="#252F3D" stroke-width="1"/>
+    <circle cx="506.6" cy="20" r="2.5" fill="#64748B"/>
+    <text x="518.1" y="24" font-size="10.5" fill="#7C8BA1" letter-spacing="0.15">storage</text>
+    <text x="560.0" y="24" font-size="11.5" font-weight="600" fill="#E2E8F0" letter-spacing="0.1">Supabase Postgres</text>
+  </g>
+  <g>
+    <rect x="688.3" y="4" width="140.6" height="32" rx="7" fill="#111820" stroke="#252F3D" stroke-width="1"/>
+    <circle cx="703.8" cy="20" r="2.5" fill="#64748B"/>
+    <text x="715.3" y="24" font-size="10.5" fill="#7C8BA1" letter-spacing="0.15">interface</text>
+    <text x="763.5" y="24" font-size="11.5" font-weight="600" fill="#E2E8F0" letter-spacing="0.1">Telegram</text>
+  </g>
+  <g>
+    <rect x="839.0" y="4" width="132.9" height="32" rx="7" fill="#111820" stroke="#252F3D" stroke-width="1"/>
+    <circle cx="854.5" cy="20" r="2.5" fill="#64748B"/>
+    <text x="866.0" y="24" font-size="10.5" fill="#7C8BA1" letter-spacing="0.15">tests</text>
+    <text x="896.4" y="24" font-size="11.5" font-weight="600" fill="#E2E8F0" letter-spacing="0.1">46 passing</text>
+  </g>
+</svg>
