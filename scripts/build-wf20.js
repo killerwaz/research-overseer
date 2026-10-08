@@ -104,7 +104,7 @@ const user = 'TODAY: ' + dhaka + '\\n' + 'PUBLISHED: ' + pub + '\\n' +
   'TITLE: ' + title + '\\n' + 'URL: ' + orig.canonical_url +
   '\\n\\nCONTENT:\\n' + markdown.slice(0, prof.content_chars);
 const triage_body = JSON.stringify({ model: prof.model, temperature: 0.2, max_tokens: prof.max_tokens,
-  response_format: schema,
+  reasoning_effort: prof.reasoning_effort, response_format: schema,
   messages: [ { role: 'system', content: sys }, { role: 'user', content: user } ] });
 return { json: { canonical_url: orig.canonical_url, source: orig.source || '', title,
   markdown, scraper, run_id: orig.run_id, triage_body, triage_profile: prof.model + '/' + prof.content_chars,

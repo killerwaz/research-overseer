@@ -5,8 +5,14 @@
       "parameters": {
         "workflowInputs": {
           "values": [
-            { "name": "query", "type": "string" },
-            { "name": "trigger", "type": "string" }
+            {
+              "name": "query",
+              "type": "string"
+            },
+            {
+              "name": "trigger",
+              "type": "string"
+            }
           ]
         }
       },
@@ -14,16 +20,31 @@
       "name": "WF Input",
       "type": "n8n-nodes-base.executeWorkflowTrigger",
       "typeVersion": 1.1,
-      "position": [0, 0]
+      "position": [
+        0,
+        0
+      ]
     },
     {
       "parameters": {
         "options": {},
         "conditions": {
-          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" },
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
           "combinator": "and",
           "conditions": [
-            { "id": "c1", "leftValue": "={{ ($json.query || '').length }}", "rightValue": 0, "operator": { "type": "number", "operation": "gt" } }
+            {
+              "id": "c1",
+              "leftValue": "={{ ($('WF Input').first().json.query || '').length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
           ]
         }
       },
@@ -31,89 +52,195 @@
       "name": "Has query?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [200, 0]
+      "position": [
+        640,
+        0
+      ]
     },
     {
       "parameters": {
-        "workflowId": { "__rl": true, "value": "AM0WjOKXpIemAzT6", "mode": "id" },
+        "workflowId": {
+          "__rl": true,
+          "value": "AM0WjOKXpIemAzT6",
+          "mode": "id"
+        },
         "workflowInputs": {
           "mappingMode": "defineBelow",
-          "value": { "query": "={{ $('WF Input').first().json.query }}", "trigger": "={{ $('WF Input').first().json.trigger || 'schedule' }}" },
+          "value": {
+            "query": "={{ $('WF Input').first().json.query }}",
+            "trigger": "={{ $('WF Input').first().json.trigger || 'schedule' }}"
+          },
           "matchingColumns": [],
           "schema": [
-            { "id": "query", "displayName": "query", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" },
-            { "id": "trigger", "displayName": "trigger", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" }
+            {
+              "id": "query",
+              "displayName": "query",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "trigger",
+              "displayName": "trigger",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
           ]
         },
-        "options": { "waitForSubWorkflow": true }
+        "options": {
+          "waitForSubWorkflow": true
+        }
       },
       "id": "runexa",
       "name": "Run Exa",
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.2,
-      "position": [400, -100],
+      "position": [
+        840,
+        -100
+      ],
       "onError": "continueRegularOutput"
     },
     {
       "parameters": {
-        "workflowId": { "__rl": true, "value": "SujItqZD8LGV034c", "mode": "id" },
+        "workflowId": {
+          "__rl": true,
+          "value": "SujItqZD8LGV034c",
+          "mode": "id"
+        },
         "workflowInputs": {
           "mappingMode": "defineBelow",
-          "value": { "query": "={{ $('WF Input').first().json.query }}", "trigger": "={{ $('WF Input').first().json.trigger || 'schedule' }}" },
+          "value": {
+            "query": "={{ $('WF Input').first().json.query }}",
+            "trigger": "={{ $('WF Input').first().json.trigger || 'schedule' }}"
+          },
           "matchingColumns": [],
           "schema": [
-            { "id": "query", "displayName": "query", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" },
-            { "id": "trigger", "displayName": "trigger", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" }
+            {
+              "id": "query",
+              "displayName": "query",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "trigger",
+              "displayName": "trigger",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
           ]
         },
-        "options": { "waitForSubWorkflow": true }
+        "options": {
+          "waitForSubWorkflow": true
+        }
       },
       "id": "runtavily",
       "name": "Run Tavily",
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.2,
-      "position": [600, -100],
+      "position": [
+        1040,
+        -100
+      ],
       "onError": "continueRegularOutput"
     },
     {
       "parameters": {
-        "workflowId": { "__rl": true, "value": "8whU7voTeLMySR6l", "mode": "id" },
+        "workflowId": {
+          "__rl": true,
+          "value": "8whU7voTeLMySR6l",
+          "mode": "id"
+        },
         "workflowInputs": {
           "mappingMode": "defineBelow",
-          "value": { "query": "={{ $('WF Input').first().json.query }}", "trigger": "={{ $('WF Input').first().json.trigger || 'schedule' }}" },
+          "value": {
+            "query": "={{ $('WF Input').first().json.query }}",
+            "trigger": "={{ $('WF Input').first().json.trigger || 'schedule' }}"
+          },
           "matchingColumns": [],
           "schema": [
-            { "id": "query", "displayName": "query", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" },
-            { "id": "trigger", "displayName": "trigger", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" }
+            {
+              "id": "query",
+              "displayName": "query",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "trigger",
+              "displayName": "trigger",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
           ]
         },
-        "options": { "waitForSubWorkflow": true }
+        "options": {
+          "waitForSubWorkflow": true
+        }
       },
       "id": "runbrave",
       "name": "Run Brave",
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.2,
-      "position": [800, -100],
+      "position": [
+        1240,
+        -100
+      ],
       "onError": "continueRegularOutput"
     },
     {
       "parameters": {
-        "workflowId": { "__rl": true, "value": "HCnDeMk2Gkr1cut5", "mode": "id" },
+        "workflowId": {
+          "__rl": true,
+          "value": "HCnDeMk2Gkr1cut5",
+          "mode": "id"
+        },
         "workflowInputs": {
           "mappingMode": "defineBelow",
-          "value": { "trigger": "={{ $('WF Input').first().json.trigger || 'schedule' }}" },
+          "value": {
+            "trigger": "={{ $('WF Input').first().json.trigger || 'schedule' }}"
+          },
           "matchingColumns": [],
           "schema": [
-            { "id": "trigger", "displayName": "trigger", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" }
+            {
+              "id": "trigger",
+              "displayName": "trigger",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
           ]
         },
-        "options": { "waitForSubWorkflow": true }
+        "options": {
+          "waitForSubWorkflow": true
+        }
       },
       "id": "runrss",
       "name": "Run RSS",
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.2,
-      "position": [1000, 0],
+      "position": [
+        1440,
+        0
+      ],
       "onError": "continueRegularOutput"
     },
     {
@@ -125,19 +252,187 @@
       "name": "Summarize sweep",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1200, 0]
+      "position": [
+        1640,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select (coalesce($1, '') <> 'agent') or coalesce((select (m.message->>'content') ~* '(sweep|all (four |4 )?sources|every source|go wide)' and (m.message->>'content') like '%?%' from n8n_chat_histories m where m.message->>'type' = 'ai' and coalesce(m.message->>'tool_calls', '[]') in ('[]', 'null') order by m.id desc limit 1), false) as confirmed",
+        "options": {
+          "queryReplacement": "={{ $json.trigger || '' }}"
+        }
+      },
+      "id": "gate-sql",
+      "name": "Confirmed ask?",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        220,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "tzBuhu9KEXlaRRfW",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {},
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "g1",
+              "leftValue": "={{ String($json.confirmed) }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "gate-if",
+      "name": "Confirmed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const q = $('WF Input').first().json.query || 'the default beat';\nreturn [{ json: { status: 'not_run', needs_confirmation: true, message: 'NOT RUN. A full sweep needs the user\\'s explicit yes first. Reply with one line: \"Run a full sweep on ' + q + '? It hits exa, tavily, brave and rss, takes about 6 minutes and uses search credits.\" Then STOP. Call full_sweep again only after they say yes.' } }];"
+      },
+      "id": "gate-no",
+      "name": "Needs confirmation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        220
+      ]
     }
   ],
   "connections": {
-    "WF Input": { "main": [[{ "node": "Has query?", "type": "main", "index": 0 }]] },
-    "Has query?": { "main": [
-      [{ "node": "Run Exa", "type": "main", "index": 0 }],
-      [{ "node": "Run RSS", "type": "main", "index": 0 }]
-    ] },
-    "Run Exa": { "main": [[{ "node": "Run Tavily", "type": "main", "index": 0 }]] },
-    "Run Tavily": { "main": [[{ "node": "Run Brave", "type": "main", "index": 0 }]] },
-    "Run Brave": { "main": [[{ "node": "Run RSS", "type": "main", "index": 0 }]] },
-    "Run RSS": { "main": [[{ "node": "Summarize sweep", "type": "main", "index": 0 }]] }
+    "WF Input": {
+      "main": [
+        [
+          {
+            "node": "Confirmed ask?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has query?": {
+      "main": [
+        [
+          {
+            "node": "Run Exa",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Run RSS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Exa": {
+      "main": [
+        [
+          {
+            "node": "Run Tavily",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Tavily": {
+      "main": [
+        [
+          {
+            "node": "Run Brave",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Brave": {
+      "main": [
+        [
+          {
+            "node": "Run RSS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run RSS": {
+      "main": [
+        [
+          {
+            "node": "Summarize sweep",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confirmed ask?": {
+      "main": [
+        [
+          {
+            "node": "Confirmed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confirmed?": {
+      "main": [
+        [
+          {
+            "node": "Has query?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Needs confirmation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
   },
-  "settings": { "executionOrder": "v1", "errorWorkflow": "PNJMA4NbQGmp1xKv" }
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "PNJMA4NbQGmp1xKv"
+  }
 }

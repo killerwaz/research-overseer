@@ -87,7 +87,7 @@ return $input.all().map(i => {
     run_id: d.run_id,
     triage_body: JSON.stringify({
       model: prof.model, temperature: 0.2, max_tokens: prof.max_tokens,
-      response_format: TRIAGE_SCHEMA,
+      reasoning_effort: prof.reasoning_effort, response_format: TRIAGE_SCHEMA,
       messages: [ { role: 'system', content: TRIAGE_SYSTEM }, { role: 'user', content: user } ]
     })
   } };

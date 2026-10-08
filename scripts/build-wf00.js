@@ -18,6 +18,28 @@ const CRED_OR = I.credentials.openrouter;
 const CRED_TG = I.credentials.telegram;
 const CHAT_ID = '__TG_CHAT__';
 
+// Router model. Default is local Qwen in LM Studio (free); ROUTER_MODEL=haiku
+// at build time switches back to paid Haiku over OpenRouter.
+//
+// Qwen only works here with thinking OFF: with thinking on it returns an empty
+// reply after a tool result in most configurations (benched 2026-10-09; LM
+// Studio bug class #1592). n8n's chat-model node cannot send the one field that
+// switches thinking off (reasoning_effort 'none' — the node drops it for any
+// model not named like o1/o3/gpt-5), so LM Studio's DEFAULT for this model must
+// be thinking off, and triage opts back in (shared/triage-config.js). Chat
+// Completions, not the Responses API: n8n sends `text: {}` on Responses, which
+// LM Studio rejects ("text.format Required").
+const ROUTER_MODEL = (process.env.ROUTER_MODEL || 'qwen').toLowerCase();
+const MODEL_NODE = ROUTER_MODEL === 'haiku'
+  ? { id: 'model', name: 'OpenRouter Haiku', type: '@n8n/n8n-nodes-langchain.lmChatOpenRouter', typeVersion: 1, position: [1000, 320],
+      parameters: { model: 'anthropic/claude-haiku-4.5', options: { temperature: 0 } },
+      credentials: { openRouterApi: CRED_OR } }
+  : { id: 'model', name: 'LM Studio Qwen', type: '@n8n/n8n-nodes-langchain.lmChatOpenAi', typeVersion: 1.3, position: [1000, 320],
+      parameters: { model: { __rl: true, mode: 'id', value: 'qwen/qwen3.5-9b' }, responsesApiEnabled: false,
+        // first message after LM Studio's idle unload pays a ~19s model load
+        options: { temperature: 0, timeout: 120000, maxRetries: 1 } },
+      credentials: { openAiApi: I.credentials.lmstudio_openai } };
+
 const WF = {
   run_discovery: I.workflows['wf41-run-discovery'],
   full_sweep: I.workflows['wf40-full-sweep'],
@@ -31,10 +53,11 @@ const WF = {
 const SYSTEM = `=You are Research Overseer's dispatcher on Telegram. Route requests to tools; never do research yourself; never fabricate results or data — if a tool returns nothing, say so.
 
 Rules:
-1. Free and instant actions run immediately, no confirmation: a pasted URL -> scrape_url; status questions -> run_status; reading existing findings -> query_feed; 'anything new today' -> run_discovery with source rss. These touch nothing that costs money.
+0. You know NOTHING about the feeds, schedules, runs or findings except what a tool returns in this conversation. Any question about them MUST call the matching tool first, every time — never answer from memory or general knowledge.
+1.Free and instant actions run immediately, no confirmation: a pasted URL -> scrape_url; status questions -> run_status; reading existing findings -> query_feed; 'anything new today' -> run_discovery with source rss. These touch nothing that costs money.
 2. Anything that starts a web search costs money and about six minutes, so it needs the user's word first. Run it immediately ONLY if they used an explicit search verb (search, find me, look up, go get, dig into). If they merely asked a question — 'what's happening with X', 'anything on X', 'how is X going' — answer it from query_feed first (free), then end your reply with a one-line offer naming the search source and query you would run. Do NOT start the search; execute it on their next message if they say yes. full_sweep always needs confirmation.
 3. Retrospective questions are ALWAYS query_feed or run_status, and this OVERRIDES everything else even when a topic is named. Retrospective phrasing includes: catch me up, what did you find, what's new, anything good, show me, what did I miss, brief me, recap. "Catch me up on funding this week" is query_feed with max_age_days 7 — NOT a search, and NOT a confirmation prompt either; just read the feed and answer.
-3b. Before reporting that little or nothing was found, consider whether your own filters caused it: a near-empty result after you passed a tag is far more likely a bad filter than an empty feed. Retry query_feed once without the tag before telling the user there is nothing — and never answer a thin result by starting a search instead. If the question names a time ('today', 'last night', 'this week'), compute the ISO timestamp for the start of that window from the current time below and pass it to query_feed as the since parameter. Never answer a time-scoped question from an unfiltered read.
+3b. If a topic read comes back thin, retry query_feed once with fewer, broader keywords in tag. Never present items as being about the topic unless they are, and never answer a thin result by starting a search — say what the feed has and offer the search. If the question names a time ('today', 'last night', 'this week'), compute the ISO timestamp for the start of that window from the current time below and pass it to query_feed as the since parameter. Never answer a time-scoped question from an unfiltered read.
 4. When uncertain between search sources, fail WIDE: prefer full_sweep (with confirmation) or brave. Never guess narrow.
 4b. Call at most ONE discovery tool per user request, ever. After full_sweep or run_discovery returns, summarize what it returned and stop. If it found little, say so — do NOT run it again with different wording. Each run costs money and minutes.
 5. manage_schedule: parse natural language into cron, timezone Asia/Dhaka (UTC+6). 'every day at 8am' -> cron '0 8 * * *' via action create_recurring. Relative one-times ('in 3 hours') -> action create_onetime with an ISO timestamp you compute from the current time below. If phrasing is ambiguous ('tomorrow morning'), ask ONE clarifying question. Always echo the parsed schedule back and get a yes before creating. Other actions: cancel (needs id), list.
@@ -160,9 +183,7 @@ return [{ json: { chat_id, output: text } }];
     parameters: { promptType: 'define', text: '={{ $json.text }}',
       options: { systemMessage: SYSTEM, maxIterations: 6 } } },
 
-  { id: 'model', name: 'OpenRouter Haiku', type: '@n8n/n8n-nodes-langchain.lmChatOpenRouter', typeVersion: 1, position: [1000, 320],
-    parameters: { model: 'anthropic/claude-haiku-4.5', options: { temperature: 0 } },
-    credentials: { openRouterApi: CRED_OR } },
+  MODEL_NODE,
 
   { id: 'memory', name: 'Chat memory', type: '@n8n/n8n-nodes-langchain.memoryPostgresChat', typeVersion: 1.3, position: [1160, 320],
     parameters: { sessionIdType: 'customKey', sessionKey: '={{ $json.chat_id }}', contextWindowLength: 10 },
@@ -198,14 +219,14 @@ return [{ json: { chat_id, output: text } }];
     "Items are scored on two axes: specificity (1-5, how concrete and verifiable the claims are — vendor SEO content scores low) and angle_strength (1-5, how non-obvious the publishable hook is). score = the two added, 2-10. Use min_score 7+ for 'the good stuff', 8+ for 'only the best'. " +
     "Quality and recency are separate knobs and combine freely: min_score filters how good, max_age_days filters how fresh. 'anything good this week' = min_score 7 + max_age_days 7. Results always come back best-first. " +
     "Set group_stories to 'true' when the user wants an overview rather than every article — it collapses multiple outlets covering the same event into one row with an articles count. Prefer it for 'what's happening with X', 'catch me up', 'what did I miss'. Leave empty when they want individual pieces to read. " +
-    "DO NOT invent a tag. Leave tag empty unless the user names a topic you have actually seen in earlier results — a guessed tag silently filters almost everything out and makes an empty feed look like an empty world. Time words and quality belong in max_age_days and min_score, never in tag. " +
+    "Put the question's topic in tag as plain keywords ('nvidia export control'); it matches tags, titles and summaries by keyword overlap. If a topic search comes back empty, say the feed has nothing on it and offer a search. Time words and quality belong in max_age_days and min_score, never in tag. " +
     "Params: max_age_days (days since publication), min_score (2-10), since (ISO timestamp, for an exact cutoff), tag, limit (default 20), group_stories, min_relevance (legacy, leave empty).",
     WF.query_feed,
     { group_stories: { desc: "'true' to collapse duplicate coverage of one event into a single row, empty for every article" },
       max_age_days: { desc: 'only items published within this many days, empty for any age' },
       min_score: { desc: 'minimum combined score 2-10, empty for none' },
       since: { desc: 'ISO timestamp lower bound, empty for none' },
-      tag: { desc: 'ALMOST ALWAYS EMPTY. Only an exact tag string copied from an earlier query_feed result in this chat. Never build it from the user\'s wording — a made-up tag hides nearly every item' },
+      tag: { desc: 'topic keywords from the question (e.g. \'nvidia export control\'), empty for no topic. Matches tags, titles and summaries by keyword overlap. Never put time words or quality words here' },
       limit: { desc: 'max items to return, empty for default 20' },
       min_relevance: { desc: 'legacy 1-5 filter, leave empty' } }, [1720, 320]),
 
@@ -264,7 +285,7 @@ const connections = {
   ] },
   'Toggle drain': { main: [[{ node: 'Switch reply', type: 'main', index: 0 }]] },
   'Switch reply': { main: [[{ node: 'Send reply', type: 'main', index: 0 }]] },
-  'OpenRouter Haiku': { ai_languageModel: [[{ node: 'Overseer Agent', type: 'ai_languageModel', index: 0 }]] },
+  [MODEL_NODE.name]: { ai_languageModel: [[{ node: 'Overseer Agent', type: 'ai_languageModel', index: 0 }]] },
   'Chat memory': { ai_memory: [[{ node: 'Overseer Agent', type: 'ai_memory', index: 0 }]] },
   'run_discovery': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }]] },
   'full_sweep': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }]] },

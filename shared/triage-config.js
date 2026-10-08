@@ -99,9 +99,18 @@ const TRIAGE_MODEL = 'qwen/qwen3.5-9b';
 // Qwen spends ~3000 tokens thinking to produce ~120 tokens of JSON, and that
 // is where the ~33s goes.
 //
-// Suppressing the thinking does not work on this model: enable_thinking via
-// chat_template_kwargs, a /no_think suffix, and reasoning_effort:minimal were
-// all tried and all ignored (2900-3300 tokens, 32-38s, no change).
+// CORRECTED 2026-10-09: thinking IS switchable per request in LM Studio 0.4.x,
+// but only via `reasoning_effort` — 'none' turns it off, and ANY other value
+// ('low' included) turns it on. chat_template_kwargs, /no_think and
+// enable_thinking are still ignored. (The July note said reasoning_effort was
+// ignored too; that test used 'minimal' with thinking already on, so it could
+// not have shown a difference.)
+//
+// LM Studio's default for this model is now thinking OFF, so the Telegram
+// router (which cannot send reasoning_effort through n8n's chat-model node)
+// answers in under a second. Triage depends on thinking, so every profile
+// asks for it explicitly — drop `reasoning_effort` and triage silently goes
+// thinking-free.
 //
 // So `content_chars` does NOT buy speed. It buys judgement quality and context
 // budget, which is still worth varying: a feed blurb has nothing after 2500
@@ -115,16 +124,20 @@ const TRIAGE_MODEL = 'qwen/qwen3.5-9b';
 //
 // max_tokens is a ceiling, not a target — the model stops on its own well
 // below it. Keep it above ~2500 or the reasoning strands the JSON.
+const TRIAGE_REASONING = 'medium';
+const profile = (content_chars, max_tokens) =>
+  ({ model: TRIAGE_MODEL, content_chars, max_tokens, reasoning_effort: TRIAGE_REASONING });
+
 const TRIAGE_PROFILES = {
   // Feed items are short and mostly low-signal; a smaller read is plenty.
-  rss:     { model: TRIAGE_MODEL, content_chars: 2500, max_tokens: 3000 },
+  rss:     profile(2500, 3000),
   // Search hits on the standing queries are the material worth thinking about.
-  exa:     { model: TRIAGE_MODEL, content_chars: 6000, max_tokens: 6000 },
-  tavily:  { model: TRIAGE_MODEL, content_chars: 6000, max_tokens: 6000 },
-  brave:   { model: TRIAGE_MODEL, content_chars: 6000, max_tokens: 6000 },
+  exa:     profile(6000, 6000),
+  tavily:  profile(6000, 6000),
+  brave:   profile(6000, 6000),
   // A URL pasted by hand was chosen deliberately — read it properly.
-  manual:  { model: TRIAGE_MODEL, content_chars: 8000, max_tokens: 6000 },
-  default: { model: TRIAGE_MODEL, content_chars: 6000, max_tokens: 6000 }
+  manual:  profile(8000, 6000),
+  default: profile(6000, 6000)
 };
 
 function profileFor(source) {
