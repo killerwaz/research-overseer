@@ -22,114 +22,6 @@
       }
     },
     {
-      "id": "getdue",
-      "name": "Get candidates",
-      "type": "n8n-nodes-base.postgres",
-      "typeVersion": 2.4,
-      "position": [
-        200,
-        0
-      ],
-      "parameters": {
-        "operation": "executeQuery",
-        "query": "select id, type, cron, label, extract(epoch from last_run) as last_run_e from schedules where active and ((type = 'onetime' and run_at <= now()) or (type = 'recurring' and cron is not null))",
-        "options": {}
-      },
-      "credentials": {
-        "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
-        }
-      },
-      "executeOnce": true,
-      "alwaysOutputData": true
-    },
-    {
-      "id": "eval",
-      "name": "Evaluate due",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        400,
-        0
-      ],
-      "parameters": {
-        "mode": "runOnceForAllItems",
-        "jsCode": "// Minimal 5-field cron matcher for the WF-30 poller Code node.\n// No external deps (n8n task-runner sandbox has no require).\n// Timezone: Asia/Dhaka = fixed UTC+6, no DST — epoch shift, then UTC getters.\n\nfunction parseField(spec, min, max) {\n  const out = new Set();\n  for (const part of String(spec).split(',')) {\n    const m = part.match(/^(\\*|\\d+(?:-\\d+)?)(?:\\/(\\d+))?$/);\n    if (!m) return null;\n    const step = m[2] ? parseInt(m[2], 10) : 1;\n    if (step < 1) return null;\n    let lo = min, hi = max;\n    if (m[1] !== '*') {\n      const r = m[1].split('-');\n      lo = parseInt(r[0], 10);\n      hi = r.length > 1 ? parseInt(r[1], 10) : (m[2] ? max : lo);\n    }\n    if (lo < min || hi > max || lo > hi) return null;\n    for (let v = lo; v <= hi; v += step) out.add(v);\n  }\n  return out;\n}\n\nfunction compileCron(expr) {\n  const f = String(expr).trim().split(/\\s+/);\n  if (f.length !== 5) return null;\n  const minute = parseField(f[0], 0, 59);\n  const hour = parseField(f[1], 0, 23);\n  const dom = parseField(f[2], 1, 31);\n  const mon = parseField(f[3], 1, 12);\n  const dowRaw = parseField(f[4], 0, 7);\n  if (!minute || !hour || !dom || !mon || !dowRaw) return null;\n  const dow = new Set([...dowRaw].map(v => v === 7 ? 0 : v));\n  return { minute, hour, dom, mon, dow,\n    domStar: f[2] === '*', dowStar: f[4] === '*' };\n}\n\n// epochSec: UTC epoch seconds. Returns true if cron matches that minute in Dhaka.\nfunction cronMatchesAt(c, epochSec) {\n  const d = new Date((epochSec + 6 * 3600) * 1000);\n  if (!c.minute.has(d.getUTCMinutes())) return false;\n  if (!c.hour.has(d.getUTCHours())) return false;\n  if (!c.mon.has(d.getUTCMonth() + 1)) return false;\n  const domOk = c.dom.has(d.getUTCDate());\n  const dowOk = c.dow.has(d.getUTCDay());\n  // standard cron: if both dom and dow are restricted, either may match\n  if (!c.domStar && !c.dowStar) return domOk || dowOk;\n  return domOk && dowOk;\n}\n\n// Did expr have a fire tick in (fromEpoch, toEpoch]? Lookback capped by caller.\nfunction cronFiredInWindow(expr, fromEpoch, toEpoch) {\n  const c = compileCron(expr);\n  if (!c) return false;\n  let t = Math.floor(fromEpoch / 60) * 60 + 60; // first whole minute AFTER fromEpoch\n  for (; t <= toEpoch; t += 60) {\n    if (cronMatchesAt(c, t)) return true;\n  }\n  return false;\n}\n\n\nconst nowE = Math.floor(Date.now() / 1000);\nconst due = [];\nfor (const item of $input.all()) {\n  const j = item.json || {};\n  if (!j.id) continue;\n  if (j.type === 'onetime') { due.push(j); continue; }\n  if (j.type === 'recurring' && j.cron) {\n    const lastE = j.last_run_e ? Number(j.last_run_e) : nowE - 330;\n    const from = Math.max(lastE, nowE - 6 * 3600);\n    if (cronFiredInWindow(j.cron, from, nowE)) due.push(j);\n  }\n}\nreturn due.map(j => ({ json: { id: j.id, type: j.type, label: j.label || '' } }));\n"
-      }
-    },
-    {
-      "id": "mark",
-      "name": "Mark fired",
-      "type": "n8n-nodes-base.postgres",
-      "typeVersion": 2.4,
-      "position": [
-        600,
-        0
-      ],
-      "parameters": {
-        "operation": "executeQuery",
-        "query": "update schedules set last_run = now(), active = case when type = 'onetime' then false else active end where id = $1::bigint returning id",
-        "options": {
-          "queryReplacement": "={{ $json.id }}"
-        }
-      },
-      "credentials": {
-        "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
-        }
-      }
-    },
-    {
-      "id": "fire",
-      "name": "Fire full sweep",
-      "type": "n8n-nodes-base.executeWorkflow",
-      "typeVersion": 1.2,
-      "position": [
-        800,
-        0
-      ],
-      "parameters": {
-        "workflowId": {
-          "__rl": true,
-          "value": "__WF40_ID__",
-          "mode": "id"
-        },
-        "workflowInputs": {
-          "mappingMode": "defineBelow",
-          "value": {
-            "query": "",
-            "trigger": "schedule"
-          },
-          "matchingColumns": [],
-          "schema": [
-            {
-              "id": "query",
-              "displayName": "query",
-              "required": false,
-              "defaultMatch": false,
-              "display": true,
-              "canBeUsedToMatch": true,
-              "type": "string"
-            },
-            {
-              "id": "trigger",
-              "displayName": "trigger",
-              "required": false,
-              "defaultMatch": false,
-              "display": true,
-              "canBeUsedToMatch": true,
-              "type": "string"
-            }
-          ]
-        },
-        "options": {
-          "waitForSubWorkflow": false
-        }
-      }
-    },
-    {
       "id": "findbacklog",
       "name": "Find backlog",
       "type": "n8n-nodes-base.postgres",
@@ -479,11 +371,6 @@
       "main": [
         [
           {
-            "node": "Get candidates",
-            "type": "main",
-            "index": 0
-          },
-          {
             "node": "Find backlog",
             "type": "main",
             "index": 0
@@ -585,39 +472,6 @@
         [
           {
             "node": "Send notice",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Get candidates": {
-      "main": [
-        [
-          {
-            "node": "Evaluate due",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Evaluate due": {
-      "main": [
-        [
-          {
-            "node": "Mark fired",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Mark fired": {
-      "main": [
-        [
-          {
-            "node": "Fire full sweep",
             "type": "main",
             "index": 0
           }
