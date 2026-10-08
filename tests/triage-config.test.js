@@ -33,6 +33,9 @@ test('every profile is complete and sane', () => {
     assert.ok(p.content_chars > 0 && p.content_chars <= 20000, name + '.content_chars');
     // Qwen reasons before emitting JSON; too small a budget strands the answer
     assert.ok(p.max_tokens >= 2000, name + '.max_tokens leaves room to think');
+    // LM Studio defaults this model to thinking OFF (for the router); triage
+    // must opt back in, and 'none' would silently disable it
+    assert.ok(['low', 'medium', 'high'].includes(p.reasoning_effort), name + '.reasoning_effort turns thinking on');
   }
 });
 
