@@ -46,23 +46,24 @@ const WF = {
   scrape_url: I.workflows['wf42-scrape-url'],
   query_feed: I.workflows['wf31-query-feed'],
   run_status: I.workflows['wf32-run-status'],
-  manage_schedule: I.workflows['wf33-manage-schedule'],
   manage_sources: I.workflows['wf34-manage-sources']
 };
 
 const SYSTEM = `=You are Research Overseer's dispatcher on Telegram. Route requests to tools; never do research yourself; never fabricate results or data — if a tool returns nothing, say so.
 
 Rules:
-0. You know NOTHING about the feeds, schedules, runs or findings except what a tool returns in this conversation. Any question about them MUST call the matching tool first, every time — never answer from memory or general knowledge.
-1.Free and instant actions run immediately, no confirmation: a pasted URL -> scrape_url; status questions -> run_status; reading existing findings -> query_feed; 'anything new today' -> run_discovery with source rss. These touch nothing that costs money.
+0. You know NOTHING about the feeds, runs or findings except what a tool returns in this conversation. Any question about them MUST call the matching tool first, every time — never answer from memory or general knowledge.
+1. Free and instant actions run immediately, no confirmation: a pasted URL -> scrape_url; status questions -> run_status; 'what feeds/sources are you watching' -> manage_sources with action list; reading existing findings -> query_feed; 'anything new today' -> run_discovery with source rss. These touch nothing that costs money.
 2. Anything that starts a web search costs money and about six minutes, so it needs the user's word first. Run it immediately ONLY if they used an explicit search verb (search, find me, look up, go get, dig into). If they merely asked a question — 'what's happening with X', 'anything on X', 'how is X going' — answer it from query_feed first (free), then end your reply with a one-line offer naming the search source and query you would run. Do NOT start the search; execute it on their next message if they say yes. full_sweep always needs confirmation.
 3. Retrospective questions are ALWAYS query_feed or run_status, and this OVERRIDES everything else even when a topic is named. Retrospective phrasing includes: catch me up, what did you find, what's new, anything good, show me, what did I miss, brief me, recap. "Catch me up on funding this week" is query_feed with max_age_days 7 — NOT a search, and NOT a confirmation prompt either; just read the feed and answer.
 3b. If a topic read comes back thin, retry query_feed once with fewer, broader keywords in tag. Never present items as being about the topic unless they are, and never answer a thin result by starting a search — say what the feed has and offer the search. If the question names a time ('today', 'last night', 'this week'), compute the ISO timestamp for the start of that window from the current time below and pass it to query_feed as the since parameter. Never answer a time-scoped question from an unfiltered read.
 4. When uncertain between search sources, fail WIDE: prefer full_sweep (with confirmation) or brave. Never guess narrow.
 4b. Call at most ONE discovery tool per user request, ever. After full_sweep or run_discovery returns, summarize what it returned and stop. If it found little, say so — do NOT run it again with different wording. Each run costs money and minutes.
-5. manage_schedule: parse natural language into cron, timezone Asia/Dhaka (UTC+6). 'every day at 8am' -> cron '0 8 * * *' via action create_recurring. Relative one-times ('in 3 hours') -> action create_onetime with an ISO timestamp you compute from the current time below. If phrasing is ambiguous ('tomorrow morning'), ask ONE clarifying question. Always echo the parsed schedule back and get a yes before creating. Other actions: cancel (needs id), list.
+5. Scheduling is OFF — this is a live chat agent; nothing runs on a timer. If asked to schedule, repeat, or run something later or every day, say scheduling is switched off and offer to run it now (searches still need their usual yes).
 6. manage_sources actions: add (url, optional label), remove (id or url), list.
 7. Reply tersely — this is Telegram. Plain text, no markdown formatting.
+
+Feeds you are watching right now (read from the database this message — authoritative, the ONLY true list): {{ $json.sources }}
 
 Current time: {{ $now.setZone('Asia/Dhaka').toFormat('cccc yyyy-MM-dd HH:mm') }} (Asia/Dhaka, UTC+6). This is the local date and time — use it directly, do not convert it.`;
 
@@ -179,6 +180,23 @@ try { chat_id = $('Record update').first().json.chat_id || chat_id; } catch (e) 
 return [{ json: { chat_id, output: text } }];
 `.trim() } },
 
+  // Facts the model must not invent. Without thinking, the 9B answers "which
+  // sources do you follow?" with a confident made-up list (benched 2026-10-09:
+  // BBC, The Verge, Reuters...) however the rules are worded. Handing it the real
+  // list each message removes the gap it fills. One cheap query per message.
+  { id: 'ctx', name: 'Agent context', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [1000, -100],
+    parameters: { operation: 'executeQuery',
+      query: "select coalesce((select string_agg(coalesce(nullif(label, ''), url) || ' <' || url || '>', '; ' order by id) from sources where active and kind = 'rss'), 'none') as sources",
+      options: {} },
+    credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true },
+
+  // Re-attach the context to every message item (Feed switch? output 1 = not a
+  // feed-switch command); chat memory keys on $json.chat_id, so it must survive.
+  { id: 'ctxmerge', name: 'Agent input', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1060, 100],
+    parameters: { mode: 'runOnceForAllItems', jsCode: `
+const sources = ($('Agent context').first().json.sources) || 'none';
+return $('Feed switch?').all(1).map(i => ({ json: { ...i.json, sources } }));`.trim() } },
+
   { id: 'agent', name: 'Overseer Agent', type: '@n8n/n8n-nodes-langchain.agent', typeVersion: 3.1, position: [1120, 100],
     parameters: { promptType: 'define', text: '={{ $json.text }}',
       options: { systemMessage: SYSTEM, maxIterations: 6 } } },
@@ -235,15 +253,6 @@ return [{ json: { chat_id, output: text } }];
     WF.run_status,
     { limit: { desc: 'how many recent runs to return, empty for default 5' } }, [1860, 320]),
 
-  tool('manage_schedule',
-    "Create, cancel or list schedules. Params: action (create_recurring|create_onetime|cancel|list); cron (for create_recurring, 5-field, Asia/Dhaka); run_at (for create_onetime, ISO timestamp); label; id (for cancel). Echo the parsed schedule back for confirmation BEFORE calling create.",
-    WF.manage_schedule,
-    { action: { desc: 'create_recurring, create_onetime, cancel, or list' },
-      cron: { desc: '5-field cron expression for create_recurring, else empty' },
-      run_at: { desc: 'ISO timestamp for create_onetime, else empty' },
-      label: { desc: 'short human label for the schedule, optional' },
-      id: { desc: 'schedule id for cancel, else empty' } }, [2000, 320]),
-
   tool('manage_sources',
     "Add, remove or list RSS feeds. Use for 'add this feed', 'stop following X', 'what feeds are you watching'. Params: action (add|remove|list); url (for add/remove); label (optional); id (for remove).",
     WF.manage_sources,
@@ -281,7 +290,7 @@ const connections = {
   'Test normalize': { main: [[{ node: 'Feed switch?', type: 'main', index: 0 }]] },
   'Feed switch?': { main: [
     [{ node: 'Toggle drain', type: 'main', index: 0 }],
-    [{ node: 'Overseer Agent', type: 'main', index: 0 }]
+    [{ node: 'Agent context', type: 'main', index: 0 }]
   ] },
   'Toggle drain': { main: [[{ node: 'Switch reply', type: 'main', index: 0 }]] },
   'Switch reply': { main: [[{ node: 'Send reply', type: 'main', index: 0 }]] },
@@ -292,8 +301,9 @@ const connections = {
   'scrape_url': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }]] },
   'query_feed': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }]] },
   'run_status': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }]] },
-  'manage_schedule': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }]] },
   'manage_sources': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }]] },
+  'Agent context': { main: [[{ node: 'Agent input', type: 'main', index: 0 }]] },
+  'Agent input': { main: [[{ node: 'Overseer Agent', type: 'main', index: 0 }]] },
   'Overseer Agent': { main: [[{ node: 'Prep reply', type: 'main', index: 0 }]] },
   'Prep reply': { main: [[{ node: 'Send reply', type: 'main', index: 0 }]] }
 };
