@@ -12,6 +12,14 @@
             {
               "name": "trigger",
               "type": "string"
+            },
+            {
+              "name": "user_message",
+              "type": "string"
+            },
+            {
+              "name": "chat_id",
+              "type": "string"
             }
           ]
         }
@@ -260,9 +268,9 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "select (coalesce($1, '') <> 'agent') or coalesce((select (m.message->>'content') ~* '(sweep|all (four |4 )?sources|every source|go wide)' and (m.message->>'content') like '%?%' from n8n_chat_histories m where m.message->>'type' = 'ai' and coalesce(m.message->>'tool_calls', '[]') in ('[]', 'null') order by m.id desc limit 1), false) as confirmed",
+        "query": "select ($1 <> 'agent') or ($3 = 'true' and coalesce((select (m.message->>'content') ~* '(sweep|all (four |4 )?sources|every source|go wide)' and (m.message->>'content') like '%?%' from n8n_chat_histories m where m.session_id = $2 and m.message->>'type' = 'ai' and coalesce(m.message->>'tool_calls', '[]') in ('[]', 'null') order by m.id desc limit 1), false)) as confirmed",
         "options": {
-          "queryReplacement": "={{ $json.trigger || '' }}"
+          "queryReplacement": "={{ $json.trigger }},{{ $json.chat_id }},{{ $json.yes }}"
         }
       },
       "id": "gate-sql",
@@ -325,6 +333,20 @@
         660,
         220
       ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const j = $('WF Input').first().json;\nconst msg = String(j.user_message || '').trim();\nconst yes = msg.length < 60 && /^(yes|y|yeah|yep|yup|sure|ok|okay|go ahead|go for it|do it|run it|confirm(ed)?|please( do)?)\\b/i.test(msg);\nreturn [{ json: { trigger: String(j.trigger || ''), chat_id: String(j.chat_id || '').replace(/[^0-9-]/g, ''), yes: String(yes) } }];"
+      },
+      "id": "gate-in",
+      "name": "Gate input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        -200
+      ]
     }
   ],
   "connections": {
@@ -332,7 +354,7 @@
       "main": [
         [
           {
-            "node": "Confirmed ask?",
+            "node": "Gate input",
             "type": "main",
             "index": 0
           }
@@ -424,6 +446,17 @@
         [
           {
             "node": "Needs confirmation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gate input": {
+      "main": [
+        [
+          {
+            "node": "Confirmed ask?",
             "type": "main",
             "index": 0
           }

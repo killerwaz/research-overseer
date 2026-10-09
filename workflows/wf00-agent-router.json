@@ -251,7 +251,7 @@
       ],
       "parameters": {
         "operation": "executeQuery",
-        "query": "select coalesce((select string_agg(coalesce(nullif(label, ''), url) || ' <' || url || '>', '; ' order by id) from sources where active and kind = 'rss'), 'none') as sources",
+        "query": "select coalesce((select string_agg(coalesce(nullif(label, ''), url) || ' <' || url || '>', '; ' order by id) from sources where active and kind = 'rss'), 'none') as sources, coalesce((select string_agg('run ' || id || ' ' || scope || ' ' || status || ' started ' || to_char(started_at at time zone 'Asia/Dhaka', 'YYYY-MM-DD HH24:MI') || ', ' || coalesce(items_created, 0) || ' items' || coalesce(' (error: ' || left(error, 80) || ')', ''), '; ' order by id desc) from (select * from runs order by id desc limit 3) r), 'no runs yet') as runs",
         "options": {}
       },
       "credentials": {
@@ -274,7 +274,7 @@
       ],
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const sources = ($('Agent context').first().json.sources) || 'none';\nreturn $('Feed switch?').all(1).map(i => ({ json: { ...i.json, sources } }));"
+        "jsCode": "const ctx = $('Agent context').first().json;\nconst sources = ctx.sources || 'none', runs = ctx.runs || 'unknown';\nreturn $('Feed switch?').all(1).map(i => ({ json: { ...i.json, sources, runs } }));"
       }
     },
     {
@@ -288,9 +288,9 @@
       ],
       "parameters": {
         "promptType": "define",
-        "text": "={{ $json.text }}",
+        "text": "={{ $json.text }}\n\n[live data, fetched just now: latest runs: {{ $json.runs }}]",
         "options": {
-          "systemMessage": "=You are Research Overseer's dispatcher on Telegram. Route requests to tools; never do research yourself; never fabricate results or data — if a tool returns nothing, say so.\n\nRules:\n0. You know NOTHING about the feeds, runs or findings except what a tool returns in this conversation. Any question about them MUST call the matching tool first, every time — never answer from memory or general knowledge.\n1. Free and instant actions run immediately, no confirmation: a pasted URL -> scrape_url; status questions -> run_status; 'what feeds/sources are you watching' -> manage_sources with action list; reading existing findings -> query_feed; 'anything new today' -> run_discovery with source rss. These touch nothing that costs money.\n2. Anything that starts a web search costs money and about six minutes, so it needs the user's word first. Run it immediately ONLY if they used an explicit search verb (search, find me, look up, go get, dig into). If they merely asked a question — 'what's happening with X', 'anything on X', 'how is X going' — answer it from query_feed first (free), then end your reply with a one-line offer naming the search source and query you would run. Do NOT start the search; execute it on their next message if they say yes. full_sweep always needs confirmation.\n3. Retrospective questions are ALWAYS query_feed or run_status, and this OVERRIDES everything else even when a topic is named. Retrospective phrasing includes: catch me up, what did you find, what's new, anything good, show me, what did I miss, brief me, recap. \"Catch me up on funding this week\" is query_feed with max_age_days 7 — NOT a search, and NOT a confirmation prompt either; just read the feed and answer.\n3b. If a topic read comes back thin, retry query_feed once with fewer, broader keywords in tag. Never present items as being about the topic unless they are, and never answer a thin result by starting a search — say what the feed has and offer the search. If the question names a time ('today', 'last night', 'this week'), compute the ISO timestamp for the start of that window from the current time below and pass it to query_feed as the since parameter. Never answer a time-scoped question from an unfiltered read.\n4. When uncertain between search sources, fail WIDE: prefer full_sweep (with confirmation) or brave. Never guess narrow.\n4b. Call at most ONE discovery tool per user request, ever. After full_sweep or run_discovery returns, summarize what it returned and stop. If it found little, say so — do NOT run it again with different wording. Each run costs money and minutes.\n5. Scheduling is OFF — this is a live chat agent; nothing runs on a timer. If asked to schedule, repeat, or run something later or every day, say scheduling is switched off and offer to run it now (searches still need their usual yes).\n6. manage_sources actions: add (url, optional label), remove (id or url), list.\n7. Reply tersely — this is Telegram. Plain text, no markdown formatting.\n\nFeeds you are watching right now (read from the database this message — authoritative, the ONLY true list): {{ $json.sources }}\n\nCurrent time: {{ $now.setZone('Asia/Dhaka').toFormat('cccc yyyy-MM-dd HH:mm') }} (Asia/Dhaka, UTC+6). This is the local date and time — use it directly, do not convert it.",
+          "systemMessage": "=You are Research Overseer's dispatcher on Telegram. Route requests to tools; never do research yourself; never fabricate results or data — if a tool returns nothing, say so.\n\nRules:\n0. You know NOTHING about runs or findings except what a tool returns for the CURRENT message. Earlier tool results in this chat are stale — runs start and finish, items arrive. Every question about runs or findings MUST call the matching tool again, even if you answered the same question a minute ago. Never answer from chat history or general knowledge. (The feed list below is fresh every message.)\n1. Free and instant actions run immediately, no confirmation: a pasted URL -> scrape_url; status questions -> run_status; 'what feeds/sources are you watching' -> manage_sources with action list; reading existing findings -> query_feed; 'anything new today' -> run_discovery with source rss. These touch nothing that costs money.\n2. Anything that starts a web search costs money and about six minutes, so it needs the user's word first. Run it immediately ONLY if they used an explicit search verb (search, find me, look up, go get, dig into). If they merely asked a question — 'what's happening with X', 'anything on X', 'how is X going' — answer it from query_feed first (free), then end your reply with a one-line offer naming the search source and query you would run. Do NOT start the search; execute it on their next message if they say yes. full_sweep always needs confirmation.\n3. Retrospective questions are ALWAYS query_feed or run_status, and this OVERRIDES everything else even when a topic is named. Retrospective phrasing includes: catch me up, what did you find, what's new, anything good, show me, what did I miss, brief me, recap. \"Catch me up on funding this week\" is query_feed with max_age_days 7 — NOT a search, and NOT a confirmation prompt either; just read the feed and answer.\n3b. If a topic read comes back thin, retry query_feed once with fewer, broader keywords in tag. Never present items as being about the topic unless they are, and never answer a thin result by starting a search — say what the feed has and offer the search. If the question names a time ('today', 'last night', 'this week'), compute the ISO timestamp for the start of that window from the current time below and pass it to query_feed as the since parameter. Never answer a time-scoped question from an unfiltered read.\n4. When uncertain between search sources, fail WIDE: prefer full_sweep (with confirmation) or brave. Never guess narrow.\n4b. Call at most ONE discovery tool per user request, ever. After full_sweep or run_discovery returns, summarize what it returned and stop. If it found little, say so — do NOT run it again with different wording. Each run costs money and minutes.\n5. Scheduling is OFF — this is a live chat agent; nothing runs on a timer. If asked to schedule, repeat, or run something later or every day, say scheduling is switched off and offer to run it now (searches still need their usual yes).\n6. manage_sources actions: add (url, optional label), remove (id or url), list.\n7. Reply tersely — this is Telegram. Plain text, no markdown formatting.\n\nFeeds you are watching right now (read from the database this message — authoritative, the ONLY true list): {{ $json.sources }}\n\nLatest runs, newest first (read from the database this message — these OVERRIDE anything said earlier in the chat): {{ $json.runs }}\n\nCurrent time: {{ $now.setZone('Asia/Dhaka').toFormat('cccc yyyy-MM-dd HH:mm') }} (Asia/Dhaka, UTC+6). This is the local date and time — use it directly, do not convert it.",
           "maxIterations": 6
         }
       }
@@ -336,7 +336,7 @@
       "parameters": {
         "sessionIdType": "customKey",
         "sessionKey": "={{ $json.chat_id }}",
-        "contextWindowLength": 10
+        "contextWindowLength": 4
       },
       "credentials": {
         "postgres": {
@@ -421,7 +421,9 @@
           "mappingMode": "defineBelow",
           "value": {
             "query": "={{ $fromAI('query', 'optional focus query; empty string runs the default sweep', 'string', '') }}",
-            "trigger": "agent"
+            "trigger": "agent",
+            "user_message": "={{ $('Agent input').first().json.text }}",
+            "chat_id": "={{ $('Agent input').first().json.chat_id }}"
           },
           "matchingColumns": [],
           "schema": [
@@ -437,6 +439,24 @@
             {
               "id": "trigger",
               "displayName": "trigger",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "user_message",
+              "displayName": "user_message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "chat_id",
+              "displayName": "chat_id",
               "required": false,
               "defaultMatch": false,
               "display": true,
