@@ -208,12 +208,61 @@ return $('Feed switch?').all(1).map(i => ({ json: { ...i.json, sources, runs } }
     // only in the system prompt the 9B still copied a stale run_status answer
     // from chat history (it saw run 58, answered "run 57"). The latest turn wins.
     parameters: { promptType: 'define', text: '={{ $json.text }}\n\n[live data, fetched just now: latest runs: {{ $json.runs }}]',
-      options: { systemMessage: SYSTEM, maxIterations: 6 } } },
+      options: { systemMessage: SYSTEM, maxIterations: 6, returnIntermediateSteps: true } } },
+
+  // ---- answer guard (2026-10-09) ----
+  // A reply that talks about the feed without a tool having run this turn is
+  // redone by a memoryless agent that is told to look it up. The decision is
+  // shared/answer-guard.js (tested); the model cannot argue its way past it.
+  { id: 'guard', name: 'Guard check', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1300, 100],
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('answer-guard.js') + `
+const a = $input.first().json;
+const question = $('Agent input').first().json.text || '';
+const toolsUsed = (a.intermediateSteps || []).map(s => (s.action && s.action.tool) || '').filter(Boolean);
+const g = needsFreshLookup({ question, reply: a.output, toolsUsed });
+return [{ json: { output: a.output || '', retry: String(g.retry), guard_reason: g.reason, tools_used: toolsUsed.join(',') } }];`.trim() } },
+
+  { id: 'retryif', name: 'Redo?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1460, 100],
+    parameters: { options: {}, conditions: {
+      options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, combinator: 'and',
+      conditions: [{ id: 'r1', leftValue: '={{ $json.retry }}', rightValue: 'true', operator: { type: 'string', operation: 'equals' } }] } } },
+
+  // the exchange before this one, so "tell me more about the first one" still
+  // works in the memoryless redo. Offset 2 skips the rejected attempt itself.
+  { id: 'retryctx', name: 'Redo context', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [1620, 0],
+    parameters: { operation: 'executeQuery',
+      query: "select coalesce((select string_agg(case when t = 'human' then 'You: ' else 'Bot: ' end || left(regexp_replace(c, '\\s*\\[live data, fetched just now:.*$', '', 's'), 600), ' | ' order by id) from (select id, message->>'type' as t, message->>'content' as c from n8n_chat_histories where session_id = $1::text and message->>'type' in ('human', 'ai') order by id desc offset 2 limit 2) h), 'nothing') as previous",
+      options: { queryReplacement: "={{ $('Agent input').first().json.chat_id }}" } },
+    credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true },
+
+  { id: 'agent2', name: 'Guarded agent', type: '@n8n/n8n-nodes-langchain.agent', typeVersion: 3.1, position: [1780, 0],
+    parameters: { promptType: 'define',
+      text: "={{ $('Agent input').first().json.text }}\n\n[previous exchange, for reference: {{ $json.previous }}]\n[live data, fetched just now: latest runs: {{ $('Agent input').first().json.runs }}]\n[Your first answer to this was rejected because it described the feed without checking it. Call the right tool NOW and answer only from what it returns.]",
+      options: { systemMessage: SYSTEM.replace(/\{\{ \$json\.(sources|runs) \}\}/g, "{{ $('Agent input').first().json.$1 }}"), maxIterations: 6 } } },
+
+  // put the corrected answer into memory in place of the rejected one (base64
+  // keeps free text out of the comma-split queryReplacement)
+  { id: 'fixmem', name: 'Fix memory', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [1940, -100],
+    parameters: { operation: 'executeQuery',
+      query: "update n8n_chat_histories set message = jsonb_set(message, '{content}', to_jsonb(convert_from(decode($2, 'base64'), 'UTF8'))) where id = (select max(id) from n8n_chat_histories where session_id = $1::text and message->>'type' = 'ai') returning id",
+      options: { queryReplacement: "={{ $('Agent input').first().json.chat_id }},{{ Buffer.from(String($json.output || ''), 'utf8').toString('base64') }}" } },
+    credentials: { postgres: CRED_PG }, alwaysOutputData: true, onError: 'continueRegularOutput' },
+
+  // memory keeps the conversation, not the bulk: drop tool calls + raw tool
+  // output (n8n saves full results — 10 feed items — and offers no switch to
+  // stop it) and the per-message [live data ...] suffix.
+  { id: 'tidy', name: 'Tidy memory', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [1600, 300],
+    parameters: { operation: 'executeQuery',
+      query: "with d as (delete from n8n_chat_histories where session_id = $1::text and (message->>'type' = 'tool' or (message->>'type' = 'ai' and jsonb_typeof(message->'tool_calls') = 'array' and jsonb_array_length(message->'tool_calls') > 0)) returning 1), " +
+        "u as (update n8n_chat_histories set message = jsonb_set(message, '{content}', to_jsonb(regexp_replace(message->>'content', '\\s*\\[live data, fetched just now:.*$', '', 's'))) where session_id = $1::text and message->>'type' = 'human' and message->>'content' like '%[live data, fetched just now:%' returning 1) " +
+        "select (select count(*) from d) as dropped, (select count(*) from u) as stripped",
+      options: { queryReplacement: "={{ $('Agent input').first().json.chat_id }}" } },
+    credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true, onError: 'continueRegularOutput' },
 
   MODEL_NODE,
 
   { id: 'memory', name: 'Chat memory', type: '@n8n/n8n-nodes-langchain.memoryPostgresChat', typeVersion: 1.3, position: [1160, 320],
-    parameters: { sessionIdType: 'customKey', sessionKey: '={{ $json.chat_id }}', contextWindowLength: 4 }, // 2 exchanges. Tested 10 on 2026-10-09: 5/5 then 4/5 — once history filled, the 9B answered a findings question from memory instead of query_feed
+    parameters: { sessionIdType: 'customKey', sessionKey: '={{ $json.chat_id }}', contextWindowLength: 10 }, // 10 exchanges. Safe only because of 'Tidy memory' + 'Guard check' below — see shared/answer-guard.js
     credentials: { postgres: CRED_PG } },
 
   tool('run_discovery',
@@ -307,18 +356,22 @@ const connections = {
   ] },
   'Toggle drain': { main: [[{ node: 'Switch reply', type: 'main', index: 0 }]] },
   'Switch reply': { main: [[{ node: 'Send reply', type: 'main', index: 0 }]] },
-  [MODEL_NODE.name]: { ai_languageModel: [[{ node: 'Overseer Agent', type: 'ai_languageModel', index: 0 }]] },
+  [MODEL_NODE.name]: { ai_languageModel: [[{ node: 'Overseer Agent', type: 'ai_languageModel', index: 0 }, { node: 'Guarded agent', type: 'ai_languageModel', index: 0 }]] },
   'Chat memory': { ai_memory: [[{ node: 'Overseer Agent', type: 'ai_memory', index: 0 }]] },
-  'run_discovery': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }]] },
-  'full_sweep': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }]] },
-  'scrape_url': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }]] },
-  'query_feed': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }]] },
-  'run_status': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }]] },
-  'manage_sources': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }]] },
+  'run_discovery': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }, { node: 'Guarded agent', type: 'ai_tool', index: 0 }]] },
+  'full_sweep': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }, { node: 'Guarded agent', type: 'ai_tool', index: 0 }]] },
+  'scrape_url': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }, { node: 'Guarded agent', type: 'ai_tool', index: 0 }]] },
+  'query_feed': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }, { node: 'Guarded agent', type: 'ai_tool', index: 0 }]] },
+  'run_status': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }, { node: 'Guarded agent', type: 'ai_tool', index: 0 }]] },
+  'manage_sources': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }, { node: 'Guarded agent', type: 'ai_tool', index: 0 }]] },
   'Agent context': { main: [[{ node: 'Agent input', type: 'main', index: 0 }]] },
   'Agent input': { main: [[{ node: 'Overseer Agent', type: 'main', index: 0 }]] },
-  'Overseer Agent': { main: [[{ node: 'Prep reply', type: 'main', index: 0 }]] },
-  'Prep reply': { main: [[{ node: 'Send reply', type: 'main', index: 0 }]] }
+  'Overseer Agent': { main: [[{ node: 'Guard check', type: 'main', index: 0 }]] },
+  'Guard check': { main: [[{ node: 'Redo?', type: 'main', index: 0 }]] },
+  'Redo?': { main: [[{ node: 'Redo context', type: 'main', index: 0 }], [{ node: 'Prep reply', type: 'main', index: 0 }]] },
+  'Redo context': { main: [[{ node: 'Guarded agent', type: 'main', index: 0 }]] },
+  'Guarded agent': { main: [[{ node: 'Prep reply', type: 'main', index: 0 }, { node: 'Fix memory', type: 'main', index: 0 }]] },
+  'Prep reply': { main: [[{ node: 'Send reply', type: 'main', index: 0 }, { node: 'Tidy memory', type: 'main', index: 0 }]] }
 };
 
 const workflow = { name: 'WF-00 agent_router', nodes, connections,

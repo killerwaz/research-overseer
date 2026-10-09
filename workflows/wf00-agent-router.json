@@ -291,9 +291,150 @@
         "text": "={{ $json.text }}\n\n[live data, fetched just now: latest runs: {{ $json.runs }}]",
         "options": {
           "systemMessage": "=You are Research Overseer's dispatcher on Telegram. Route requests to tools; never do research yourself; never fabricate results or data — if a tool returns nothing, say so.\n\nRules:\n0. You know NOTHING about runs or findings except what a tool returns for the CURRENT message. Earlier tool results in this chat are stale — runs start and finish, items arrive. Every question about runs or findings MUST call the matching tool again, even if you answered the same question a minute ago. Never answer from chat history or general knowledge. (The feed list below is fresh every message.)\n1. Free and instant actions run immediately, no confirmation: a pasted URL -> scrape_url; status questions -> run_status; 'what feeds/sources are you watching' -> manage_sources with action list; reading existing findings -> query_feed; 'anything new today' -> run_discovery with source rss. These touch nothing that costs money.\n2. Anything that starts a web search costs money and about six minutes, so it needs the user's word first. Run it immediately ONLY if they used an explicit search verb (search, find me, look up, go get, dig into). If they merely asked a question — 'what's happening with X', 'anything on X', 'how is X going' — answer it from query_feed first (free), then end your reply with a one-line offer naming the search source and query you would run. Do NOT start the search; execute it on their next message if they say yes. full_sweep always needs confirmation.\n3. Retrospective questions are ALWAYS query_feed or run_status, and this OVERRIDES everything else even when a topic is named. Retrospective phrasing includes: catch me up, what did you find, what's new, anything good, show me, what did I miss, brief me, recap. \"Catch me up on funding this week\" is query_feed with max_age_days 7 — NOT a search, and NOT a confirmation prompt either; just read the feed and answer.\n3b. If a topic read comes back thin, retry query_feed once with fewer, broader keywords in tag. Never present items as being about the topic unless they are, and never answer a thin result by starting a search — say what the feed has and offer the search. If the question names a time ('today', 'last night', 'this week'), compute the ISO timestamp for the start of that window from the current time below and pass it to query_feed as the since parameter. Never answer a time-scoped question from an unfiltered read.\n4. When uncertain between search sources, fail WIDE: prefer full_sweep (with confirmation) or brave. Never guess narrow.\n4b. Call at most ONE discovery tool per user request, ever. After full_sweep or run_discovery returns, summarize what it returned and stop. If it found little, say so — do NOT run it again with different wording. Each run costs money and minutes.\n5. Scheduling is OFF — this is a live chat agent; nothing runs on a timer. If asked to schedule, repeat, or run something later or every day, say scheduling is switched off and offer to run it now (searches still need their usual yes).\n6. manage_sources actions: add (url, optional label), remove (id or url), list.\n7. Reply tersely — this is Telegram. Plain text, no markdown formatting.\n\nFeeds you are watching right now (read from the database this message — authoritative, the ONLY true list): {{ $json.sources }}\n\nLatest runs, newest first (read from the database this message — these OVERRIDE anything said earlier in the chat): {{ $json.runs }}\n\nCurrent time: {{ $now.setZone('Asia/Dhaka').toFormat('cccc yyyy-MM-dd HH:mm') }} (Asia/Dhaka, UTC+6). This is the local date and time — use it directly, do not convert it.",
+          "maxIterations": 6,
+          "returnIntermediateSteps": true
+        }
+      }
+    },
+    {
+      "id": "guard",
+      "name": "Guard check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        100
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Decides whether the router's reply must be thrown away and redone with a forced\n// fresh lookup. Inlined into WF-00's \"Guard check\" node.\n//\n// Why it exists (measured 2026-10-09): with thinking off, local Qwen3.5-9B skips\n// the tools whenever the chat already holds an answer to a similar question — it\n// repeats the old answer, or invents one (\"the feed has nothing on Nvidia\" with 10\n// items saved). Prompt wording, memory tidying and history logs all failed to stop\n// it; this check is the part the model cannot talk its way past.\n//\n// Rule: a reply that makes claims about the feed, or claims to have started an\n// action, is only acceptable if a tool actually ran this turn. Sources and runs are\n// exempt: they are handed to the model fresh every message, so answering those from\n// context is correct.\nfunction needsFreshLookup({ question, reply, toolsUsed }) {\n  const q = String(question || '');\n  const r = String(reply || '');\n  if (Array.isArray(toolsUsed) && toolsUsed.length > 0) return { retry: false, reason: 'tool ran' };\n  if (!r.trim()) return { retry: true, reason: 'empty reply' };\n\n  const claimsAction = /\\b(running|started|starting|kicked off|launching|searching|scraping)\\b[^.?!]*\\b(search|sweep|discovery|scrape|run)\\b/i.test(r);\n  if (claimsAction) return { retry: true, reason: 'claims an action it did not take' };\n\n  const claimsFindings = /\\b(found|items?|articles?|stor(y|ies)|findings?|coverage|headlines?|i checked|in the feed|the feed (has|shows)|nothing (on|about|new)|no (recent |new |fresh )?(items|news|coverage|results|stories))\\b/i.test(r);\n  if (!claimsFindings) return { retry: false, reason: 'no feed claims' };\n\n  const aboutSources = /\\b(sources?|feeds?|follow(ing)?|subscri\\w*|blogs?|rss|watching)\\b/i.test(q);\n  if (aboutSources) return { retry: false, reason: 'sources come from per-message context' };\n  const aboutRuns = /\\b(runs?|break|broke|broken|fail(ed|ing)?|work(ed|ing)?|status)\\b/i.test(q);\n  if (aboutRuns && /\\brun\\s*#?\\d+/i.test(r)) return { retry: false, reason: 'runs come from per-message context' };\n\n  return { retry: true, reason: 'feed claims without a lookup' };\n}\n\nconst a = $input.first().json;\nconst question = $('Agent input').first().json.text || '';\nconst toolsUsed = (a.intermediateSteps || []).map(s => (s.action && s.action.tool) || '').filter(Boolean);\nconst g = needsFreshLookup({ question, reply: a.output, toolsUsed });\nreturn [{ json: { output: a.output || '', retry: String(g.retry), guard_reason: g.reason, tools_used: toolsUsed.join(',') } }];"
+      }
+    },
+    {
+      "id": "retryif",
+      "name": "Redo?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1460,
+        100
+      ],
+      "parameters": {
+        "options": {},
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "r1",
+              "leftValue": "={{ $json.retry }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "retryctx",
+      "name": "Redo context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        1620,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select coalesce((select string_agg(case when t = 'human' then 'You: ' else 'Bot: ' end || left(regexp_replace(c, '\\s*\\[live data, fetched just now:.*$', '', 's'), 600), ' | ' order by id) from (select id, message->>'type' as t, message->>'content' as c from n8n_chat_histories where session_id = $1::text and message->>'type' in ('human', 'ai') order by id desc offset 2 limit 2) h), 'nothing') as previous",
+        "options": {
+          "queryReplacement": "={{ $('Agent input').first().json.chat_id }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "tzBuhu9KEXlaRRfW",
+          "name": "Postgres account"
+        }
+      },
+      "executeOnce": true,
+      "alwaysOutputData": true
+    },
+    {
+      "id": "agent2",
+      "name": "Guarded agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        1780,
+        0
+      ],
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $('Agent input').first().json.text }}\n\n[previous exchange, for reference: {{ $json.previous }}]\n[live data, fetched just now: latest runs: {{ $('Agent input').first().json.runs }}]\n[Your first answer to this was rejected because it described the feed without checking it. Call the right tool NOW and answer only from what it returns.]",
+        "options": {
+          "systemMessage": "=You are Research Overseer's dispatcher on Telegram. Route requests to tools; never do research yourself; never fabricate results or data — if a tool returns nothing, say so.\n\nRules:\n0. You know NOTHING about runs or findings except what a tool returns for the CURRENT message. Earlier tool results in this chat are stale — runs start and finish, items arrive. Every question about runs or findings MUST call the matching tool again, even if you answered the same question a minute ago. Never answer from chat history or general knowledge. (The feed list below is fresh every message.)\n1. Free and instant actions run immediately, no confirmation: a pasted URL -> scrape_url; status questions -> run_status; 'what feeds/sources are you watching' -> manage_sources with action list; reading existing findings -> query_feed; 'anything new today' -> run_discovery with source rss. These touch nothing that costs money.\n2. Anything that starts a web search costs money and about six minutes, so it needs the user's word first. Run it immediately ONLY if they used an explicit search verb (search, find me, look up, go get, dig into). If they merely asked a question — 'what's happening with X', 'anything on X', 'how is X going' — answer it from query_feed first (free), then end your reply with a one-line offer naming the search source and query you would run. Do NOT start the search; execute it on their next message if they say yes. full_sweep always needs confirmation.\n3. Retrospective questions are ALWAYS query_feed or run_status, and this OVERRIDES everything else even when a topic is named. Retrospective phrasing includes: catch me up, what did you find, what's new, anything good, show me, what did I miss, brief me, recap. \"Catch me up on funding this week\" is query_feed with max_age_days 7 — NOT a search, and NOT a confirmation prompt either; just read the feed and answer.\n3b. If a topic read comes back thin, retry query_feed once with fewer, broader keywords in tag. Never present items as being about the topic unless they are, and never answer a thin result by starting a search — say what the feed has and offer the search. If the question names a time ('today', 'last night', 'this week'), compute the ISO timestamp for the start of that window from the current time below and pass it to query_feed as the since parameter. Never answer a time-scoped question from an unfiltered read.\n4. When uncertain between search sources, fail WIDE: prefer full_sweep (with confirmation) or brave. Never guess narrow.\n4b. Call at most ONE discovery tool per user request, ever. After full_sweep or run_discovery returns, summarize what it returned and stop. If it found little, say so — do NOT run it again with different wording. Each run costs money and minutes.\n5. Scheduling is OFF — this is a live chat agent; nothing runs on a timer. If asked to schedule, repeat, or run something later or every day, say scheduling is switched off and offer to run it now (searches still need their usual yes).\n6. manage_sources actions: add (url, optional label), remove (id or url), list.\n7. Reply tersely — this is Telegram. Plain text, no markdown formatting.\n\nFeeds you are watching right now (read from the database this message — authoritative, the ONLY true list): {{ $('Agent input').first().json.sources }}\n\nLatest runs, newest first (read from the database this message — these OVERRIDE anything said earlier in the chat): {{ $('Agent input').first().json.runs }}\n\nCurrent time: {{ $now.setZone('Asia/Dhaka').toFormat('cccc yyyy-MM-dd HH:mm') }} (Asia/Dhaka, UTC+6). This is the local date and time — use it directly, do not convert it.",
           "maxIterations": 6
         }
       }
+    },
+    {
+      "id": "fixmem",
+      "name": "Fix memory",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        1940,
+        -100
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "update n8n_chat_histories set message = jsonb_set(message, '{content}', to_jsonb(convert_from(decode($2, 'base64'), 'UTF8'))) where id = (select max(id) from n8n_chat_histories where session_id = $1::text and message->>'type' = 'ai') returning id",
+        "options": {
+          "queryReplacement": "={{ $('Agent input').first().json.chat_id }},{{ Buffer.from(String($json.output || ''), 'utf8').toString('base64') }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "tzBuhu9KEXlaRRfW",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "tidy",
+      "name": "Tidy memory",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        1600,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "with d as (delete from n8n_chat_histories where session_id = $1::text and (message->>'type' = 'tool' or (message->>'type' = 'ai' and jsonb_typeof(message->'tool_calls') = 'array' and jsonb_array_length(message->'tool_calls') > 0)) returning 1), u as (update n8n_chat_histories set message = jsonb_set(message, '{content}', to_jsonb(regexp_replace(message->>'content', '\\s*\\[live data, fetched just now:.*$', '', 's'))) where session_id = $1::text and message->>'type' = 'human' and message->>'content' like '%[live data, fetched just now:%' returning 1) select (select count(*) from d) as dropped, (select count(*) from u) as stripped",
+        "options": {
+          "queryReplacement": "={{ $('Agent input').first().json.chat_id }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "tzBuhu9KEXlaRRfW",
+          "name": "Postgres account"
+        }
+      },
+      "executeOnce": true,
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
     },
     {
       "id": "model",
@@ -336,7 +477,7 @@
       "parameters": {
         "sessionIdType": "customKey",
         "sessionKey": "={{ $json.chat_id }}",
-        "contextWindowLength": 4
+        "contextWindowLength": 10
       },
       "credentials": {
         "postgres": {
@@ -888,6 +1029,11 @@
             "node": "Overseer Agent",
             "type": "ai_languageModel",
             "index": 0
+          },
+          {
+            "node": "Guarded agent",
+            "type": "ai_languageModel",
+            "index": 0
           }
         ]
       ]
@@ -910,6 +1056,11 @@
             "node": "Overseer Agent",
             "type": "ai_tool",
             "index": 0
+          },
+          {
+            "node": "Guarded agent",
+            "type": "ai_tool",
+            "index": 0
           }
         ]
       ]
@@ -919,6 +1070,11 @@
         [
           {
             "node": "Overseer Agent",
+            "type": "ai_tool",
+            "index": 0
+          },
+          {
+            "node": "Guarded agent",
             "type": "ai_tool",
             "index": 0
           }
@@ -932,6 +1088,11 @@
             "node": "Overseer Agent",
             "type": "ai_tool",
             "index": 0
+          },
+          {
+            "node": "Guarded agent",
+            "type": "ai_tool",
+            "index": 0
           }
         ]
       ]
@@ -941,6 +1102,11 @@
         [
           {
             "node": "Overseer Agent",
+            "type": "ai_tool",
+            "index": 0
+          },
+          {
+            "node": "Guarded agent",
             "type": "ai_tool",
             "index": 0
           }
@@ -954,6 +1120,11 @@
             "node": "Overseer Agent",
             "type": "ai_tool",
             "index": 0
+          },
+          {
+            "node": "Guarded agent",
+            "type": "ai_tool",
+            "index": 0
           }
         ]
       ]
@@ -963,6 +1134,11 @@
         [
           {
             "node": "Overseer Agent",
+            "type": "ai_tool",
+            "index": 0
+          },
+          {
+            "node": "Guarded agent",
             "type": "ai_tool",
             "index": 0
           }
@@ -995,7 +1171,63 @@
       "main": [
         [
           {
+            "node": "Guard check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guard check": {
+      "main": [
+        [
+          {
+            "node": "Redo?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redo?": {
+      "main": [
+        [
+          {
+            "node": "Redo context",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
             "node": "Prep reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redo context": {
+      "main": [
+        [
+          {
+            "node": "Guarded agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guarded agent": {
+      "main": [
+        [
+          {
+            "node": "Prep reply",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fix memory",
             "type": "main",
             "index": 0
           }
@@ -1007,6 +1239,11 @@
         [
           {
             "node": "Send reply",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Tidy memory",
             "type": "main",
             "index": 0
           }
