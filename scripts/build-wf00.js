@@ -52,7 +52,7 @@ const WF = {
 const SYSTEM = `=You are Research Overseer's dispatcher on Telegram. Route requests to tools; never do research yourself; never fabricate results or data — if a tool returns nothing, say so.
 
 Rules:
-0. You know NOTHING about the feeds, runs or findings except what a tool returns in this conversation. Any question about them MUST call the matching tool first, every time — never answer from memory or general knowledge.
+0. You know NOTHING about runs or findings except what a tool returns for the CURRENT message. Earlier tool results in this chat are stale — runs start and finish, items arrive. Every question about runs or findings MUST call the matching tool again, even if you answered the same question a minute ago. Never answer from chat history or general knowledge. (The feed list below is fresh every message.)
 1. Free and instant actions run immediately, no confirmation: a pasted URL -> scrape_url; status questions -> run_status; 'what feeds/sources are you watching' -> manage_sources with action list; reading existing findings -> query_feed; 'anything new today' -> run_discovery with source rss. These touch nothing that costs money.
 2. Anything that starts a web search costs money and about six minutes, so it needs the user's word first. Run it immediately ONLY if they used an explicit search verb (search, find me, look up, go get, dig into). If they merely asked a question — 'what's happening with X', 'anything on X', 'how is X going' — answer it from query_feed first (free), then end your reply with a one-line offer naming the search source and query you would run. Do NOT start the search; execute it on their next message if they say yes. full_sweep always needs confirmation.
 3. Retrospective questions are ALWAYS query_feed or run_status, and this OVERRIDES everything else even when a topic is named. Retrospective phrasing includes: catch me up, what did you find, what's new, anything good, show me, what did I miss, brief me, recap. "Catch me up on funding this week" is query_feed with max_age_days 7 — NOT a search, and NOT a confirmation prompt either; just read the feed and answer.
@@ -64,6 +64,8 @@ Rules:
 7. Reply tersely — this is Telegram. Plain text, no markdown formatting.
 
 Feeds you are watching right now (read from the database this message — authoritative, the ONLY true list): {{ $json.sources }}
+
+Latest runs, newest first (read from the database this message — these OVERRIDE anything said earlier in the chat): {{ $json.runs }}
 
 Current time: {{ $now.setZone('Asia/Dhaka').toFormat('cccc yyyy-MM-dd HH:mm') }} (Asia/Dhaka, UTC+6). This is the local date and time — use it directly, do not convert it.`;
 
@@ -182,11 +184,14 @@ return [{ json: { chat_id, output: text } }];
 
   // Facts the model must not invent. Without thinking, the 9B answers "which
   // sources do you follow?" with a confident made-up list (benched 2026-10-09:
-  // BBC, The Verge, Reuters...) however the rules are worded. Handing it the real
-  // list each message removes the gap it fills. One cheap query per message.
+  // BBC, The Verge, Reuters...) however the rules are worded, and it repeats an
+  // old run_status answer from chat memory instead of calling the tool again.
+  // Handing it the real list and the latest runs each message removes the gap
+  // it fills. One cheap query per message.
   { id: 'ctx', name: 'Agent context', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [1000, -100],
     parameters: { operation: 'executeQuery',
-      query: "select coalesce((select string_agg(coalesce(nullif(label, ''), url) || ' <' || url || '>', '; ' order by id) from sources where active and kind = 'rss'), 'none') as sources",
+      query: "select coalesce((select string_agg(coalesce(nullif(label, ''), url) || ' <' || url || '>', '; ' order by id) from sources where active and kind = 'rss'), 'none') as sources, " +
+        "coalesce((select string_agg('run ' || id || ' ' || scope || ' ' || status || ' started ' || to_char(started_at at time zone 'Asia/Dhaka', 'YYYY-MM-DD HH24:MI') || ', ' || coalesce(items_created, 0) || ' items' || coalesce(' (error: ' || left(error, 80) || ')', ''), '; ' order by id desc) from (select * from runs order by id desc limit 3) r), 'no runs yet') as runs",
       options: {} },
     credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true },
 
@@ -194,17 +199,21 @@ return [{ json: { chat_id, output: text } }];
   // feed-switch command); chat memory keys on $json.chat_id, so it must survive.
   { id: 'ctxmerge', name: 'Agent input', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1060, 100],
     parameters: { mode: 'runOnceForAllItems', jsCode: `
-const sources = ($('Agent context').first().json.sources) || 'none';
-return $('Feed switch?').all(1).map(i => ({ json: { ...i.json, sources } }));`.trim() } },
+const ctx = $('Agent context').first().json;
+const sources = ctx.sources || 'none', runs = ctx.runs || 'unknown';
+return $('Feed switch?').all(1).map(i => ({ json: { ...i.json, sources, runs } }));`.trim() } },
 
   { id: 'agent', name: 'Overseer Agent', type: '@n8n/n8n-nodes-langchain.agent', typeVersion: 3.1, position: [1120, 100],
-    parameters: { promptType: 'define', text: '={{ $json.text }}',
+    // Live run data rides in the USER turn, not just the system prompt: with it
+    // only in the system prompt the 9B still copied a stale run_status answer
+    // from chat history (it saw run 58, answered "run 57"). The latest turn wins.
+    parameters: { promptType: 'define', text: '={{ $json.text }}\n\n[live data, fetched just now: latest runs: {{ $json.runs }}]',
       options: { systemMessage: SYSTEM, maxIterations: 6 } } },
 
   MODEL_NODE,
 
   { id: 'memory', name: 'Chat memory', type: '@n8n/n8n-nodes-langchain.memoryPostgresChat', typeVersion: 1.3, position: [1160, 320],
-    parameters: { sessionIdType: 'customKey', sessionKey: '={{ $json.chat_id }}', contextWindowLength: 10 },
+    parameters: { sessionIdType: 'customKey', sessionKey: '={{ $json.chat_id }}', contextWindowLength: 4 }, // 2 exchanges: enough for "yes" to mean yes-to-the-last-offer, little stale material to copy
     credentials: { postgres: CRED_PG } },
 
   tool('run_discovery',
@@ -222,7 +231,11 @@ return $('Feed switch?').all(1).map(i => ({ json: { ...i.json, sources } }));`.t
     "Call it ONLY when your previous message asked to confirm a sweep and the user's reply is a yes.",
     WF.full_sweep,
     { query: { desc: 'optional focus query; empty string runs the default sweep' },
-      trigger: { fixed: 'agent' } }, [1440, 320]),
+      trigger: { fixed: 'agent' },
+      // filled by n8n, not the model: WF-40's gate needs the user's actual words
+      // and which chat they came from
+      user_message: { fixed: "={{ $('Agent input').first().json.text }}" },
+      chat_id: { fixed: "={{ $('Agent input').first().json.chat_id }}" } }, [1440, 320]),
 
   tool('scrape_url',
     'Ingest one URL the user pasted. Use whenever the message contains a link. Cheap — execute immediately, no confirmation.',
