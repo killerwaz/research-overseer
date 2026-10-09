@@ -213,7 +213,7 @@ return $('Feed switch?').all(1).map(i => ({ json: { ...i.json, sources, runs } }
   MODEL_NODE,
 
   { id: 'memory', name: 'Chat memory', type: '@n8n/n8n-nodes-langchain.memoryPostgresChat', typeVersion: 1.3, position: [1160, 320],
-    parameters: { sessionIdType: 'customKey', sessionKey: '={{ $json.chat_id }}', contextWindowLength: 4 }, // 2 exchanges: enough for "yes" to mean yes-to-the-last-offer, little stale material to copy
+    parameters: { sessionIdType: 'customKey', sessionKey: '={{ $json.chat_id }}', contextWindowLength: 4 }, // 2 exchanges. Tested 10 on 2026-10-09: 5/5 then 4/5 — once history filled, the 9B answered a findings question from memory instead of query_feed
     credentials: { postgres: CRED_PG } },
 
   tool('run_discovery',
