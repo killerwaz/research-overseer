@@ -62,12 +62,12 @@ def describe(path, api_key, model="qwen/qwen3.5-9b", base="http://localhost:1234
     return None if not text or text.upper().startswith("NONE") else " ".join(text.split())
 
 
-def slides(video, api_key, **kw):
+def slides(video, api_key, base="http://localhost:1234", **kw):
     """[{start, text}] for informative frames, consecutive repeats merged."""
     out, frames = [], sample_frames(video, **kw)
     try:
         for start, p in frames:
-            text = describe(p, api_key)
+            text = describe(p, api_key, base=base)
             if text and not (out and out[-1]["text"] == text):
                 out.append({"start": start, "text": text})
     finally:

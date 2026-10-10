@@ -321,7 +321,7 @@ const nodes = [
   // One at a time: transcription uses every CPU core. 15 min ceiling covers a
   // 3-hour Parakeet fallback (~0.05x real time) plus the audio download.
   { id: 'fetchmedia', name: 'Fetch media', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [1450, -400],
-    parameters: { method: 'POST', url: 'http://host.docker.internal:8765/transcript',
+    parameters: { method: 'POST', url: 'http://media:8765/transcript',
       sendHeaders: true, headerParameters: { parameters: [ { name: 'Authorization', value: 'Bearer __MEDIA_TOKEN__' } ] },
       sendBody: true, specifyBody: 'json', jsonBody: '={{ JSON.stringify({ url: $json.canonical_url, slides: Boolean($json.slides), transcribe: Boolean($json.transcribe) }) }}',
       options: { timeout: 900000, batching: { batch: { batchSize: 1, batchInterval: 0 } } } },

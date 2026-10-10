@@ -21,7 +21,10 @@ trickle, never a burst — and a cached video is never requested again.
 A bot check is reported ({"blocked": true}) so the bot can tell him; there is
 no automatic pause (his call).
 
-Run: media\\start.cmd   (or: uv run python server.py, from media/)
+Runs as the "media" container in docker/docker-compose.yml (restart:
+unless-stopped, so it starts with Docker). A container's outbound requests leave
+through this PC's home connection, so YouTube sees the same home IP.
+Natively, for debugging: uv run python server.py (reads ../.env).
 """
 
 import json, os, pathlib, random, re, shutil, subprocess, sys, tempfile, threading, time, urllib.request, wave
@@ -31,19 +34,21 @@ from transcript_utils import pick_caption_track, parse_json3, paragraphs, upload
 import vision
 
 ROOT = pathlib.Path(__file__).resolve().parent
-CACHE = ROOT / "cache"
-CACHE.mkdir(exist_ok=True)
 HOME = pathlib.Path.home()
 os.environ["PATH"] = os.pathsep.join([str(HOME / ".deno" / "bin"), str(HOME / "bin"), os.environ.get("PATH", "")])
 YTDLP = shutil.which("yt-dlp") or str(HOME / "bin" / "yt-dlp.exe")
 
 
 def load_env():
+    """Container: environment variables. Native: the repo .env fills the gaps."""
     env = {}
-    for line in (ROOT.parent / ".env").read_text(encoding="utf-8").splitlines():
-        if "=" in line and not line.lstrip().startswith("#"):
-            k, v = line.split("=", 1)
-            env[k.strip()] = v.strip()
+    dotenv = ROOT.parent / ".env"
+    if dotenv.exists():
+        for line in dotenv.read_text(encoding="utf-8").splitlines():
+            if "=" in line and not line.lstrip().startswith("#"):
+                k, v = line.split("=", 1)
+                env[k.strip()] = v.strip()
+    env.update({k: v for k, v in os.environ.items() if v})
     return env
 
 
@@ -54,6 +59,9 @@ MAX_SECONDS = int(ENV.get("MEDIA_MAX_SECONDS", str(3 * 3600)))
 PACE = float(ENV.get("MEDIA_PACE_SECONDS", "15"))
 SLIDES_MAX_SECONDS = int(ENV.get("MEDIA_SLIDES_MAX_SECONDS", str(45 * 60)))
 LM_KEY = ENV.get("LMSTUDIO_API_KEY", "")
+LM_BASE = ENV.get("LMSTUDIO_BASE", "http://localhost:1234")
+CACHE = pathlib.Path(ENV.get("MEDIA_CACHE", str(ROOT / "cache")))
+CACHE.mkdir(parents=True, exist_ok=True)
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36"
 BOT_CHECK = re.compile(r"confirm you.?re not a bot|sign in to confirm", re.I)
 YT_ID = re.compile(r"(?:youtube\.com/(?:watch\?(?:[^#]*&)?v=|shorts/|embed/|live/)|youtu\.be/)([A-Za-z0-9_-]{11})")
@@ -157,7 +165,7 @@ def on_screen(url, duration):
                "-o", str(pathlib.Path(d) / "v.%(ext)s"), url], timeout=900)
         video = next(pathlib.Path(d).glob("v.*"))
         t = time.time()
-        out = vision.slides(video, LM_KEY)
+        out = vision.slides(video, LM_KEY, base=LM_BASE)
         log(f"on-screen: {len(out)} informative frames in {time.time()-t:.0f}s")
         return out, ""
 
