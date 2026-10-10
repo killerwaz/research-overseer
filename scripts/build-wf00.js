@@ -57,11 +57,12 @@ Rules:
 2. Anything that starts a web search costs money and about six minutes, so it needs the user's word first. Run it immediately ONLY if they used an explicit search verb (search, find me, look up, go get, dig into). If they merely asked a question — 'what's happening with X', 'anything on X', 'how is X going' — answer it from query_feed first (free), then end your reply with a one-line offer naming the search source and query you would run. Do NOT start the search; execute it on their next message if they say yes. full_sweep always needs confirmation.
 3. Retrospective questions are ALWAYS query_feed or run_status, and this OVERRIDES everything else even when a topic is named. Retrospective phrasing includes: catch me up, what did you find, what's new, anything good, show me, what did I miss, brief me, recap. "Catch me up on funding this week" is query_feed with max_age_days 7 — NOT a search, and NOT a confirmation prompt either; just read the feed and answer.
 3b. If a topic read comes back thin, retry query_feed once with fewer, broader keywords in tag. Never present items as being about the topic unless they are, and never answer a thin result by starting a search — say what the feed has and offer the search. If the question names a time ('today', 'last night', 'this week'), compute the ISO timestamp for the start of that window from the current time below and pass it to query_feed as the since parameter. Never answer a time-scoped question from an unfiltered read.
+3c. Follow-ups about an item you just listed — 'the first one', '#3', 'tell me more about number 2', '1. especially the X part', 'open the second' — call get_item with that number. Do NOT call query_feed again for these: a fresh query returns a different list. If they describe an item without a number, match it to the list you showed and use its n.
 4. When uncertain between search sources, fail WIDE: prefer full_sweep (with confirmation) or brave. Never guess narrow.
 4b. Call at most ONE discovery tool per user request, ever. After full_sweep or run_discovery returns, summarize what it returned and stop. If it found little, say so — do NOT run it again with different wording. Each run costs money and minutes.
 5. Scheduling is OFF — this is a live chat agent; nothing runs on a timer. If asked to schedule, repeat, or run something later or every day, say scheduling is switched off and offer to run it now (searches still need their usual yes).
 6. manage_sources actions: add (url, optional label), remove (id or url), list.
-7. Reply tersely — this is Telegram. Plain text, no markdown formatting.
+7. Reply tersely — this is Telegram. Plain text, no markdown formatting. When you list feed items, start each line with its n from the tool result (e.g. '3. Title — one line why') so the user can say 'tell me about 3'.
 
 Feeds you are watching right now (read from the database this message — authoritative, the ONLY true list): {{ $json.sources }}
 
@@ -299,16 +300,31 @@ return [{ json: { output: a.output || '', retry: String(g.retry), guard_reason: 
     "Items are scored on two axes: specificity (1-5, how concrete and verifiable the claims are — vendor SEO content scores low) and angle_strength (1-5, how non-obvious the publishable hook is). score = the two added, 2-10. Use min_score 7+ for 'the good stuff', 8+ for 'only the best'. " +
     "Quality and recency are separate knobs and combine freely: min_score filters how good, max_age_days filters how fresh. 'anything good this week' = min_score 7 + max_age_days 7. Results always come back best-first. " +
     "Set group_stories to 'true' when the user wants an overview rather than every article — it collapses multiple outlets covering the same event into one row with an articles count. Prefer it for 'what's happening with X', 'catch me up', 'what did I miss'. Leave empty when they want individual pieces to read. " +
-    "Put the question's topic in tag as plain keywords ('nvidia export control'); it matches tags, titles and summaries by keyword overlap. If a topic search comes back empty, say the feed has nothing on it and offer a search. Time words and quality belong in max_age_days and min_score, never in tag. " +
+    "Put the question's topic in tag ('nvidia export control'). It matches by keyword AND by meaning, so plain wording works ('AI that can buy things' finds agent-payment items). For several topics at once — comparisons, 'X and Y' — separate them with | ('nigeria ai | bangladesh bank'), up to 3; each topic gets its own share of the results and every item says which topic it matched. With a topic, results come back most-relevant-first. If a topic search comes back empty, the feed really has nothing on it: say so and offer a search. Time words and quality belong in max_age_days and min_score, never in tag. " +
+    "Every item has a number n. Show it when you list items; follow-ups like 'the first one' go to get_item, not here. " +
     "Params: max_age_days (days since publication), min_score (2-10), since (ISO timestamp, for an exact cutoff), tag, limit (default 20), group_stories, min_relevance (legacy, leave empty).",
     WF.query_feed,
     { group_stories: { desc: "'true' to collapse duplicate coverage of one event into a single row, empty for every article" },
       max_age_days: { desc: 'only items published within this many days, empty for any age' },
       min_score: { desc: 'minimum combined score 2-10, empty for none' },
       since: { desc: 'ISO timestamp lower bound, empty for none' },
-      tag: { desc: 'topic keywords from the question (e.g. \'nvidia export control\'), empty for no topic. Matches tags, titles and summaries by keyword overlap. Never put time words or quality words here' },
+      tag: { desc: 'the topic from the question (e.g. \'nvidia export control\'); several topics separated by | (max 3); empty for no topic. Matched by keyword and by meaning. Never put time words or quality words here' },
       limit: { desc: 'max items to return, empty for default 20' },
-      min_relevance: { desc: 'legacy 1-5 filter, leave empty' } }, [1720, 320]),
+      min_relevance: { desc: 'legacy 1-5 filter, leave empty' },
+      item: { fixed: '' },
+      chat_id: { fixed: "={{ $('Agent input').first().json.chat_id }}" } }, [1720, 320]),
+
+  // Same workflow as query_feed, ITEM mode: resolves n against chat_results, the
+  // list WF-31 stored for this chat. Its own tool because the router follows
+  // tool descriptions far more than the system prompt (CLAUDE.md, Models).
+  tool('get_item',
+    "Fetch ONE item from the list you last showed in this chat, by its number n, with an excerpt of the saved article. Use for every follow-up about a listed item: 'the first one', '#3', 'tell me more about number 2', 'what does 4 say', '1. especially the global south part'. " +
+    "Never re-run query_feed for these — a new query returns a different list. Answer from the summary and page_excerpt it returns. If it says the item is not found, ask which item they mean.",
+    WF.query_feed,
+    { item: { desc: 'the number n of the item in your last list, e.g. 3' },
+      chat_id: { fixed: "={{ $('Agent input').first().json.chat_id }}" },
+      since: { fixed: '' }, min_relevance: { fixed: '' }, tag: { fixed: '' }, limit: { fixed: '' },
+      min_score: { fixed: '' }, max_age_days: { fixed: '' }, group_stories: { fixed: '' } }, [1790, 440]),
 
   tool('run_status',
     "Report recent runs: when, scope, counts, ok/partial/failed. Use for 'did last night's run work', 'when did you last run', 'did anything break'.",
@@ -362,6 +378,7 @@ const connections = {
   'full_sweep': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }, { node: 'Guarded agent', type: 'ai_tool', index: 0 }]] },
   'scrape_url': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }, { node: 'Guarded agent', type: 'ai_tool', index: 0 }]] },
   'query_feed': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }, { node: 'Guarded agent', type: 'ai_tool', index: 0 }]] },
+  'get_item': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }, { node: 'Guarded agent', type: 'ai_tool', index: 0 }]] },
   'run_status': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }, { node: 'Guarded agent', type: 'ai_tool', index: 0 }]] },
   'manage_sources': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }, { node: 'Guarded agent', type: 'ai_tool', index: 0 }]] },
   'Agent context': { main: [[{ node: 'Agent input', type: 'main', index: 0 }]] },
