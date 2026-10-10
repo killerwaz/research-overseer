@@ -31,7 +31,8 @@ for (const item of urls) {
   const c = obj.url ? canon(obj.url) : null;
   if (!c) continue;
   out.push({ json: { url: obj.url, title: obj.title || null, source: obj.source || null,
-    published_at: obj.published_at || null, canonical_url: c, run_id: runId } });
+    published_at: obj.published_at || null, canonical_url: c, run_id: runId,
+    slides: Boolean(obj.slides), transcribe: Boolean(obj.transcribe) } });
 }
 if (!out.length) return [{ json: { __no_new: true, run_id: runId, debug: lastErr } }];
 return out;
@@ -53,23 +54,31 @@ const seen = new Set($input.all().map(i => i.json && i.json.canonical_url).filte
 let candidates = [];
 try { candidates = $('Canonicalize').all().map(i => i.json).filter(j => !j.__no_new); } catch (e) {}
 const byCanon = new Map();
-for (const c of candidates) if (!seen.has(c.canonical_url) && !byCanon.has(c.canonical_url)) byCanon.set(c.canonical_url, c);
+// A media link that asks for more (slides / transcribe) is processed again even
+// when already in the feed; Insert doc then replaces the old rows.
+const wantsMore = (c) => isMediaUrl(c.canonical_url) && (c.slides || c.transcribe);
+for (const c of candidates) if ((!seen.has(c.canonical_url) || wantsMore(c)) && !byCanon.has(c.canonical_url)) byCanon.set(c.canonical_url, c);
 const fresh = [...byCanon.values()];
 if (!fresh.length) return [{ json: { __no_new: true, run_id: runId } }];
-return fresh.map(j => ({ json: { ...j, is_media: isMediaUrl(j.canonical_url) } }));
+return fresh.map(j => ({ json: { ...j, is_media: isMediaUrl(j.canonical_url), replace: seen.has(j.canonical_url) } }));
 `.trim();
 
 const LOG_FAILURE = `
 const orig = $('Filter new').item.json;
 let reason = 'both_scrapers_failed_or_short_markdown';
+let media_title = '';
 if (orig.is_media) {
   const e = $json.error;
-  reason = 'media: ' + String((e && typeof e === 'object' ? (e.message || JSON.stringify(e)) : e) || 'no transcript').slice(0, 150);
+  const msg = String((e && typeof e === 'object' ? (e.message || JSON.stringify(e)) : e) || '');
+  media_title = $json.title || '';
+  if ($json.no_captions) reason = 'media_no_captions';
+  else if (/bot check|"blocked"/i.test(msg)) reason = 'media_blocked: YouTube bot check';
+  else reason = 'media: ' + (msg || 'no transcript').slice(0, 150);
 } else if ($json.error) {
   const msg = (typeof $json.error === 'object' && $json.error.message) ? $json.error.message : String($json.error);
   reason = 'firecrawl_error: ' + String(msg).slice(0, 120);
 } else if ($json.data) reason = 'firecrawl_short_markdown';
-return { json: { failed: true, url: orig.url, canonical_url: orig.canonical_url, reason, run_id: orig.run_id } };
+return { json: { failed: true, url: orig.url, canonical_url: orig.canonical_url, reason, run_id: orig.run_id, media_title } };
 `.trim();
 
 const PREP_DOC = `
@@ -155,7 +164,7 @@ const triage_body = JSON.stringify({ model: prof.model, temperature: 0.2, max_to
   reasoning_effort: prof.reasoning_effort, response_format: schema,
   messages: [ { role: 'system', content: sys }, { role: 'user', content: user } ] });
 return { json: { canonical_url: orig.canonical_url, source: orig.source || '', title, markdown,
-  scraper: 'media:' + (t.source || 'unknown'), run_id: orig.run_id, triage_body,
+  scraper: 'media:' + (t.source || 'unknown'), run_id: orig.run_id, triage_body, replace: orig.replace ? 'replace' : '',
   triage_profile: prof.model + '/' + prof.content_chars, published_at: published } };
 `.trim();
 
@@ -314,7 +323,7 @@ const nodes = [
   { id: 'fetchmedia', name: 'Fetch media', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [1450, -400],
     parameters: { method: 'POST', url: 'http://host.docker.internal:8765/transcript',
       sendHeaders: true, headerParameters: { parameters: [ { name: 'Authorization', value: 'Bearer __MEDIA_TOKEN__' } ] },
-      sendBody: true, specifyBody: 'json', jsonBody: '={{ JSON.stringify({ url: $json.canonical_url }) }}',
+      sendBody: true, specifyBody: 'json', jsonBody: '={{ JSON.stringify({ url: $json.canonical_url, slides: Boolean($json.slides), transcribe: Boolean($json.transcribe) }) }}',
       options: { timeout: 900000, batching: { batch: { batchSize: 1, batchInterval: 0 } } } },
     retryOnFail: false, onError: 'continueRegularOutput' },
 
@@ -355,8 +364,8 @@ const nodes = [
   codeNode('Prep doc', 'prepdoc', [1800, -200], 'runOnceForEachItem', PREP_DOC_FINAL),
 
   pgNode('Insert doc', 'insertdoc', [2000, -200],
-    "with s as (insert into seen_urls (canonical_url, source) values ($1, nullif($2,'')) on conflict (canonical_url) do nothing) insert into raw_docs (canonical_url, title, markdown, scraper, run_id, published_at) values ($1, nullif($3,''), $4, $6, $5::bigint, nullif($7,'')::timestamptz) returning id as raw_doc_id, scraper",
-    "={{ $json.canonical_url }},{{ $json.source }},{{ $json.title }},{{ $json.markdown }},{{ $json.run_id }},{{ $json.scraper }},{{ $json.published_at }}"),
+    "with s as (insert into seen_urls (canonical_url, source) values ($1, nullif($2,'')) on conflict (canonical_url) do nothing), xf as (delete from feed_items where canonical_url = $1 and $8 = 'replace'), xd as (delete from raw_docs where canonical_url = $1 and $8 = 'replace') insert into raw_docs (canonical_url, title, markdown, scraper, run_id, published_at) values ($1, nullif($3,''), $4, $6, $5::bigint, nullif($7,'')::timestamptz) returning id as raw_doc_id, scraper",
+    "={{ $json.canonical_url }},{{ $json.source }},{{ $json.title }},{{ $json.markdown }},{{ $json.run_id }},{{ $json.scraper }},{{ $json.published_at }},{{ $json.replace || '' }}"),
 
   // Per-item sequential sub-workflow call — serializes LM Studio traffic and is
   // correct no matter how many batches the scrape branches produce.
@@ -407,10 +416,20 @@ const nodes = [
   // are for run_status when something actually needs looking at.
   codeNode('Compose summary', 'compose', [4180, 0], 'runOnceForAllItems', inline('media.js') + `
 const r = $('Finalize run').first().json;
-let blockedMsg = '';
-try { if ($('Log failure').all().some((i) => /bot check/i.test(i.json.reason || ''))) blockedMsg = '🎬 YouTube is temporarily blocking this machine (bot check), so the video could not be read. The media service pauses YouTube requests for a few hours; send the link again later.'; } catch (e) {}
-if (blockedMsg && !(Number(r.items_created) > 0)) return [{ json: { text: blockedMsg } }];
+// Media outcomes the bot must explain (pasted links only).
+let fails = [];
+try { fails = $('Log failure').all().map((i) => i.json); } catch (e) {}
+const escT = (x) => String(x || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+if (r.scope === 'url' && !(Number(r.items_created) > 0)) {
+  const blocked = fails.find((x) => /^media_blocked/.test(x.reason || ''));
+  if (blocked) return [{ json: { text: '\u26A0\uFE0F YouTube blocked me (bot check), so I could not read:\\n' + escT(blocked.url) +
+    '\\nIt usually lifts on its own within hours. Send the link again later.', remember: '' } }];
+  const noCap = fails.find((x) => x.reason === 'media_no_captions');
+  if (noCap) return [{ json: { text: '\u{1F3AC} <b>' + escT(noCap.media_title || noCap.url) + '</b> has no captions.\\n' +
+    'Reply "transcribe" and I will listen to it (about 1 minute per 20 minutes of video).', remember: noCap.canonical_url } }];
+}
 if (r.media && r.scope === 'url') {
+
   let m = null; try { m = JSON.parse(r.media); } catch (e) {}
   if (m) return [{ json: { text: mediaMessage(m) } }];
 }
@@ -438,10 +457,16 @@ if (brief) {
 return [{ json: { text } }];
 `.trim()),
 
+  // A video with no captions is remembered, so a bare "transcribe" reply
+  // (WF-42) knows which link it means. Single user, so one settings row.
+  pgNode('Remember no-captions', 'remembernc', [4280, -120],
+    "insert into settings (key, value, updated_at) select 'last_no_captions_url', $1, now() where $1 <> '' on conflict (key) do update set value = excluded.value, updated_at = now()",
+    "={{ $json.remember || '' }}", { executeOnce: true, alwaysOutputData: true, onError: 'continueRegularOutput' }),
+
   { id: 'tgsummary', name: 'Telegram summary', type: 'n8n-nodes-base.telegram', typeVersion: 1.2, position: [4380, 0],
     parameters: {
       chatId: '__TG_CHAT__',
-      text: '={{ $json.text }}',
+      text: "={{ $('Compose summary').first().json.text }}",
       additionalFields: { appendAttribution: false, parse_mode: 'HTML' } },
     credentials: { telegramApi: I.credentials.telegram },
     onError: 'continueRegularOutput' },
@@ -492,7 +517,8 @@ const connections = {
   'Merge for stats': { main: [[{ node: 'Collect stats', type: 'main', index: 0 }]] },
   'Collect stats': { main: [[{ node: 'Finalize run', type: 'main', index: 0 }]] },
   'Finalize run': { main: [[{ node: 'Compose summary', type: 'main', index: 0 }]] },
-  'Compose summary': { main: [[{ node: 'Telegram summary', type: 'main', index: 0 }]] },
+  'Compose summary': { main: [[{ node: 'Remember no-captions', type: 'main', index: 0 }]] },
+  'Remember no-captions': { main: [[{ node: 'Telegram summary', type: 'main', index: 0 }]] },
   'Telegram summary': { main: [[{ node: 'Return summary', type: 'main', index: 0 }]] }
 };
 

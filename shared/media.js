@@ -18,6 +18,27 @@ function isMediaUrl(url) {
   return MEDIA_HOST.test(u) || AUDIO_FILE.test(u.split('?')[0] + (u.includes('?') ? '?' : ''));
 }
 
+// One Telegram message -> every link in it (n >= 1, in order, deduped) plus
+// the trigger words Wasim chose (2026-10-11):
+//   slides | deck | presentation | watch | look  -> also read the screen
+//   transcribe | listen | hear                   -> speech-to-text on the audio
+// Links are cut out before matching: "watch" is in every youtube.com/watch URL.
+const SLIDE_WORDS = /\b(slides?|decks?|presentations?|watch(ing)?|look(ing)?)\b/i;
+const TRANSCRIBE_WORDS = /\b(transcribe|transcription|listen(ing)?|hear(ing)?)\b/i;
+function parseMediaRequest(text, extraUrl) {
+  const raw = String(text || '');
+  const found = raw.match(/https?:\/\/[^\s<>"')\]]+/gi) || [];
+  if (extraUrl && /^https?:\/\//i.test(String(extraUrl).trim())) found.push(String(extraUrl).trim());
+  const seen = new Set();
+  const urls = [];
+  for (let u of found) {
+    u = u.replace(/[.,;:!?]+$/, '');
+    if (!seen.has(u)) { seen.add(u); urls.push(u); }
+  }
+  const words = raw.replace(/https?:\/\/[^\s<>"')\]]+/gi, ' ');
+  return { urls, slides: SLIDE_WORDS.test(words), transcribe: TRANSCRIBE_WORDS.test(words) };
+}
+
 function mmss(seconds) {
   const s = Math.max(0, Math.floor(Number(seconds) || 0));
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
@@ -139,4 +160,4 @@ function mediaMessage(item) {
   return out.join('\n').slice(0, 4000);   // Telegram's limit is 4096
 }
 
-module.exports = { isMediaUrl, mmss, parseTs, mediaMarkdown, MEDIA_SKILL_PROMPT, MEDIA_SKILL_SCHEMA, timeLink, mediaMessage, snapKeyPoints };
+module.exports = { isMediaUrl, parseMediaRequest, mmss, parseTs, mediaMarkdown, MEDIA_SKILL_PROMPT, MEDIA_SKILL_SCHEMA, timeLink, mediaMessage, snapKeyPoints };

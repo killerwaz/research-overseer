@@ -302,11 +302,14 @@ return [{ json: { output: a.output || '', retry: String(g.retry), guard_reason: 
       chat_id: { fixed: "={{ $('Agent input').first().json.chat_id }}" } }, [1440, 320]),
 
   tool('scrape_url',
-    'Ingest one URL the user pasted. Use whenever the message contains a link — articles, PDFs, and also YouTube videos and podcast/audio links, which are transcribed and summarised with timestamped key points (takes 1-3 minutes). Cheap — execute immediately, no confirmation. ' +
-    'For a video or podcast the full summary with key points has ALREADY been sent to the user as its own message when this returns (media is set): reply with ONE short line only, e.g. \"Summary is above — ask me about any point.\" Do not repeat the summary or the points.',
+    'Ingest the links the user pasted: articles, PDFs, YouTube videos, podcast and audio links. Call it ONCE per message, even when the message has several links — it reads every link in the message itself. Cheap — execute immediately, no confirmation. ' +
+    'Also call it, with url empty, when the user just says transcribe / listen / hear after being told a video has no captions. ' +
+    'Videos are summarised in the background and each summary arrives as its own Telegram message; words like slides, deck, presentation, watch, look (read the screen) or transcribe, listen, hear (use the audio) in the message are picked up automatically. ' +
+    'Reply with ONE short line based on the note it returns. Never write a summary of a video yourself.',
     WF.scrape_url,
-    { url: { desc: 'the full URL to scrape' },
-      trigger: { fixed: 'agent' } }, [1580, 320]),
+    { url: { desc: 'one URL from the message (any of them), or empty for a bare transcribe request' },
+      trigger: { fixed: 'agent' },
+      user_message: { fixed: "={{ $('Agent input').first().json.text }}" } }, [1580, 320]),
 
   tool('query_feed',
     "Read EXISTING triaged results. Use for 'what did you find', 'show me', 'anything good last night'. NEVER triggers a new run. " +
