@@ -102,6 +102,7 @@ docker/      compose file and the Crawl4AI config override
 
 ```bash
 npm test                                   # run before every deploy
+node scripts/eval-search.js                # score live feed search (needs a local eval/search-eval.json)
 npm run build                              # regenerate workflows/ from scripts/
 node scripts/deploy.js wf20-process-urls   # deploy one workflow
 node scripts/deploy.js --all               # deploy everything
@@ -114,8 +115,8 @@ The beat itself is untracked. It is the editorial definition of what the model s
 ## From scratch
 
 1. **Containers.** One-time: `docker volume create n8n_data`, `docker network create overseer`, then `docker compose -f docker/docker-compose.yml --env-file .env up -d`.
-2. **LM Studio.** Native install, not a container. Enable the server with auth, then `lms server start && lms load qwen/qwen3.5-9b -y`. Needs about 7 GB of VRAM.
-3. **Database.** Create a Supabase project and run `sql/001` through `sql/009` in order.
+2. **LM Studio.** Native install, not a container. Enable the server with auth, then `lms server start && lms load qwen/qwen3.5-9b -y`. Needs about 7 GB of VRAM. Feed search also needs the embedding model: `lms get https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF` (Q8, 640 MB). It loads on demand; load it with `-c 2048`, since a larger context costs VRAM the 9B needs.
+3. **Database.** Create a Supabase project and run `sql/001` through `sql/011` in order, then `node scripts/backfill-embeddings.js` once the workflows are up.
 4. **Secrets and beat.** Copy `.env.example` to `.env` and fill it. Copy `beat.example.md` to `beat.md`.
 5. **n8n credentials.** Create the Postgres, Telegram, OpenRouter, Crawl4AI, LM Studio, and Firecrawl credentials in the n8n UI, then put their ids in `scripts/instance.json`.
 6. **Workflows.** Import from `workflows/`, put the resulting ids in `scripts/instance.json`, then `node scripts/deploy.js --all`. Publish everything: the error workflow has to stay published or it never fires.

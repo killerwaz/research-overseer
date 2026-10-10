@@ -2,6 +2,14 @@
   "name": "WF-31 query_feed",
   "nodes": [
     {
+      "id": "trigger",
+      "name": "WF Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
       "parameters": {
         "workflowInputs": {
           "values": [
@@ -32,35 +40,93 @@
             {
               "name": "group_stories",
               "type": "string"
+            },
+            {
+              "name": "item",
+              "type": "string"
+            },
+            {
+              "name": "chat_id",
+              "type": "string"
             }
           ]
         }
-      },
-      "id": "trigger",
-      "name": "WF Input",
-      "type": "n8n-nodes-base.executeWorkflowTrigger",
-      "typeVersion": 1.1,
-      "position": [
-        0,
-        0
-      ]
+      }
     },
     {
+      "id": "prep",
+      "name": "Prep",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        200,
+        0
+      ],
       "parameters": {
-        "operation": "executeQuery",
-        "query": "select f.id, f.canonical_url, f.title, f.summary, f.angle, f.relevance, f.specificity, f.angle_strength, f.score, f.tags, f.created_at, f.published_at, f.structured, 1 as articles, case when f.published_at is null then null else greatest(0, extract(day from now() - f.published_at)::int) end as age_days from feed_items f where nullif($7,'') is null and (nullif($1,'') is null or coalesce(f.published_at, f.created_at) >= nullif($1,'')::timestamptz) and (nullif($2,'') is null or f.relevance >= nullif($2,'')::int) and (nullif($3,'') is null or exists (select 1 from unnest(f.tags) tg where tg like '%' || lower(nullif($3,'')) || '%') or (select count(*) from unnest(array_remove(tsvector_to_array(to_tsvector('english', nullif($3,''))), 'ai')) x where x = any(tsvector_to_array(to_tsvector('english', coalesce(f.title,'') || ' ' || coalesce(f.summary,'') || ' ' || coalesce(f.angle,'') || ' ' || coalesce(array_to_string(f.tags,' '),''))))) >= greatest(1, ceil(coalesce(array_length(array_remove(tsvector_to_array(to_tsvector('english', nullif($3,''))), 'ai'), 1), 0) * 0.6))) and (nullif($5,'') is null or f.score >= nullif($5,'')::int) and (nullif($6,'') is null or coalesce(f.published_at, f.created_at) >= now() - (nullif($6,'')::int * interval '1 day')) union all select null::bigint as id, s.canonical_url, s.title, s.summary, s.angle, null::int as relevance, s.specificity, s.angle_strength, s.score, s.tags, s.created_at, s.last_published as published_at, s.structured, s.articles, case when s.last_published is null then null else greatest(0, extract(day from now() - s.last_published)::int) end as age_days from feed_stories s where nullif($7,'') is not null and (nullif($1,'') is null or coalesce(s.last_published, s.created_at) >= nullif($1,'')::timestamptz) and (nullif($3,'') is null or exists (select 1 from unnest(s.tags) tg where tg like '%' || lower(nullif($3,'')) || '%') or (select count(*) from unnest(array_remove(tsvector_to_array(to_tsvector('english', nullif($3,''))), 'ai')) x where x = any(tsvector_to_array(to_tsvector('english', coalesce(s.title,'') || ' ' || coalesce(s.summary,'') || ' ' || coalesce(s.angle,'') || ' ' || coalesce(array_to_string(s.tags,' '),''))))) >= greatest(1, ceil(coalesce(array_length(array_remove(tsvector_to_array(to_tsvector('english', nullif($3,''))), 'ai'), 1), 0) * 0.6))) and (nullif($5,'') is null or s.score >= nullif($5,'')::int) and (nullif($6,'') is null or coalesce(s.last_published, s.created_at) >= now() - (nullif($6,'')::int * interval '1 day')) order by score desc nulls last, published_at desc limit coalesce(nullif($4,'')::int, 20)",
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Embedding helpers shared by WF-21 (embed each new feed item), WF-31 (embed\n// the search topic) and scripts/backfill-embeddings.js.\n//\n// Qwen3-Embedding-0.6B, picked over nomic-embed-text-v1.5 on 2026-10-10 by\n// measurement: nomic scored an absent topic (\"quantum computing\", 0.69) above\n// a real one (0.64), so no cutoff could say \"nothing found\"; Qwen3 put every\n// real topic >= 0.55 and every absent one <= 0.42. It is also multilingual —\n// the feed carries Bengali items.\n//\n// Qwen3 is asymmetric: queries carry a task instruction, documents carry none.\n\nconst EMBED_MODEL = 'text-embedding-qwen3-embedding-0.6b';\nconst EMBED_DIM = 1024;\nconst QUERY_INSTRUCT = 'Given a topic, retrieve news articles and reports about that topic';\n\n// What a feed item \"is about\" — the model's own summary, not the raw page.\n// Raw pages average ~28k chars of nav and boilerplate.\nfunction docText(item) {\n  const it = item || {};\n  const tags = Array.isArray(it.tags) ? it.tags.filter(Boolean).join(', ') : '';\n  const parts = [it.title, it.summary, it.angle, tags ? 'Tags: ' + tags : '']\n    .map((s) => (s == null ? '' : String(s).trim())).filter(Boolean);\n  return parts.join('\\n').slice(0, 6000);\n}\n\nfunction queryText(q) {\n  return 'Instruct: ' + QUERY_INSTRUCT + '\\nQuery: ' + String(q == null ? '' : q).trim();\n}\n\n// pgvector literal. Every value is checked to be a finite number, which is\n// also what makes it safe to splice into SQL text.\nfunction vectorLiteral(vec) {\n  if (!Array.isArray(vec) || vec.length !== EMBED_DIM) {\n    throw new Error('embedding must be an array of ' + EMBED_DIM + ' numbers, got ' +\n      (Array.isArray(vec) ? vec.length : typeof vec));\n  }\n  for (const v of vec) {\n    if (typeof v !== 'number' || !Number.isFinite(v)) throw new Error('embedding contains a non-finite value');\n  }\n  return '[' + vec.join(',') + ']';\n}\n\n// Pure helpers for WF-31 query_feed: topic fan-out, item references, and the\n// vector packing that gets embeddings through n8n's queryReplacement.\n//\n// queryReplacement splits its value on commas, so nothing passed through it\n// may contain one: topics have commas swapped for spaces, and vectors travel\n// space-separated (SQL turns them back into a pgvector literal).\n\nconst MAX_TOPICS = 3;\n// Swept 2026-10-10 with scripts/eval-search.js (39 cases, Qwen3-Embedding-0.6B):\n//   keyword only  25/31 found, 6/6 absent, 68% precision\n//   0.42          31/31        6/6         69%\n//   0.45          31/31        6/6         71%   <- shipped\n//   0.48          30/31        6/6         73%   (loses \"AI that can buy things for you\")\n//   0.52          28/31        6/6         75%\n// Re-tune with SIM_CUTOFF=x node scripts/build-wf31.js + the eval, not by feel.\nconst SIM_CUTOFF = 0.45;\n\n// \"bangladesh bank | nigeria ai\" -> ['bangladesh bank', 'nigeria ai'].\n// '|' and ';' both separate; duplicates and empties drop; at most 3.\nfunction parseTopics(tag) {\n  const seen = new Set();\n  const out = [];\n  for (const raw of String(tag == null ? '' : tag).split(/[|;]/)) {\n    const t = raw.replace(/,/g, ' ').replace(/\\s+/g, ' ').trim();\n    const key = t.toLowerCase();\n    if (!t || seen.has(key)) continue;\n    seen.add(key);\n    out.push(t);\n    if (out.length === MAX_TOPICS) break;\n  }\n  return out;\n}\n\n// \"3\", \"#3\", \"no. 3\", \"item 3\" -> 3. Anything else -> null.\nfunction parseItemRef(item) {\n  const m = String(item == null ? '' : item).match(/^\\s*(?:#|no\\.?\\s*|item\\s*|number\\s*)?(\\d{1,3})\\s*$/i);\n  if (!m) return null;\n  const n = Number(m[1]);\n  return n >= 1 ? n : null;\n}\n\n// [[0.1, 0.2], [0.3, 0.4]] -> '0.1 0.2|0.3 0.4'. A missing or malformed\n// vector packs as '' so that topic falls back to keyword matching only.\nfunction packVectors(vecs, count) {\n  const out = [];\n  for (let i = 0; i < count; i++) {\n    const v = vecs && vecs[i];\n    const ok = Array.isArray(v) && v.length > 0 && v.every((x) => typeof x === 'number' && Number.isFinite(x));\n    out.push(ok ? v.join(' ') : '');\n  }\n  return out.join('|');\n}\n\n// Every input leaves as a string: queryReplacement inlines numbers UNQUOTED, and\n// nullif(-75, '') then makes Postgres cast '' to integer and fail. The router\n// passes chat_id as a number, so this is the live path, not an edge case.\nconst raw = $input.first().json;\nconst j = {};\nfor (const k of [\"since\",\"min_relevance\",\"tag\",\"limit\",\"min_score\",\"max_age_days\",\"group_stories\",\"item\",\"chat_id\"]) {\n  j[k] = raw[k] == null ? '' : String(raw[k]).trim();\n}\nconst item = parseItemRef(j.item);\nconst topics = item ? [] : parseTopics(j.tag);\n// Always embed something so the flow stays linear; with no topics the vector is ignored.\nconst input = topics.length ? topics.map(queryText) : ['-'];\nreturn [{ json: { ...j, item_n: item ? String(item) : '', topics, embed_body: JSON.stringify({ model: EMBED_MODEL, input }) } }];"
+      }
+    },
+    {
+      "id": "embed",
+      "name": "Embed topics",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        400,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:1234/v1/embeddings",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.embed_body }}",
         "options": {
-          "queryReplacement": "={{ $json.since || '' }},{{ $json.min_relevance || '' }},{{ $json.tag || '' }},{{ $json.limit || '' }},{{ $json.min_score || '' }},{{ $json.max_age_days || '' }},{{ $json.group_stories || '' }}"
+          "timeout": 20000
         }
       },
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "JsTIc0R9trd31PsV",
+          "name": "lmstudio-bearer"
+        }
+      },
+      "retryOnFail": false,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "params",
+      "name": "Params",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        600,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Pure helpers for WF-31 query_feed: topic fan-out, item references, and the\n// vector packing that gets embeddings through n8n's queryReplacement.\n//\n// queryReplacement splits its value on commas, so nothing passed through it\n// may contain one: topics have commas swapped for spaces, and vectors travel\n// space-separated (SQL turns them back into a pgvector literal).\n\nconst MAX_TOPICS = 3;\n// Swept 2026-10-10 with scripts/eval-search.js (39 cases, Qwen3-Embedding-0.6B):\n//   keyword only  25/31 found, 6/6 absent, 68% precision\n//   0.42          31/31        6/6         69%\n//   0.45          31/31        6/6         71%   <- shipped\n//   0.48          30/31        6/6         73%   (loses \"AI that can buy things for you\")\n//   0.52          28/31        6/6         75%\n// Re-tune with SIM_CUTOFF=x node scripts/build-wf31.js + the eval, not by feel.\nconst SIM_CUTOFF = 0.45;\n\n// \"bangladesh bank | nigeria ai\" -> ['bangladesh bank', 'nigeria ai'].\n// '|' and ';' both separate; duplicates and empties drop; at most 3.\nfunction parseTopics(tag) {\n  const seen = new Set();\n  const out = [];\n  for (const raw of String(tag == null ? '' : tag).split(/[|;]/)) {\n    const t = raw.replace(/,/g, ' ').replace(/\\s+/g, ' ').trim();\n    const key = t.toLowerCase();\n    if (!t || seen.has(key)) continue;\n    seen.add(key);\n    out.push(t);\n    if (out.length === MAX_TOPICS) break;\n  }\n  return out;\n}\n\n// \"3\", \"#3\", \"no. 3\", \"item 3\" -> 3. Anything else -> null.\nfunction parseItemRef(item) {\n  const m = String(item == null ? '' : item).match(/^\\s*(?:#|no\\.?\\s*|item\\s*|number\\s*)?(\\d{1,3})\\s*$/i);\n  if (!m) return null;\n  const n = Number(m[1]);\n  return n >= 1 ? n : null;\n}\n\n// [[0.1, 0.2], [0.3, 0.4]] -> '0.1 0.2|0.3 0.4'. A missing or malformed\n// vector packs as '' so that topic falls back to keyword matching only.\nfunction packVectors(vecs, count) {\n  const out = [];\n  for (let i = 0; i < count; i++) {\n    const v = vecs && vecs[i];\n    const ok = Array.isArray(v) && v.length > 0 && v.every((x) => typeof x === 'number' && Number.isFinite(x));\n    out.push(ok ? v.join(' ') : '');\n  }\n  return out.join('|');\n}\n\nconst p = $('Prep').first().json;\nlet vecs = null;\ntry { vecs = $input.first().json.data.slice().sort((a, b) => a.index - b.index).map((d) => d.embedding); } catch (e) {}\nconst embedded = Boolean(vecs) && p.topics.length > 0;\nreturn [{ json: { ...p, topics_param: p.topics.join('|'), vectors_param: p.topics.length ? packVectors(vecs, p.topics.length) : '',\n  semantic: p.topics.length ? (embedded ? 'on' : 'off (embedding unavailable, keyword match only)') : '' } }];"
+      }
+    },
+    {
       "id": "select",
       "name": "Select feed",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.4,
       "position": [
-        220,
+        800,
         0
       ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "with t as ( select x.ord::int as ord, trim(x.kw) as kw, case when nullif(trim(coalesce(x.v, '')), '') is null then null else ('[' || replace(trim(x.v), ' ', ',') || ']')::vector(1024) end as qv from unnest(coalesce(string_to_array(nullif($3, ''), '|'), '{}'::text[]), coalesce(string_to_array(nullif($8, ''), '|'), '{}'::text[])) with ordinality as x(kw, v, ord) where nullif(trim(coalesce(x.kw, '')), '') is not null ), nt as (select count(*)::int as n from t), lim as (select coalesce(nullif($4, '')::int, 20) as n), c0 as ( select f.id, f.canonical_url, f.title, f.summary, f.angle, f.relevance, f.specificity, f.angle_strength, f.score, f.tags, f.created_at, f.published_at, f.structured, 1 as articles, f.embedding from feed_items f where nullif($7, '') is null union all select r.id, s.canonical_url, s.title, s.summary, s.angle, null::int, s.specificity, s.angle_strength, s.score, s.tags, s.created_at, s.last_published, s.structured, s.articles, r.embedding from feed_stories s left join lateral (select id, embedding from feed_items fi where fi.canonical_url = s.canonical_url order by fi.id desc limit 1) r on true where nullif($7, '') is not null ), c as ( select * from c0 where nullif($9, '') is null and (nullif($1, '') is null or coalesce(published_at, created_at) >= nullif($1, '')::timestamptz) and (nullif($2, '') is null or relevance >= nullif($2, '')::int) and (nullif($5, '') is null or score >= nullif($5, '')::int) and (nullif($6, '') is null or coalesce(published_at, created_at) >= now() - (nullif($6, '')::int * interval '1 day')) ), m as ( select c.*, t.ord, t.kw as topic, case when t.qv is null or c.embedding is null then null else 1 - (c.embedding <=> t.qv) end as sim, (exists (select 1 from unnest(c.tags) tg where tg like '%' || lower(t.kw) || '%') or (select count(*) from unnest(array_remove(tsvector_to_array(to_tsvector('english', t.kw)), 'ai')) x where x = any(tsvector_to_array(to_tsvector('english', coalesce(c.title,'') || ' ' || coalesce(c.summary,'') || ' ' || coalesce(c.angle,'') || ' ' || coalesce(array_to_string(c.tags,' '),''))))) >= greatest(1, ceil(coalesce(array_length(array_remove(tsvector_to_array(to_tsvector('english', t.kw)), 'ai'), 1), 0) * 0.6))) as kw_hit from c cross join t ), best as ( select distinct on (id) * from m where kw_hit or sim >= 0.45 order by id, ord ), ranked as ( select best.*, row_number() over (partition by ord order by coalesce(sim, 0) + case when kw_hit then 0.15 else 0 end desc, score desc nulls last, published_at desc nulls last) as rn from best ), listed as ( select id, canonical_url, title, summary, angle, relevance, specificity, angle_strength, score, tags, created_at, published_at, structured, articles, ord, topic, sim, kw_hit, null::text as page, rn from ranked where rn <= ceil((select n from lim)::numeric / greatest(1, (select n from nt))) union all select id, canonical_url, title, summary, angle, relevance, specificity, angle_strength, score, tags, created_at, published_at, structured, articles, null::int, null::text, null::float8, null::boolean, null::text, null::bigint from c where (select n from nt) = 0 ), item as ( select f.id, f.canonical_url, f.title, f.summary, f.angle, f.relevance, f.specificity, f.angle_strength, f.score, f.tags, f.created_at, f.published_at, f.structured, 1 as articles, null::int as ord, null::text as topic, null::float8 as sim, null::boolean as kw_hit, left(d.markdown, 6000) as page, null::bigint as rn from chat_results cr join feed_items f on f.id = cr.item_ids[nullif($9, '')::int] left join raw_docs d on d.id = f.raw_doc_id where nullif($9, '') is not null and cr.chat_id = nullif($10, '')::bigint ) select *, case when published_at is null then null else greatest(0, extract(day from now() - published_at)::int) end as age_days from (select * from listed order by ord nulls first, rn nulls last, score desc nulls last, published_at desc nulls last limit (select n from lim)) l union all select *, case when published_at is null then null else greatest(0, extract(day from now() - published_at)::int) end from item",
+        "options": {
+          "queryReplacement": "={{ $json.since || '' }},{{ $json.min_relevance || '' }},{{ $json.topics_param }},{{ $json.limit || '' }},{{ $json.min_score || '' }},{{ $json.max_age_days || '' }},{{ $json.group_stories || '' }},{{ $json.vectors_param }},{{ $json.item_n }},{{ $json.chat_id || '' }}"
+        }
+      },
       "credentials": {
         "postgres": {
           "id": "tzBuhu9KEXlaRRfW",
@@ -71,22 +137,93 @@
       "alwaysOutputData": true
     },
     {
-      "parameters": {
-        "mode": "runOnceForAllItems",
-        "jsCode": "const rows = $input.all().map(i => i.json).filter(j => j && (j.canonical_url || j.id));\nif (!rows.length) return [{ json: { count: 0, items: [], note: 'no feed items matched the filters' } }];\nconst grouped = rows.some(r => Number(r.articles) > 1);\nreturn [{ json: { count: rows.length, grouped_by_story: Boolean($('WF Input').first().json.group_stories), items: rows, note: grouped ? 'articles > 1 means several outlets covered the same story' : undefined } }];"
-      },
       "id": "shape",
       "name": "Shape result",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        440,
+        1000,
         0
-      ]
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const p = $('Params').first().json;\nconst rows = $input.all().map((i) => i.json).filter((j) => j && (j.canonical_url || j.id));\nconst round = (x) => (x == null ? undefined : Math.round(Number(x) * 1000) / 1000);\nconst clean = (r, n) => ({ n, id: r.id, title: r.title, canonical_url: r.canonical_url, summary: r.summary, angle: r.angle,\n  score: r.score, specificity: r.specificity, angle_strength: r.angle_strength, tags: r.tags,\n  published_at: r.published_at, age_days: r.age_days, structured: r.structured,\n  articles: Number(r.articles) > 1 ? Number(r.articles) : undefined,\n  topic: r.topic || undefined,\n  match: r.topic ? (r.kw_hit && r.sim >= 0.45 ? 'keyword+meaning' : r.kw_hit ? 'keyword' : 'meaning') : undefined,\n  similarity: round(r.sim) });\n\nif (p.item_n) {\n  if (!rows.length) return [{ json: { remember: 'select 1 as skipped', out: { found: false,\n    note: 'There is no item #' + p.item_n + ' in the last list shown in this chat. Ask which item they mean, or read query_feed again.' } } }];\n  const r = rows[0];\n  return [{ json: { remember: 'select 1 as skipped', out: { found: true, item: { ...clean(r, Number(p.item_n)), page_excerpt: r.page || '' },\n    note: 'This is item #' + p.item_n + ' from the last list, with an excerpt of the saved page. Answer from it; do not search again.' } } }];\n}\n\nconst items = rows.map((r, i) => clean(r, i + 1));\nconst chat = String(p.chat_id || '').trim();\nconst ids = items.map((i) => Number(i.id)).filter((x) => Number.isInteger(x) && x > 0);\nconst remember = /^-?\\d+$/.test(chat) && ids.length === items.length && ids.length\n  ? 'insert into chat_results (chat_id, item_ids, topic, created_at) values (' + chat + ', array[' + ids.join(',') + ']::bigint[], null, now()) ' +\n    'on conflict (chat_id) do update set item_ids = excluded.item_ids, topic = excluded.topic, created_at = excluded.created_at'\n  : 'select 1 as skipped';\nconst out = { count: items.length, items };\nif (p.topics.length) { out.topics = p.topics; out.semantic = p.semantic; }\nif (!items.length) out.note = p.topics.length ? 'nothing in the feed matches ' + p.topics.join(' / ') : 'no feed items matched the filters';\nelse out.note = 'Each item has n. Show n with each item you list; the user can say \"#3\" or \"the first one\" and get_item will fetch it.' +\n  (items.some((i) => i.articles) ? ' articles > 1 means several outlets covered the same story.' : '');\nreturn [{ json: { remember, out } }];"
+      }
+    },
+    {
+      "id": "remember",
+      "name": "Remember list",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        1200,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.remember }}",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "tzBuhu9KEXlaRRfW",
+          "name": "Postgres account"
+        }
+      },
+      "executeOnce": true,
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "ret",
+      "name": "Return",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1400,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{ json: $('Shape result').first().json.out }];"
+      }
     }
   ],
   "connections": {
     "WF Input": {
+      "main": [
+        [
+          {
+            "node": "Prep",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prep": {
+      "main": [
+        [
+          {
+            "node": "Embed topics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embed topics": {
+      "main": [
+        [
+          {
+            "node": "Params",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Params": {
       "main": [
         [
           {
@@ -102,6 +239,28 @@
         [
           {
             "node": "Shape result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shape result": {
+      "main": [
+        [
+          {
+            "node": "Remember list",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Remember list": {
+      "main": [
+        [
+          {
+            "node": "Return",
             "type": "main",
             "index": 0
           }

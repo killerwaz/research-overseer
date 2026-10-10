@@ -155,6 +155,31 @@ return { json: { raw_doc_id: rawDocId, canonical_url: doc.canonical_url, title: 
   published_at: doc.published_at || '', run_id: doc.run_id } };
 `;
 
+// Embedding runs after the feed row exists and can never fail the triage: the
+// HTTP and Postgres nodes continue on error and Build vector update falls back
+// to a no-op query. A missed embedding is picked up by
+// scripts/backfill-embeddings.js. TRIAGE_FAILED rows are skipped — the WF-30
+// drain re-triages them, and that pass embeds them.
+const EMBED = inline('embed.js');
+const BUILD_EMBED = EMBED + `
+const t = $('Merge triaged').first().json;
+const id = $('Insert feed').first().json.feed_item_id;
+const tags = String(t.tags_pg || '').replace(/[{}]/g, '').split(',').filter(Boolean);
+if (!id || t.summary === 'TRIAGE_FAILED') return [{ json: { __skip: true, embed_body: '{}' } }];
+return [{ json: { feed_item_id: id, embed_body: JSON.stringify({ model: EMBED_MODEL,
+  input: [docText({ title: t.title, summary: t.summary, angle: t.angle, tags })] }) } }];
+`.trim();
+const BUILD_VECTOR_UPDATE = EMBED + `
+const noop = [{ json: { query: 'select 1 as skipped' } }];
+const b = $('Build embed').first().json;
+if (b.__skip) return noop;
+try {
+  const vec = $input.first().json.data[0].embedding;
+  return [{ json: { query: "update feed_items set embedding = '" + vectorLiteral(vec) +
+    "'::vector where id = " + Number(b.feed_item_id) } }];
+} catch (e) { return noop; }
+`.trim();
+
 // Counts and status are computed in SQL (Finalize run) because nodes fed by two
 // branches (crawl4ai + firecrawl paths) execute once per input batch, and
 // $('node').all() only returns the LAST batch. Here we only gather urls_new and
@@ -457,7 +482,22 @@ return $input.all();
     // idempotent, so the WF-30 drain never needs a separate delete step.
     pgNode('Insert feed', 'insertfeed', [1400, 0],
       "with del as (delete from feed_items where raw_doc_id = $1::bigint) insert into feed_items (raw_doc_id, canonical_url, title, summary, angle, relevance, tags, run_id, published_at, specificity, angle_strength, structured) values ($1::bigint, $2, nullif($3,''), $4, nullif($5,''), nullif($6::text,'')::int, $7::text[], $8::bigint, nullif($9,'')::timestamptz, nullif($10::text,'')::int, nullif($11::text,'')::int, nullif($12,'')::jsonb) returning id as feed_item_id",
-      "={{ $json.raw_doc_id }},{{ $json.canonical_url }},{{ $json.title }},{{ $json.summary }},{{ $json.angle }},{{ $json.relevance }},{{ $json.tags_pg }},{{ $json.run_id }},{{ $json.published_at }},{{ $json.specificity }},{{ $json.angle_strength }},{{ $json.structured_json }}")
+      "={{ $json.raw_doc_id }},{{ $json.canonical_url }},{{ $json.title }},{{ $json.summary }},{{ $json.angle }},{{ $json.relevance }},{{ $json.tags_pg }},{{ $json.run_id }},{{ $json.published_at }},{{ $json.specificity }},{{ $json.angle_strength }},{{ $json.structured_json }}"),
+
+    codeNode('Build embed', 'buildembed', [1600, 0], 'runOnceForAllItems', BUILD_EMBED),
+
+    { id: 'embed', name: 'Embed', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [1800, 0],
+      parameters: { method: 'POST', url: 'http://host.docker.internal:1234/v1/embeddings',
+        authentication: 'genericCredentialType', genericAuthType: 'httpBearerAuth',
+        sendBody: true, specifyBody: 'json', jsonBody: '={{ $json.embed_body }}',
+        options: { timeout: 60000 } },
+      credentials: { httpBearerAuth: CRED_LM },
+      retryOnFail: true, maxTries: 2, waitBetweenTries: 2000, onError: 'continueRegularOutput' },
+
+    codeNode('Build vector update', 'buildvec', [2000, 0], 'runOnceForAllItems', BUILD_VECTOR_UPDATE),
+
+    pgNode('Store embedding', 'storeembed', [2200, 0], '={{ $json.query }}', null,
+      { onError: 'continueRegularOutput' })
   ],
   connections: {
     'WF Input': { main: [[{ node: 'Guard single item', type: 'main', index: 0 }]] },
@@ -471,7 +511,11 @@ return $input.all();
     'Build retry': { main: [[{ node: 'Triage retry', type: 'main', index: 0 }]] },
     'Triage retry': { main: [[{ node: 'Validate retry', type: 'main', index: 0 }]] },
     'Validate retry': { main: [[{ node: 'Merge triaged', type: 'main', index: 1 }]] },
-    'Merge triaged': { main: [[{ node: 'Insert feed', type: 'main', index: 0 }]] }
+    'Merge triaged': { main: [[{ node: 'Insert feed', type: 'main', index: 0 }]] },
+    'Insert feed': { main: [[{ node: 'Build embed', type: 'main', index: 0 }]] },
+    'Build embed': { main: [[{ node: 'Embed', type: 'main', index: 0 }]] },
+    'Embed': { main: [[{ node: 'Build vector update', type: 'main', index: 0 }]] },
+    'Build vector update': { main: [[{ node: 'Store embedding', type: 'main', index: 0 }]] }
   },
   settings: { executionOrder: 'v1', errorWorkflow: 'PNJMA4NbQGmp1xKv' }
 };

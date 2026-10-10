@@ -227,6 +227,88 @@
           "name": "Postgres account"
         }
       }
+    },
+    {
+      "id": "buildembed",
+      "name": "Build embed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1600,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Embedding helpers shared by WF-21 (embed each new feed item), WF-31 (embed\n// the search topic) and scripts/backfill-embeddings.js.\n//\n// Qwen3-Embedding-0.6B, picked over nomic-embed-text-v1.5 on 2026-10-10 by\n// measurement: nomic scored an absent topic (\"quantum computing\", 0.69) above\n// a real one (0.64), so no cutoff could say \"nothing found\"; Qwen3 put every\n// real topic >= 0.55 and every absent one <= 0.42. It is also multilingual —\n// the feed carries Bengali items.\n//\n// Qwen3 is asymmetric: queries carry a task instruction, documents carry none.\n\nconst EMBED_MODEL = 'text-embedding-qwen3-embedding-0.6b';\nconst EMBED_DIM = 1024;\nconst QUERY_INSTRUCT = 'Given a topic, retrieve news articles and reports about that topic';\n\n// What a feed item \"is about\" — the model's own summary, not the raw page.\n// Raw pages average ~28k chars of nav and boilerplate.\nfunction docText(item) {\n  const it = item || {};\n  const tags = Array.isArray(it.tags) ? it.tags.filter(Boolean).join(', ') : '';\n  const parts = [it.title, it.summary, it.angle, tags ? 'Tags: ' + tags : '']\n    .map((s) => (s == null ? '' : String(s).trim())).filter(Boolean);\n  return parts.join('\\n').slice(0, 6000);\n}\n\nfunction queryText(q) {\n  return 'Instruct: ' + QUERY_INSTRUCT + '\\nQuery: ' + String(q == null ? '' : q).trim();\n}\n\n// pgvector literal. Every value is checked to be a finite number, which is\n// also what makes it safe to splice into SQL text.\nfunction vectorLiteral(vec) {\n  if (!Array.isArray(vec) || vec.length !== EMBED_DIM) {\n    throw new Error('embedding must be an array of ' + EMBED_DIM + ' numbers, got ' +\n      (Array.isArray(vec) ? vec.length : typeof vec));\n  }\n  for (const v of vec) {\n    if (typeof v !== 'number' || !Number.isFinite(v)) throw new Error('embedding contains a non-finite value');\n  }\n  return '[' + vec.join(',') + ']';\n}\n\nconst t = $('Merge triaged').first().json;\nconst id = $('Insert feed').first().json.feed_item_id;\nconst tags = String(t.tags_pg || '').replace(/[{}]/g, '').split(',').filter(Boolean);\nif (!id || t.summary === 'TRIAGE_FAILED') return [{ json: { __skip: true, embed_body: '{}' } }];\nreturn [{ json: { feed_item_id: id, embed_body: JSON.stringify({ model: EMBED_MODEL,\n  input: [docText({ title: t.title, summary: t.summary, angle: t.angle, tags })] }) } }];"
+      }
+    },
+    {
+      "id": "embed",
+      "name": "Embed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1800,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:1234/v1/embeddings",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.embed_body }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "JsTIc0R9trd31PsV",
+          "name": "lmstudio-bearer"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "buildvec",
+      "name": "Build vector update",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Embedding helpers shared by WF-21 (embed each new feed item), WF-31 (embed\n// the search topic) and scripts/backfill-embeddings.js.\n//\n// Qwen3-Embedding-0.6B, picked over nomic-embed-text-v1.5 on 2026-10-10 by\n// measurement: nomic scored an absent topic (\"quantum computing\", 0.69) above\n// a real one (0.64), so no cutoff could say \"nothing found\"; Qwen3 put every\n// real topic >= 0.55 and every absent one <= 0.42. It is also multilingual —\n// the feed carries Bengali items.\n//\n// Qwen3 is asymmetric: queries carry a task instruction, documents carry none.\n\nconst EMBED_MODEL = 'text-embedding-qwen3-embedding-0.6b';\nconst EMBED_DIM = 1024;\nconst QUERY_INSTRUCT = 'Given a topic, retrieve news articles and reports about that topic';\n\n// What a feed item \"is about\" — the model's own summary, not the raw page.\n// Raw pages average ~28k chars of nav and boilerplate.\nfunction docText(item) {\n  const it = item || {};\n  const tags = Array.isArray(it.tags) ? it.tags.filter(Boolean).join(', ') : '';\n  const parts = [it.title, it.summary, it.angle, tags ? 'Tags: ' + tags : '']\n    .map((s) => (s == null ? '' : String(s).trim())).filter(Boolean);\n  return parts.join('\\n').slice(0, 6000);\n}\n\nfunction queryText(q) {\n  return 'Instruct: ' + QUERY_INSTRUCT + '\\nQuery: ' + String(q == null ? '' : q).trim();\n}\n\n// pgvector literal. Every value is checked to be a finite number, which is\n// also what makes it safe to splice into SQL text.\nfunction vectorLiteral(vec) {\n  if (!Array.isArray(vec) || vec.length !== EMBED_DIM) {\n    throw new Error('embedding must be an array of ' + EMBED_DIM + ' numbers, got ' +\n      (Array.isArray(vec) ? vec.length : typeof vec));\n  }\n  for (const v of vec) {\n    if (typeof v !== 'number' || !Number.isFinite(v)) throw new Error('embedding contains a non-finite value');\n  }\n  return '[' + vec.join(',') + ']';\n}\n\nconst noop = [{ json: { query: 'select 1 as skipped' } }];\nconst b = $('Build embed').first().json;\nif (b.__skip) return noop;\ntry {\n  const vec = $input.first().json.data[0].embedding;\n  return [{ json: { query: \"update feed_items set embedding = '\" + vectorLiteral(vec) +\n    \"'::vector where id = \" + Number(b.feed_item_id) } }];\n} catch (e) { return noop; }"
+      }
+    },
+    {
+      "id": "storeembed",
+      "name": "Store embedding",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        2200,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.query }}",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "tzBuhu9KEXlaRRfW",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput"
     }
   ],
   "connections": {
@@ -330,6 +412,50 @@
         [
           {
             "node": "Insert feed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert feed": {
+      "main": [
+        [
+          {
+            "node": "Build embed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build embed": {
+      "main": [
+        [
+          {
+            "node": "Embed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embed": {
+      "main": [
+        [
+          {
+            "node": "Build vector update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build vector update": {
+      "main": [
+        [
+          {
+            "node": "Store embedding",
             "type": "main",
             "index": 0
           }

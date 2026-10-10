@@ -96,7 +96,9 @@
             "limit": "={{ $json.body.limit || '' }}",
             "min_score": "={{ $json.body.min_score || '' }}",
             "max_age_days": "={{ $json.body.max_age_days || '' }}",
-            "group_stories": "={{ $json.body.group_stories || '' }}"
+            "group_stories": "={{ $json.body.group_stories || '' }}",
+            "item": "={{ $json.body.item || '' }}",
+            "chat_id": "={{ $json.body.chat_id || '' }}"
           },
           "matchingColumns": [],
           "schema": [
@@ -157,6 +159,24 @@
             {
               "id": "group_stories",
               "displayName": "group_stories",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "item",
+              "displayName": "item",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "chat_id",
+              "displayName": "chat_id",
               "required": false,
               "defaultMatch": false,
               "display": true,
