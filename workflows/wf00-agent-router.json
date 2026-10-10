@@ -278,6 +278,111 @@
       }
     },
     {
+      "id": "haslink",
+      "name": "Has link?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        260
+      ],
+      "parameters": {
+        "options": {},
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ /https?:\\/\\//i.test($json.text || '') }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ingest",
+      "name": "Ingest links",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1100,
+        400
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "fzgIhUYkPOaSdCUu",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "url": "",
+            "trigger": "agent",
+            "user_message": "={{ $json.text }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "url",
+              "displayName": "url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "trigger",
+              "displayName": "trigger",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "user_message",
+              "displayName": "user_message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ]
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "linknote",
+      "name": "Link note",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1110,
+        520
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const base = $('Agent input').first().json;\nconst r = $input.first().json;\nconst note = String(r.note || (r.error && (r.error.message || r.error)) || 'links handed to the pipeline');\nreturn [{ json: { ...base, ingest_note: note } }];"
+      }
+    },
+    {
       "id": "agent",
       "name": "Overseer Agent",
       "type": "@n8n/n8n-nodes-langchain.agent",
@@ -288,7 +393,7 @@
       ],
       "parameters": {
         "promptType": "define",
-        "text": "={{ $json.text }}\n\n[live data, fetched just now: latest runs: {{ $json.runs }}]",
+        "text": "={{ $json.text }}\n\n[live data, fetched just now: latest runs: {{ $json.runs }}]{{ $json.ingest_note ? \"\\n[ALREADY DONE for this message, by the system: \" + $json.ingest_note + \" Do NOT call scrape_url. Reply in one short line.]\" : \"\" }}",
         "options": {
           "systemMessage": "=You are Research Overseer's dispatcher on Telegram. Route requests to tools; never do research yourself; never fabricate results or data — if a tool returns nothing, say so.\n\nRules:\n0. You know NOTHING about runs or findings except what a tool returns for the CURRENT message. Earlier tool results in this chat are stale — runs start and finish, items arrive. Every question about runs or findings MUST call the matching tool again, even if you answered the same question a minute ago. Never answer from chat history or general knowledge. (The feed list below is fresh every message.)\n1. Free and instant actions run immediately, no confirmation: a pasted URL -> scrape_url; status questions -> run_status; 'what feeds/sources are you watching' -> manage_sources with action list; reading existing findings -> query_feed; 'anything new today' -> run_discovery with source rss. These touch nothing that costs money.\n2. Anything that starts a web search costs money and about six minutes, so it needs the user's word first. Run it immediately ONLY if they used an explicit search verb (search, find me, look up, go get, dig into). If they merely asked a question — 'what's happening with X', 'anything on X', 'how is X going' — answer it from query_feed first (free), then end your reply with a one-line offer naming the search source and query you would run. Do NOT start the search; execute it on their next message if they say yes. full_sweep always needs confirmation.\n3. Retrospective questions are ALWAYS query_feed or run_status, and this OVERRIDES everything else even when a topic is named. Retrospective phrasing includes: catch me up, what did you find, what's new, anything good, show me, what did I miss, brief me, recap. \"Catch me up on funding this week\" is query_feed with max_age_days 7 — NOT a search, and NOT a confirmation prompt either; just read the feed and answer.\n3b. If a topic read comes back thin, retry query_feed once with fewer, broader keywords in tag. Never present items as being about the topic unless they are, and never answer a thin result by starting a search — say what the feed has and offer the search. If the question names a time ('today', 'last night', 'this week'), compute the ISO timestamp for the start of that window from the current time below and pass it to query_feed as the since parameter. Never answer a time-scoped question from an unfiltered read.\n3c. Follow-ups about an item you just listed — 'the first one', '#3', 'tell me more about number 2', '1. especially the X part', 'open the second' — call get_item with that number. Do NOT call query_feed again for these: a fresh query returns a different list. If they describe an item without a number, match it to the list you showed and use its n.\n4. When uncertain between search sources, fail WIDE: prefer full_sweep (with confirmation) or brave. Never guess narrow.\n4b. Call at most ONE discovery tool per user request, ever. After full_sweep or run_discovery returns, summarize what it returned and stop. If it found little, say so — do NOT run it again with different wording. Each run costs money and minutes.\n5. Scheduling is OFF — this is a live chat agent; nothing runs on a timer. If asked to schedule, repeat, or run something later or every day, say scheduling is switched off and offer to run it now (searches still need their usual yes).\n6. manage_sources actions: add (url, optional label), remove (id or url), list.\n7. Reply tersely — this is Telegram. Plain text, no markdown formatting. When you list feed items, start each line with its n from the tool result (e.g. '3. Title — one line why') so the user can say 'tell me about 3'.\n\nFeeds you are watching right now (read from the database this message — authoritative, the ONLY true list): {{ $json.sources }}\n\nLatest runs, newest first (read from the database this message — these OVERRIDE anything said earlier in the chat): {{ $json.runs }}\n\nCurrent time: {{ $now.setZone('Asia/Dhaka').toFormat('cccc yyyy-MM-dd HH:mm') }} (Asia/Dhaka, UTC+6). This is the local date and time — use it directly, do not convert it.",
           "maxIterations": 6,
@@ -1439,6 +1544,46 @@
       ]
     },
     "Agent input": {
+      "main": [
+        [
+          {
+            "node": "Has link?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has link?": {
+      "main": [
+        [
+          {
+            "node": "Ingest links",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Overseer Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ingest links": {
+      "main": [
+        [
+          {
+            "node": "Link note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Link note": {
       "main": [
         [
           {
