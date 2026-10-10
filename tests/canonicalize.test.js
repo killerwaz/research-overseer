@@ -51,3 +51,17 @@ test('two spellings of the same page collapse to one key', () => {
     canon('https://Example.com/post/?utm_campaign=news'),
     canon('https://example.com/post'));
 });
+
+test('every YouTube URL shape for one video collapses to one key', () => {
+  const want = 'https://www.youtube.com/watch?v=wIe3eDfGKUo';
+  for (const u of ['https://www.youtube.com/watch?v=wIe3eDfGKUo&pp=0gcJCTcMAYcqIYzv', 'https://youtu.be/wIe3eDfGKUo?si=abc',
+    'https://m.youtube.com/watch?v=wIe3eDfGKUo&t=30s', 'https://www.youtube.com/watch?feature=share&v=wIe3eDfGKUo',
+    'https://www.youtube.com/shorts/wIe3eDfGKUo', 'https://www.youtube.com/embed/wIe3eDfGKUo', 'youtube.com/live/wIe3eDfGKUo?x=1']) {
+    assert.strictEqual(canon(u), want, u);
+  }
+});
+
+test('non-video YouTube pages keep the normal rules', () => {
+  assert.strictEqual(canon('https://www.youtube.com/@IBMTechnology/videos'), 'https://www.youtube.com/@IBMTechnology/videos');
+  assert.strictEqual(canon('https://www.youtube.com/watch?v=short'), 'https://www.youtube.com/watch?v=short');
+});

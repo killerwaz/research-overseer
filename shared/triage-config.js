@@ -137,6 +137,9 @@ const TRIAGE_PROFILES = {
   brave:   profile(6000, 6000),
   // A URL pasted by hand was chosen deliberately — read it properly.
   manual:  profile(8000, 6000),
+  // Media transcripts (shared/media.js): 60k chars ~ 30+ min of talk with
+  // timestamps, ~15k tokens. The key-points list needs room in the output.
+  media:   profile(60000, 9000),
   default: profile(6000, 6000)
 };
 

@@ -116,6 +116,7 @@ The beat itself is untracked. It is the editorial definition of what the model s
 
 1. **Containers.** One-time: `docker volume create n8n_data`, `docker network create overseer`, then `docker compose -f docker/docker-compose.yml --env-file .env up -d`.
 2. **LM Studio.** Native install, not a container. Enable the server with auth, then `lms server start && lms load qwen/qwen3.5-9b -y`. Needs about 7 GB of VRAM. Feed search also needs the embedding model: `lms get https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF` (Q8, 640 MB). It loads on demand; load it with `-c 2048`, since a larger context costs VRAM the 9B needs.
+2b. **Media service** (YouTube and podcast links). Install [uv](https://docs.astral.sh/uv/), ffmpeg, [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [Deno](https://deno.com), add `MEDIA_TOKEN` (any long random string) to `.env`, then run `mediastart.cmd`. First use downloads Parakeet TDT 0.6B v3 (about 650 MB).
 3. **Database.** Create a Supabase project and run `sql/001` through `sql/011` in order, then `node scripts/backfill-embeddings.js` once the workflows are up.
 4. **Secrets and beat.** Copy `.env.example` to `.env` and fill it. Copy `beat.example.md` to `beat.md`.
 5. **n8n credentials.** Create the Postgres, Telegram, OpenRouter, Crawl4AI, LM Studio, and Firecrawl credentials in the n8n UI, then put their ids in `scripts/instance.json`.

@@ -47,7 +47,7 @@ const query = 'select canonical_url from seen_urls where canonical_url in (' +
 return [{ json: { query } }];
 `.trim();
 
-const FILTER_NEW = `
+const FILTER_NEW_BODY = `
 const runId = $('Create run').first().json.run_id;
 const seen = new Set($input.all().map(i => i.json && i.json.canonical_url).filter(Boolean));
 let candidates = [];
@@ -56,13 +56,16 @@ const byCanon = new Map();
 for (const c of candidates) if (!seen.has(c.canonical_url) && !byCanon.has(c.canonical_url)) byCanon.set(c.canonical_url, c);
 const fresh = [...byCanon.values()];
 if (!fresh.length) return [{ json: { __no_new: true, run_id: runId } }];
-return fresh.map(j => ({ json: j }));
+return fresh.map(j => ({ json: { ...j, is_media: isMediaUrl(j.canonical_url) } }));
 `.trim();
 
 const LOG_FAILURE = `
 const orig = $('Filter new').item.json;
 let reason = 'both_scrapers_failed_or_short_markdown';
-if ($json.error) {
+if (orig.is_media) {
+  const e = $json.error;
+  reason = 'media: ' + String((e && typeof e === 'object' ? (e.message || JSON.stringify(e)) : e) || 'no transcript').slice(0, 150);
+} else if ($json.error) {
   const msg = (typeof $json.error === 'object' && $json.error.message) ? $json.error.message : String($json.error);
   reason = 'firecrawl_error: ' + String(msg).slice(0, 120);
 } else if ($json.data) reason = 'firecrawl_short_markdown';
@@ -128,9 +131,48 @@ const { TRIAGE_SYSTEM, TRIAGE_SCHEMA } = require('../shared/triage-config.js');
 // n8n expressions reject multi-statement code. Substitute the constants into PREP_DOC.
 const PREP_DOC_FINAL = inline('triage-config.js') + '\n' + inline('triage-validate.js') + '\n' + PREP_DOC;
 
-const VALIDATE_COMMON = inline('triage-validate.js') + `
+// ---- media links (YouTube, podcasts, audio) ----
+// Transcript from media/server.py on the Windows host (captions -> Parakeet),
+// then the normal insert -> triage -> embed path, with the media skill merged
+// in so the same triage call also returns timestamped key points.
+const FILTER_NEW = inline('media.js') + '\n' + FILTER_NEW_BODY;
+const PREP_MEDIA = inline('triage-config.js') + '\n' + inline('triage-validate.js') + '\n' + inline('media.js') + `
+const orig = $('Filter new').item.json;
+const t = $json;
+const markdown = mediaMarkdown(t);
+const title = t.title || orig.title || '';
+const run = $('Create run').first().json;
+let sys = TRIAGE_SYSTEM + '\\n\\nADDITIONAL EXTRACTION\\n' + MEDIA_SKILL_PROMPT;
+let schema = withSkill(TRIAGE_SCHEMA, MEDIA_SKILL_SCHEMA);
+if (run.skill_prompt) sys += '\\n' + run.skill_prompt;
+if (run.skill_schema) { try { schema = withSkill(schema, JSON.parse(run.skill_schema)); } catch (e) {} }
+const prof = TRIAGE_PROFILES.media;
+const dhaka = new Date(Date.now() + 6 * 3600 * 1000).toISOString().slice(0, 10);
+const published = orig.published_at || t.published_at || '';
+const user = 'TODAY: ' + dhaka + '\\n' + 'PUBLISHED: ' + (published ? String(published).slice(0, 10) : 'unknown') + '\\n' +
+  'TITLE: ' + title + '\\n' + 'URL: ' + orig.canonical_url + '\\n\\nCONTENT:\\n' + markdown.slice(0, prof.content_chars);
+const triage_body = JSON.stringify({ model: prof.model, temperature: 0.2, max_tokens: prof.max_tokens,
+  reasoning_effort: prof.reasoning_effort, response_format: schema,
+  messages: [ { role: 'system', content: sys }, { role: 'user', content: user } ] });
+return { json: { canonical_url: orig.canonical_url, source: orig.source || '', title, markdown,
+  scraper: 'media:' + (t.source || 'unknown'), run_id: orig.run_id, triage_body,
+  triage_profile: prof.model + '/' + prof.content_chars, published_at: published } };
+`.trim();
+
+// Media key points get their timestamps snapped to the transcript line they
+// match (shared/media.js snapKeyPoints) before they are stored. The transcript
+// is the user message of the triage request itself.
+const VALIDATE_COMMON = inline('triage-validate.js') + inline('media.js') + `
 const doc = $('WF Input').first().json;
 const rawDocId = doc.raw_doc_id;
+function structuredJson(o) {
+  const st = splitStructured(o).structured;
+  if (!st) return '';
+  if (Array.isArray(st.key_points)) {
+    try { st.key_points = snapKeyPoints(st.key_points, JSON.parse(doc.triage_body).messages[1].content); } catch (e) {}
+  }
+  return JSON.stringify(st);
+}
 `.trim();
 
 const VALIDATE_1 = VALIDATE_COMMON + `
@@ -139,7 +181,7 @@ if (!o) return { json: { __invalid: true } };
 return { json: { __invalid: false, raw_doc_id: rawDocId, canonical_url: doc.canonical_url, title: doc.title,
   summary: o.summary, angle: o.angle || '', relevance: o.relevance,
   specificity: o.specificity, angle_strength: o.angle_strength, tags_pg: tagsPg(o.tags),
-  structured_json: (splitStructured(o).structured ? JSON.stringify(splitStructured(o).structured) : ''),
+  structured_json: structuredJson(o),
   published_at: doc.published_at || '', run_id: doc.run_id } };
 `;
 
@@ -151,7 +193,7 @@ if (!o) return { json: { raw_doc_id: rawDocId, canonical_url: doc.canonical_url,
 return { json: { raw_doc_id: rawDocId, canonical_url: doc.canonical_url, title: doc.title,
   summary: o.summary, angle: o.angle || '', relevance: o.relevance,
   specificity: o.specificity, angle_strength: o.angle_strength, tags_pg: tagsPg(o.tags),
-  structured_json: (splitStructured(o).structured ? JSON.stringify(splitStructured(o).structured) : ''),
+  structured_json: structuredJson(o),
   published_at: doc.published_at || '', run_id: doc.run_id } };
 `;
 
@@ -262,6 +304,27 @@ const nodes = [
         leftValue: "={{ ($json.results?.[0]?.markdown?.fit_markdown || $json.results?.[0]?.markdown?.raw_markdown || '').length }}",
         rightValue: 400, operator: { type: 'number', operation: 'gte' } } ] } } },
 
+  { id: 'ismedia', name: 'Is media?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1250, -300],
+    parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' },
+      combinator: 'and', conditions: [ { id: 'c1', leftValue: '={{ Boolean($json.is_media) }}', rightValue: true,
+        operator: { type: 'boolean', operation: 'equals' } } ] } } },
+
+  // One at a time: transcription uses every CPU core. 15 min ceiling covers a
+  // 3-hour Parakeet fallback (~0.05x real time) plus the audio download.
+  { id: 'fetchmedia', name: 'Fetch media', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [1450, -400],
+    parameters: { method: 'POST', url: 'http://host.docker.internal:8765/transcript',
+      sendHeaders: true, headerParameters: { parameters: [ { name: 'Authorization', value: 'Bearer __MEDIA_TOKEN__' } ] },
+      sendBody: true, specifyBody: 'json', jsonBody: '={{ JSON.stringify({ url: $json.canonical_url }) }}',
+      options: { timeout: 900000, batching: { batch: { batchSize: 1, batchInterval: 0 } } } },
+    retryOnFail: false, onError: 'continueRegularOutput' },
+
+  { id: 'mediaok', name: 'Media OK?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1650, -400],
+    parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' },
+      combinator: 'and', conditions: [ { id: 'c1', leftValue: '={{ ($json.paragraphs || []).length }}', rightValue: 3,
+        operator: { type: 'number', operation: 'gte' } } ] } } },
+
+  codeNode('Prep media', 'prepmedia', [1800, -400], 'runOnceForEachItem', PREP_MEDIA),
+
   // PDFs skip Crawl4AI (a headless browser can't markdown them) and go straight here
   { id: 'ispdf', name: 'Is PDF?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1300, -100],
     parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' },
@@ -292,7 +355,7 @@ const nodes = [
   codeNode('Prep doc', 'prepdoc', [1800, -200], 'runOnceForEachItem', PREP_DOC_FINAL),
 
   pgNode('Insert doc', 'insertdoc', [2000, -200],
-    "with s as (insert into seen_urls (canonical_url, source) values ($1, nullif($2,'')) on conflict (canonical_url) do nothing) insert into raw_docs (canonical_url, title, markdown, scraper, run_id, published_at) values ($1, nullif($3,''), $4, $6, $5::bigint, nullif($7,'')::timestamptz) returning id as raw_doc_id",
+    "with s as (insert into seen_urls (canonical_url, source) values ($1, nullif($2,'')) on conflict (canonical_url) do nothing) insert into raw_docs (canonical_url, title, markdown, scraper, run_id, published_at) values ($1, nullif($3,''), $4, $6, $5::bigint, nullif($7,'')::timestamptz) returning id as raw_doc_id, scraper",
     "={{ $json.canonical_url }},{{ $json.source }},{{ $json.title }},{{ $json.markdown }},{{ $json.run_id }},{{ $json.scraper }},{{ $json.published_at }}"),
 
   // Per-item sequential sub-workflow call — serializes LM Studio traffic and is
@@ -309,12 +372,12 @@ const nodes = [
       workflowInputs: {
         mappingMode: 'defineBelow',
         value: {
-          triage_body: "={{ $('Prep doc').item.json.triage_body }}",
+          triage_body: "={{ (String($json.scraper || '').startsWith('media:') ? $('Prep media') : $('Prep doc')).item.json.triage_body }}",
           raw_doc_id: '={{ $json.raw_doc_id }}',
-          canonical_url: "={{ $('Prep doc').item.json.canonical_url }}",
-          title: "={{ $('Prep doc').item.json.title }}",
-          published_at: "={{ $('Prep doc').item.json.published_at }}",
-          run_id: "={{ $('Prep doc').item.json.run_id }}"
+          canonical_url: "={{ (String($json.scraper || '').startsWith('media:') ? $('Prep media') : $('Prep doc')).item.json.canonical_url }}",
+          title: "={{ (String($json.scraper || '').startsWith('media:') ? $('Prep media') : $('Prep doc')).item.json.title }}",
+          published_at: "={{ (String($json.scraper || '').startsWith('media:') ? $('Prep media') : $('Prep doc')).item.json.published_at }}",
+          run_id: "={{ (String($json.scraper || '').startsWith('media:') ? $('Prep media') : $('Prep doc')).item.json.run_id }}"
         },
         matchingColumns: [],
         schema: [
@@ -336,14 +399,21 @@ const nodes = [
   codeNode('Collect stats', 'stats', [3800, 0], 'runOnceForAllItems', COLLECT_STATS),
 
   pgNode('Finalize run', 'finalize', [4000, 0],
-    "update runs set finished_at = now(), urls_new = $2::int, urls_scraped = (select count(*) from raw_docs where run_id = $1::bigint), items_created = (select count(*) from feed_items where run_id = $1::bigint), error = nullif($3,''), status = case when $2::int = 0 and $3 = '' then 'ok' when (select count(*) from raw_docs where run_id = $1::bigint) = 0 and $2::int > 0 then 'failed' when (select count(*) from raw_docs where run_id = $1::bigint) < $2::int then 'partial' when (select count(*) from feed_items where run_id = $1::bigint) < (select count(*) from raw_docs where run_id = $1::bigint) then 'partial' else 'ok' end where id = $1::bigint returning id as run_id, status, scope, urls_found, urls_new, urls_scraped, items_created, error, (select title from feed_items where run_id = $1::bigint order by score desc, relevance desc nulls last, id desc limit 1) as top_title",
+    "update runs set finished_at = now(), urls_new = $2::int, urls_scraped = (select count(*) from raw_docs where run_id = $1::bigint), items_created = (select count(*) from feed_items where run_id = $1::bigint), error = nullif($3,''), status = case when $2::int = 0 and $3 = '' then 'ok' when (select count(*) from raw_docs where run_id = $1::bigint) = 0 and $2::int > 0 then 'failed' when (select count(*) from raw_docs where run_id = $1::bigint) < $2::int then 'partial' when (select count(*) from feed_items where run_id = $1::bigint) < (select count(*) from raw_docs where run_id = $1::bigint) then 'partial' else 'ok' end where id = $1::bigint returning id as run_id, status, scope, urls_found, urls_new, urls_scraped, items_created, error, (select title from feed_items where run_id = $1::bigint order by score desc, relevance desc nulls last, id desc limit 1) as top_title, (select json_build_object('title', f.title, 'summary', f.summary, 'score', f.score, 'canonical_url', f.canonical_url, 'key_points', f.structured->'key_points', 'transcript_source', substr(d.scraper, 7))::text from feed_items f join raw_docs d on d.id = f.raw_doc_id where f.run_id = $1::bigint and d.scraper like 'media:%' order by f.id desc limit 1) as media",
     "={{ $json.run_id }},{{ $json.urls_new }},{{ $json.error }}",
     { executeOnce: true }),
 
   // Plain-language summary. No run numbers, no "items", no scope codes — those
   // are for run_status when something actually needs looking at.
-  codeNode('Compose summary', 'compose', [4180, 0], 'runOnceForAllItems', `
+  codeNode('Compose summary', 'compose', [4180, 0], 'runOnceForAllItems', inline('media.js') + `
 const r = $('Finalize run').first().json;
+let blockedMsg = '';
+try { if ($('Log failure').all().some((i) => /bot check/i.test(i.json.reason || ''))) blockedMsg = '🎬 YouTube is temporarily blocking this machine (bot check), so the video could not be read. The media service pauses YouTube requests for a few hours; send the link again later.'; } catch (e) {}
+if (blockedMsg && !(Number(r.items_created) > 0)) return [{ json: { text: blockedMsg } }];
+if (r.media && r.scope === 'url') {
+  let m = null; try { m = JSON.parse(r.media); } catch (e) {}
+  if (m) return [{ json: { text: mediaMessage(m) } }];
+}
 let brief = '';
 try { brief = $('Collect stats').first().json.error_brief || ''; } catch (e) {}
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -388,9 +458,19 @@ const connections = {
   'Find seen': { main: [[{ node: 'Filter new', type: 'main', index: 0 }]] },
   'Filter new': { main: [[{ node: 'Any new?', type: 'main', index: 0 }]] },
   'Any new?': { main: [
-    [{ node: 'Is PDF?', type: 'main', index: 0 }],
+    [{ node: 'Is media?', type: 'main', index: 0 }],
     [{ node: 'Merge for stats', type: 'main', index: 2 }]
   ] },
+  'Is media?': { main: [
+    [{ node: 'Fetch media', type: 'main', index: 0 }],
+    [{ node: 'Is PDF?', type: 'main', index: 0 }]
+  ] },
+  'Fetch media': { main: [[{ node: 'Media OK?', type: 'main', index: 0 }]] },
+  'Media OK?': { main: [
+    [{ node: 'Prep media', type: 'main', index: 0 }],
+    [{ node: 'Log failure', type: 'main', index: 0 }]
+  ] },
+  'Prep media': { main: [[{ node: 'Insert doc', type: 'main', index: 0 }]] },
   'Is PDF?': { main: [
     [{ node: 'Firecrawl', type: 'main', index: 0 }],
     [{ node: 'Scrape', type: 'main', index: 0 }]

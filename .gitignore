@@ -12,3 +12,7 @@ CLAUDE.md
 
 # Search eval set — contains real Telegram messages, kept local
 eval/
+
+# media service cache and venv
+media/cache/
+media/.venv/
