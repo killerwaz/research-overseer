@@ -30,7 +30,10 @@ test('every profile is complete and sane', () => {
   for (const [name, p] of Object.entries(TRIAGE_PROFILES)) {
     assert.equal(typeof p.model, 'string', name + '.model');
     assert.ok(p.model.length > 0, name + '.model non-empty');
-    assert.ok(p.content_chars > 0 && p.content_chars <= 20000, name + '.content_chars');
+    // Articles stay under 20k chars. Media transcripts are the one exception:
+    // 60k chars ~ 15k tokens, still well inside the 9B's 64k-token context.
+    const cap = name === 'media' ? 80000 : 20000;
+    assert.ok(p.content_chars > 0 && p.content_chars <= cap, name + '.content_chars');
     // Qwen reasons before emitting JSON; too small a budget strands the answer
     assert.ok(p.max_tokens >= 2000, name + '.max_tokens leaves room to think');
     // LM Studio defaults this model to thinking OFF (for the router); triage

@@ -302,7 +302,8 @@ return [{ json: { output: a.output || '', retry: String(g.retry), guard_reason: 
       chat_id: { fixed: "={{ $('Agent input').first().json.chat_id }}" } }, [1440, 320]),
 
   tool('scrape_url',
-    'Ingest one URL the user pasted. Use whenever the message contains a link. Cheap — execute immediately, no confirmation.',
+    'Ingest one URL the user pasted. Use whenever the message contains a link — articles, PDFs, and also YouTube videos and podcast/audio links, which are transcribed and summarised with timestamped key points (takes 1-3 minutes). Cheap — execute immediately, no confirmation. ' +
+    'For a video or podcast the full summary with key points has ALREADY been sent to the user as its own message when this returns (media is set): reply with ONE short line only, e.g. \"Summary is above — ask me about any point.\" Do not repeat the summary or the points.',
     WF.scrape_url,
     { url: { desc: 'the full URL to scrape' },
       trigger: { fixed: 'agent' } }, [1580, 320]),

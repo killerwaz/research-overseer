@@ -738,7 +738,7 @@
         320
       ],
       "parameters": {
-        "description": "Ingest one URL the user pasted. Use whenever the message contains a link. Cheap — execute immediately, no confirmation.",
+        "description": "Ingest one URL the user pasted. Use whenever the message contains a link — articles, PDFs, and also YouTube videos and podcast/audio links, which are transcribed and summarised with timestamped key points (takes 1-3 minutes). Cheap — execute immediately, no confirmation. For a video or podcast the full summary with key points has ALREADY been sent to the user as its own message when this returns (media is set): reply with ONE short line only, e.g. \"Summary is above — ask me about any point.\" Do not repeat the summary or the points.",
         "workflowId": {
           "__rl": true,
           "value": "fzgIhUYkPOaSdCUu",

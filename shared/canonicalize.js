@@ -11,8 +11,19 @@
 // items during testing.
 const STRIP = /^(utm_.*|fbclid|gclid|ref|source|src|mc_cid|mc_eid|igshid)$/i;
 
+// Every YouTube URL shape for one video (watch?v=, youtu.be/, shorts/, embed/,
+// live/, m. and music. hosts) collapses to one key, with pp/si/t/list dropped:
+// otherwise the same video pasted twice became two feed items.
+const YT_ID = /^(?:https?:\/\/)?(?:(?:www|m|music)\.)?(?:youtube\.com\/(?:watch\?(?:[^#]*&)?v=|shorts\/|embed\/|live\/|v\/)|youtu\.be\/)([A-Za-z0-9_-]{11})(?![A-Za-z0-9_-])/i;
+function youtubeId(rawUrl) {
+  const m = String(rawUrl || '').trim().match(YT_ID);
+  return m ? m[1] : null;
+}
+
 function canon(rawUrl) {
   try {
+    const yt = youtubeId(rawUrl);
+    if (yt) return 'https://www.youtube.com/watch?v=' + yt;
     const s = String(rawUrl).trim();
     const m = s.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):\/\/([^/?#]+)([^?#]*)(\?[^#]*)?(#.*)?$/);
     if (!m) return null;
@@ -40,4 +51,4 @@ function canon(rawUrl) {
   } catch (e) { return null; }
 }
 
-module.exports = { canon, STRIP };
+module.exports = { canon, STRIP, youtubeId };
