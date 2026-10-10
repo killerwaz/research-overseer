@@ -204,11 +204,33 @@ const ctx = $('Agent context').first().json;
 const sources = ctx.sources || 'none', runs = ctx.runs || 'unknown';
 return $('Feed switch?').all(1).map(i => ({ json: { ...i.json, sources, runs } }));`.trim() } },
 
+  // Links are ingested deterministically, BEFORE the model runs (2026-10-11):
+  // the 9B answered a two-link message with "I've ingested both YouTube links"
+  // without calling scrape_url, and nothing was queued. WF-42 reads every link
+  // and trigger word from the message itself; the model only writes the reply.
+  { id: 'haslink', name: 'Has link?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1080, 260],
+    parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' },
+      combinator: 'and', conditions: [ { id: 'c1', leftValue: "={{ /https?:\\/\\//i.test($json.text || '') }}", rightValue: true,
+        operator: { type: 'boolean', operation: 'equals' } } ] } } },
+  { id: 'ingest', name: 'Ingest links', type: 'n8n-nodes-base.executeWorkflow', typeVersion: 1.2, position: [1100, 400],
+    parameters: { workflowId: { __rl: true, value: WF.scrape_url, mode: 'id' },
+      workflowInputs: { mappingMode: 'defineBelow', value: { url: '', trigger: 'agent', user_message: '={{ $json.text }}' },
+        matchingColumns: [], schema: ['url', 'trigger', 'user_message'].map((id) => ({ id, displayName: id, required: false,
+          defaultMatch: false, display: true, canBeUsedToMatch: true, type: 'string' })) },
+      options: { waitForSubWorkflow: true } },
+    onError: 'continueRegularOutput' },
+  { id: 'linknote', name: 'Link note', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1110, 520],
+    parameters: { mode: 'runOnceForAllItems', jsCode: `
+const base = $('Agent input').first().json;
+const r = $input.first().json;
+const note = String(r.note || (r.error && (r.error.message || r.error)) || 'links handed to the pipeline');
+return [{ json: { ...base, ingest_note: note } }];`.trim() } },
+
   { id: 'agent', name: 'Overseer Agent', type: '@n8n/n8n-nodes-langchain.agent', typeVersion: 3.1, position: [1120, 100],
     // Live run data rides in the USER turn, not just the system prompt: with it
     // only in the system prompt the 9B still copied a stale run_status answer
     // from chat history (it saw run 58, answered "run 57"). The latest turn wins.
-    parameters: { promptType: 'define', text: '={{ $json.text }}\n\n[live data, fetched just now: latest runs: {{ $json.runs }}]',
+    parameters: { promptType: 'define', text: '={{ $json.text }}\n\n[live data, fetched just now: latest runs: {{ $json.runs }}]{{ $json.ingest_note ? "\\n[ALREADY DONE for this message, by the system: " + $json.ingest_note + " Do NOT call scrape_url. Reply in one short line.]" : "" }}',
       options: { systemMessage: SYSTEM, maxIterations: 6, returnIntermediateSteps: true } } },
 
   // ---- answer guard (2026-10-09) ----
@@ -401,7 +423,10 @@ const connections = {
   'run_status': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }, { node: 'Guarded agent', type: 'ai_tool', index: 0 }]] },
   'manage_sources': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }, { node: 'Guarded agent', type: 'ai_tool', index: 0 }]] },
   'Agent context': { main: [[{ node: 'Agent input', type: 'main', index: 0 }]] },
-  'Agent input': { main: [[{ node: 'Overseer Agent', type: 'main', index: 0 }]] },
+  'Agent input': { main: [[{ node: 'Has link?', type: 'main', index: 0 }]] },
+  'Has link?': { main: [[{ node: 'Ingest links', type: 'main', index: 0 }], [{ node: 'Overseer Agent', type: 'main', index: 0 }]] },
+  'Ingest links': { main: [[{ node: 'Link note', type: 'main', index: 0 }]] },
+  'Link note': { main: [[{ node: 'Overseer Agent', type: 'main', index: 0 }]] },
   'Overseer Agent': { main: [[{ node: 'Guard check', type: 'main', index: 0 }]] },
   'Guard check': { main: [[{ node: 'Redo?', type: 'main', index: 0 }]] },
   'Redo?': { main: [[{ node: 'Prefetch', type: 'main', index: 0 }], [{ node: 'Prep reply', type: 'main', index: 0 }]] },
