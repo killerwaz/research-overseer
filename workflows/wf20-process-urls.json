@@ -267,7 +267,7 @@
       ],
       "parameters": {
         "method": "POST",
-        "url": "http://host.docker.internal:8765/transcript",
+        "url": "http://media:8765/transcript",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
