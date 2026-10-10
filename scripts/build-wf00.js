@@ -221,12 +221,26 @@ const a = $input.first().json;
 const question = $('Agent input').first().json.text || '';
 const toolsUsed = (a.intermediateSteps || []).map(s => (s.action && s.action.tool) || '').filter(Boolean);
 const g = needsFreshLookup({ question, reply: a.output, toolsUsed });
-return [{ json: { output: a.output || '', retry: String(g.retry), guard_reason: g.reason, tools_used: toolsUsed.join(',') } }];`.trim() } },
+const pf = prefetchFor(question);
+return [{ json: { output: a.output || '', retry: String(g.retry), guard_reason: g.reason, tools_used: toolsUsed.join(','), prefetch_item: pf.item, prefetch_tag: pf.tag } }];`.trim() } },
 
   { id: 'retryif', name: 'Redo?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1460, 100],
     parameters: { options: {}, conditions: {
       options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, combinator: 'and',
       conditions: [{ id: 'r1', leftValue: '={{ $json.retry }}', rightValue: 'true', operator: { type: 'string', operation: 'equals' } }] } } },
+
+  // The lookup the rejected answer skipped, run deterministically so the redo
+  // does not depend on the model choosing to call a tool (it was seen not to).
+  { id: 'prefetch', name: 'Prefetch', type: 'n8n-nodes-base.executeWorkflow', typeVersion: 1.2, position: [1540, -120],
+    parameters: { workflowId: { __rl: true, value: WF.query_feed, mode: 'id' },
+      workflowInputs: { mappingMode: 'defineBelow', value: {
+        item: '={{ $json.prefetch_item }}', tag: '={{ $json.prefetch_tag }}', limit: '10',
+        chat_id: "={{ String($('Agent input').first().json.chat_id) }}",
+        since: '', min_relevance: '', min_score: '', max_age_days: '', group_stories: '' },
+        matchingColumns: [], schema: ['item', 'tag', 'limit', 'chat_id', 'since', 'min_relevance', 'min_score', 'max_age_days', 'group_stories']
+          .map((id) => ({ id, displayName: id, required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: 'string' })) },
+      options: { waitForSubWorkflow: true } },
+    onError: 'continueRegularOutput', alwaysOutputData: true },
 
   // the exchange before this one, so "tell me more about the first one" still
   // works in the memoryless redo. Offset 2 skips the rejected attempt itself.
@@ -238,7 +252,7 @@ return [{ json: { output: a.output || '', retry: String(g.retry), guard_reason: 
 
   { id: 'agent2', name: 'Guarded agent', type: '@n8n/n8n-nodes-langchain.agent', typeVersion: 3.1, position: [1780, 0],
     parameters: { promptType: 'define',
-      text: "={{ $('Agent input').first().json.text }}\n\n[previous exchange, for reference: {{ $json.previous }}]\n[live data, fetched just now: latest runs: {{ $('Agent input').first().json.runs }}]\n[Your first answer to this was rejected because it described the feed without checking it. Call the right tool NOW and answer only from what it returns.]",
+      text: "={{ $('Agent input').first().json.text }}\n\n[previous exchange, for reference: {{ $json.previous }}]\n[live data, fetched just now: latest runs: {{ $('Agent input').first().json.runs }}]\n[live data, feed lookup run just now for this message: {{ JSON.stringify($('Prefetch').first().json).slice(0, 7000) }}]\n[Your first answer to this was rejected because it described the feed without checking it. Answer ONLY from the feed lookup above (list items with their n); call a tool only if the lookup clearly does not answer the question.]",
       options: { systemMessage: SYSTEM.replace(/\{\{ \$json\.(sources|runs) \}\}/g, "{{ $('Agent input').first().json.$1 }}"), maxIterations: 6 } } },
 
   // put the corrected answer into memory in place of the rejected one (base64
@@ -297,6 +311,7 @@ return [{ json: { output: a.output || '', retry: String(g.retry), guard_reason: 
     "Read EXISTING triaged results. Use for 'what did you find', 'show me', 'anything good last night'. NEVER triggers a new run. " +
     "CRITICAL: if the question implies ANY time window — today, tonight, last night, this morning, yesterday, this week, recently, just now — you MUST pass `since` as an ISO timestamp you compute from the current time given above. Omitting it returns the whole archive, and you will report old items as if they were new. " +
     "Only omit `since` for questions with no time element at all ('show me the best stuff', 'anything on agents'). " +
+    "FILTERS COME ONLY FROM THE USER'S CURRENT WORDS. 'anything on X?' / 'what about X' / 'what do we have on X' = tag ONLY: no min_score, no max_age_days, no since — even if earlier messages asked for 'good' or 'this week'. Add min_score only when this message says good/best/top/worth reading; add a time filter only when this message names a time. Keep the user's topic words as they are; do not add words like 'ai' to tag. " +
     "Items are scored on two axes: specificity (1-5, how concrete and verifiable the claims are — vendor SEO content scores low) and angle_strength (1-5, how non-obvious the publishable hook is). score = the two added, 2-10. Use min_score 7+ for 'the good stuff', 8+ for 'only the best'. " +
     "Quality and recency are separate knobs and combine freely: min_score filters how good, max_age_days filters how fresh. 'anything good this week' = min_score 7 + max_age_days 7. Results always come back best-first. " +
     "Set group_stories to 'true' when the user wants an overview rather than every article — it collapses multiple outlets covering the same event into one row with an articles count. Prefer it for 'what's happening with X', 'catch me up', 'what did I miss'. Leave empty when they want individual pieces to read. " +
@@ -305,8 +320,8 @@ return [{ json: { output: a.output || '', retry: String(g.retry), guard_reason: 
     "Params: max_age_days (days since publication), min_score (2-10), since (ISO timestamp, for an exact cutoff), tag, limit (default 20), group_stories, min_relevance (legacy, leave empty).",
     WF.query_feed,
     { group_stories: { desc: "'true' to collapse duplicate coverage of one event into a single row, empty for every article" },
-      max_age_days: { desc: 'only items published within this many days, empty for any age' },
-      min_score: { desc: 'minimum combined score 2-10, empty for none' },
+      max_age_days: { desc: 'only when THIS message names a time window; otherwise empty' },
+      min_score: { desc: 'only when THIS message asks for good/best items; otherwise empty' },
       since: { desc: 'ISO timestamp lower bound, empty for none' },
       tag: { desc: 'the topic from the question (e.g. \'nvidia export control\'); several topics separated by | (max 3); empty for no topic. Matched by keyword and by meaning. Never put time words or quality words here' },
       limit: { desc: 'max items to return, empty for default 20' },
@@ -385,7 +400,8 @@ const connections = {
   'Agent input': { main: [[{ node: 'Overseer Agent', type: 'main', index: 0 }]] },
   'Overseer Agent': { main: [[{ node: 'Guard check', type: 'main', index: 0 }]] },
   'Guard check': { main: [[{ node: 'Redo?', type: 'main', index: 0 }]] },
-  'Redo?': { main: [[{ node: 'Redo context', type: 'main', index: 0 }], [{ node: 'Prep reply', type: 'main', index: 0 }]] },
+  'Redo?': { main: [[{ node: 'Prefetch', type: 'main', index: 0 }], [{ node: 'Prep reply', type: 'main', index: 0 }]] },
+  'Prefetch': { main: [[{ node: 'Redo context', type: 'main', index: 0 }]] },
   'Redo context': { main: [[{ node: 'Guarded agent', type: 'main', index: 0 }]] },
   'Guarded agent': { main: [[{ node: 'Prep reply', type: 'main', index: 0 }, { node: 'Fix memory', type: 'main', index: 0 }]] },
   'Prep reply': { main: [[{ node: 'Send reply', type: 'main', index: 0 }, { node: 'Tidy memory', type: 'main', index: 0 }]] }

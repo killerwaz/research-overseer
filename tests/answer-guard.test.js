@@ -1,6 +1,21 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { needsFreshLookup } = require('../shared/answer-guard.js');
+const { needsFreshLookup, prefetchFor } = require('../shared/answer-guard.js');
+
+test('prefetchFor resolves item follow-ups to a number', () => {
+  assert.deepStrictEqual(prefetchFor('tell me more about the first one'), { item: '1', tag: '' });
+  assert.deepStrictEqual(prefetchFor('what about #3'), { item: '3', tag: '' });
+  assert.deepStrictEqual(prefetchFor('2. especially the funding part'), { item: '2', tag: '' });
+  assert.deepStrictEqual(prefetchFor('open the second article'), { item: '2', tag: '' });
+});
+
+test('prefetchFor strips the lead-in and keeps the topic', () => {
+  assert.strictEqual(prefetchFor('anything on bangladesh bank?').tag, 'bangladesh bank');
+  assert.strictEqual(prefetchFor('anything on the cricket world cup?').tag, 'cricket world cup');
+  assert.strictEqual(prefetchFor('what about Nigeria AI policy').tag, 'Nigeria AI policy');
+  assert.strictEqual(prefetchFor('hey, any news on export controls?').tag, 'export controls');
+  assert.strictEqual(prefetchFor('did it work?').item, '');
+});
 
 const g = (question, reply, toolsUsed = []) => needsFreshLookup({ question, reply, toolsUsed }).retry;
 
@@ -11,6 +26,15 @@ test('feed claims with no tool call are redone (the measured failures)', () => {
   assert.equal(g('anything on nvidia export controls?', 'The feed has nothing on Nvidia export controls.'), true);
   assert.equal(g('anything on nvidia export controls?', 'I checked the feeds and found nothing on Nvidia export controls.'), true);
   assert.equal(g('anything on nvidia export controls?', 'No recent items on Nvidia export controls in the last week.'), true);
+});
+
+test('feed questions and item follow-ups need a tool whatever the reply says (live 2026-10-10)', () => {
+  assert.equal(g('anything on bangladesh bank?', 'Nothing scored 7+ from today on Bangladesh Bank yet. Want me to check the archive?'), true);
+  assert.equal(g('tell me more about the first one', 'The first item from the latest run (run 64) is about GPU rental pricing.'), true);
+  assert.equal(g('what about #3', 'That one covers the AI directive.'), true);
+  assert.equal(g('2. especially the funding part', 'It raised $30M.'), true);
+  assert.equal(g('anything on bangladesh bank?', 'Found 12 items.', ['query_feed']), false);
+  assert.equal(g('tell me more about the first one', 'Item #1 is the regulatory directory.', ['get_item']), false);
 });
 
 test('claiming to have started something without a tool is redone', () => {

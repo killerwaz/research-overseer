@@ -88,19 +88,24 @@ c0 as (
   left join lateral (select id, embedding from feed_items fi where fi.canonical_url = s.canonical_url order by fi.id desc limit 1) r on true
   where nullif($7, '') is not null
 ),
-c as (
-  select * from c0
-  where nullif($9, '') is null
-    and (nullif($1, '') is null or coalesce(published_at, created_at) >= nullif($1, '')::timestamptz)
+/* in_filter = passes the time/quality filters. Topic matching runs over ALL
+   items so the matches the filters excluded can be reported separately
+   (outside = true) instead of the read looking empty. (Block comments only:
+   the query is collapsed to one line.) */
+call as (
+  select c0.*,
+    (nullif($1, '') is null or coalesce(published_at, created_at) >= nullif($1, '')::timestamptz)
     and (nullif($2, '') is null or relevance >= nullif($2, '')::int)
     and (nullif($5, '') is null or score >= nullif($5, '')::int)
-    and (nullif($6, '') is null or coalesce(published_at, created_at) >= now() - (nullif($6, '')::int * interval '1 day'))
+    and (nullif($6, '') is null or coalesce(published_at, created_at) >= now() - (nullif($6, '')::int * interval '1 day')) as in_filter
+  from c0 where nullif($9, '') is null
 ),
+c as (select * from call where in_filter),
 m as (
   select c.*, t.ord, t.kw as topic,
     case when t.qv is null or c.embedding is null then null else 1 - (c.embedding <=> t.qv) end as sim,
     ${kw('t.kw')} as kw_hit
-  from c cross join t
+  from call c cross join t
 ),
 best as (
   select distinct on (id) * from m
@@ -108,29 +113,40 @@ best as (
   order by id, ord
 ),
 ranked as (
-  select best.*, row_number() over (partition by ord order by coalesce(sim, 0) + case when kw_hit then ${KW_BOOST} else 0 end desc, score desc nulls last, published_at desc nulls last) as rn
+  select best.*, row_number() over (partition by ord, in_filter order by coalesce(sim, 0) + case when kw_hit then ${KW_BOOST} else 0 end desc, score desc nulls last, published_at desc nulls last) as rn
   from best
 ),
 listed as (
-  select ${COLS}, ord, topic, sim, kw_hit, null::text as page, rn from ranked
-  where rn <= ceil((select n from lim)::numeric / greatest(1, (select n from nt)))
+  select ${COLS}, ord, topic, sim, kw_hit, null::text as page, rn, false as outside from ranked
+  where in_filter and rn <= ceil((select n from lim)::numeric / greatest(1, (select n from nt)))
   union all
-  select ${COLS}, null::int, null::text, null::float8, null::boolean, null::text, null::bigint from c
+  select ${COLS}, null::int, null::text, null::float8, null::boolean, null::text, null::bigint, false from c
   where (select n from nt) = 0
 ),
+/* Best 5 topic matches the filters excluded, so "nothing this week" can still
+   say "but N older / lower-scored ones". Never mixed into the main list. */
+outside as (
+  select ${COLS}, ord, topic, sim, kw_hit, null::text as page, rn, true as outside from ranked
+  where not in_filter order by coalesce(sim, 0) + case when kw_hit then ${KW_BOOST} else 0 end desc limit 5
+),
+outside_n as (select count(*)::int as n from best where not in_filter),
 item as (
   select f.id, f.canonical_url, f.title, f.summary, f.angle, f.relevance, f.specificity, f.angle_strength, f.score,
          f.tags, f.created_at, f.published_at, f.structured, 1 as articles,
-         null::int as ord, null::text as topic, null::float8 as sim, null::boolean as kw_hit, left(d.markdown, 6000) as page, null::bigint as rn
+         null::int as ord, null::text as topic, null::float8 as sim, null::boolean as kw_hit, left(d.markdown, 6000) as page, null::bigint as rn, null::boolean as outside
   from chat_results cr
   join feed_items f on f.id = cr.item_ids[nullif($9, '')::int]
   left join raw_docs d on d.id = f.raw_doc_id
   where nullif($9, '') is not null and cr.chat_id = nullif($10, '')::bigint
 )
-select *, case when published_at is null then null else greatest(0, extract(day from now() - published_at)::int) end as age_days
+select *, case when published_at is null then null else greatest(0, extract(day from now() - published_at)::int) end as age_days,
+  (select n from outside_n) as outside_total
 from (select * from listed order by ord nulls first, rn nulls last, score desc nulls last, published_at desc nulls last limit (select n from lim)) l
 union all
-select *, case when published_at is null then null else greatest(0, extract(day from now() - published_at)::int) end
+select *, case when published_at is null then null else greatest(0, extract(day from now() - published_at)::int) end, (select n from outside_n)
+from outside
+union all
+select *, case when published_at is null then null else greatest(0, extract(day from now() - published_at)::int) end, null::int
 from item
 `.replace(/\s+/g, ' ').trim();
 
@@ -154,7 +170,9 @@ if (p.item_n) {
     note: 'This is item #' + p.item_n + ' from the last list, with an excerpt of the saved page. Answer from it; do not search again.' } } }];
 }
 
-const items = rows.map((r, i) => clean(r, i + 1));
+const outsideRows = rows.filter((r) => r.outside === true);
+const outsideTotal = rows.length ? Number(rows[0].outside_total || 0) : 0;
+const items = rows.filter((r) => r.outside !== true).map((r, i) => clean(r, i + 1));
 const chat = String(p.chat_id || '').trim();
 const ids = items.map((i) => Number(i.id)).filter((x) => Number.isInteger(x) && x > 0);
 const remember = /^-?\\d+$/.test(chat) && ids.length === items.length && ids.length
@@ -163,9 +181,13 @@ const remember = /^-?\\d+$/.test(chat) && ids.length === items.length && ids.len
   : 'select 1 as skipped';
 const out = { count: items.length, items };
 if (p.topics.length) { out.topics = p.topics; out.semantic = p.semantic; }
-if (!items.length) out.note = p.topics.length ? 'nothing in the feed matches ' + p.topics.join(' / ') : 'no feed items matched the filters';
+if (outsideRows.length) {
+  out.outside_filters = { total: outsideTotal, examples: outsideRows.map((r) => ({ title: r.title, published_at: r.published_at, age_days: r.age_days, score: r.score })) };
+}
+const outsideNote = outsideRows.length ? ' ' + outsideTotal + ' more items match the topic but are outside your time/score filters (outside_filters) — mention them as older or lower-scored, never as matching the filter.' : '';
+if (!items.length) out.note = (p.topics.length ? 'nothing in the feed matches ' + p.topics.join(' / ') + ' within these filters.' : 'no feed items matched the filters.') + outsideNote;
 else out.note = 'Each item has n. Show n with each item you list; the user can say "#3" or "the first one" and get_item will fetch it.' +
-  (items.some((i) => i.articles) ? ' articles > 1 means several outlets covered the same story.' : '');
+  (items.some((i) => i.articles) ? ' articles > 1 means several outlets covered the same story.' : '') + outsideNote;
 return [{ json: { remember, out } }];
 `.trim();
 
