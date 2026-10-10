@@ -65,3 +65,25 @@ test('snapKeyPoints leaves points alone when nothing matches', () => {
   assert.strictEqual(out[0].t, '3:00');
   assert.deepStrictEqual(snapKeyPoints([{ t: '1:00', point: 'x' }], 'no transcript'), [{ t: '1:00', point: 'x' }]);
 });
+
+const { parseMediaRequest } = require('../shared/media.js');
+
+test('parseMediaRequest: every link, in order, deduped, punctuation trimmed', () => {
+  const r = parseMediaRequest('check https://youtu.be/aaaaaaaaaaa, and https://www.youtube.com/watch?v=bbbbbbbbbbb\nhttps://youtu.be/aaaaaaaaaaa');
+  assert.deepStrictEqual(r.urls, ['https://youtu.be/aaaaaaaaaaa', 'https://www.youtube.com/watch?v=bbbbbbbbbbb']);
+  assert.strictEqual(r.slides, false);
+  assert.strictEqual(r.transcribe, false);
+});
+
+test('parseMediaRequest: watch inside a URL is not a trigger, the word is', () => {
+  assert.strictEqual(parseMediaRequest('https://www.youtube.com/watch?v=bbbbbbbbbbb').slides, false);
+  for (const t of ['slides', 'the deck please', 'presentation', 'watch it', 'look at the screen'])
+    assert.strictEqual(parseMediaRequest(t + ' https://youtu.be/aaaaaaaaaaa').slides, true, t);
+  for (const t of ['transcribe', 'listen to it', 'can you hear this'])
+    assert.strictEqual(parseMediaRequest(t + ' https://youtu.be/aaaaaaaaaaa').transcribe, true, t);
+});
+
+test('parseMediaRequest: the tool url is merged in, text without links is fine', () => {
+  assert.deepStrictEqual(parseMediaRequest('transcribe', 'https://youtu.be/aaaaaaaaaaa').urls, ['https://youtu.be/aaaaaaaaaaa']);
+  assert.deepStrictEqual(parseMediaRequest('transcribe').urls, []);
+});

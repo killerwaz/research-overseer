@@ -5,6 +5,6 @@
   "description": "Research Overseer — research discovery pipeline on n8n. Build scripts emit workflow JSON; shared/ holds the pure functions they inline.",
   "scripts": {
     "test": "node --test tests/*.test.js",
-    "build": "node scripts/build-wf20.js && node scripts/build-wf30.js && node scripts/build-wf31.js && node scripts/build-wf00.js"
+    "build": "node scripts/build-wf20.js && node scripts/build-wf30.js && node scripts/build-wf31.js && node scripts/build-wf42.js && node scripts/build-wf00.js"
   }
 }

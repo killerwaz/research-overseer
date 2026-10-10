@@ -1,25 +1,378 @@
 {
   "name": "WF-42 scrape_url",
   "nodes": [
-    { "id": "trigger", "name": "WF Input", "type": "n8n-nodes-base.executeWorkflowTrigger", "typeVersion": 1.1, "position": [0, 0],
-      "parameters": { "workflowInputs": { "values": [
-        { "name": "url", "type": "string" }, { "name": "trigger", "type": "string" } ] } } },
-    { "id": "build", "name": "Build urls", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [200, 0],
-      "parameters": { "mode": "runOnceForAllItems", "jsCode": "const j = $input.first().json;\nconst url = String(j.url || '').trim();\nif (!url) return [{ json: { urls: [], trigger: j.trigger || 'agent', error: 'no url provided' } }];\nreturn [{ json: { urls: [{ url, source: 'manual' }], trigger: j.trigger || 'agent' } }];" } },
-    { "id": "run20", "name": "Run WF-20", "type": "n8n-nodes-base.executeWorkflow", "typeVersion": 1.2, "position": [400, 0],
-      "parameters": { "workflowId": { "__rl": true, "value": "NXWu2wqU6ifrFIpd", "mode": "id" },
-        "workflowInputs": { "mappingMode": "defineBelow",
-          "value": { "urls": "={{ $json.urls }}", "trigger": "={{ $json.trigger }}", "scope": "url" },
+    {
+      "id": "trigger",
+      "name": "WF Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "url",
+              "type": "string"
+            },
+            {
+              "name": "trigger",
+              "type": "string"
+            },
+            {
+              "name": "user_message",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "plan",
+      "name": "Plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        200,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Media links (YouTube, podcasts, audio) in WF-20: detection, the transcript\n// markdown that triage reads, the key-points skill, and the Telegram message.\n// Inlined into WF-20 Code nodes; tests/media.test.js covers it.\n//\n// The transcript itself comes from media/server.py (native on Windows):\n// human captions -> auto-captions -> Parakeet speech-to-text.\n\n// Hosts yt-dlp handles that carry talk worth summarising. Direct audio files\n// count too (a podcast episode's enclosure URL).\nconst MEDIA_HOST = /^https?:\\/\\/(?:[a-z0-9-]+\\.)*(?:youtube\\.com|youtu\\.be|vimeo\\.com|soundcloud\\.com|podcasts\\.apple\\.com|twitch\\.tv|ted\\.com\\/talks|rumble\\.com)(?:[\\/?#]|$)/i;\nconst AUDIO_FILE = /\\.(mp3|m4a|aac|wav|ogg|opus|flac|mp4|webm)(\\?|#|$)/i;\n// YouTube pages that are not one video (channels, playlists, search) are not media items\nconst YT_NOT_VIDEO = /youtube\\.com\\/(?:@|c\\/|channel\\/|user\\/|playlist|results|feed)/i;\n\nfunction isMediaUrl(url) {\n  const u = String(url || '').trim();\n  if (!/^https?:\\/\\//i.test(u) || YT_NOT_VIDEO.test(u)) return false;\n  return MEDIA_HOST.test(u) || AUDIO_FILE.test(u.split('?')[0] + (u.includes('?') ? '?' : ''));\n}\n\n// One Telegram message -> every link in it (n >= 1, in order, deduped) plus\n// the trigger words Wasim chose (2026-10-11):\n//   slides | deck | presentation | watch | look  -> also read the screen\n//   transcribe | listen | hear                   -> speech-to-text on the audio\n// Links are cut out before matching: \"watch\" is in every youtube.com/watch URL.\nconst SLIDE_WORDS = /\\b(slides?|decks?|presentations?|watch(ing)?|look(ing)?)\\b/i;\nconst TRANSCRIBE_WORDS = /\\b(transcribe|transcription|listen(ing)?|hear(ing)?)\\b/i;\nfunction parseMediaRequest(text, extraUrl) {\n  const raw = String(text || '');\n  const found = raw.match(/https?:\\/\\/[^\\s<>\"')\\]]+/gi) || [];\n  if (extraUrl && /^https?:\\/\\//i.test(String(extraUrl).trim())) found.push(String(extraUrl).trim());\n  const seen = new Set();\n  const urls = [];\n  for (let u of found) {\n    u = u.replace(/[.,;:!?]+$/, '');\n    if (!seen.has(u)) { seen.add(u); urls.push(u); }\n  }\n  const words = raw.replace(/https?:\\/\\/[^\\s<>\"')\\]]+/gi, ' ');\n  return { urls, slides: SLIDE_WORDS.test(words), transcribe: TRANSCRIBE_WORDS.test(words) };\n}\n\nfunction mmss(seconds) {\n  const s = Math.max(0, Math.floor(Number(seconds) || 0));\n  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;\n  const p = (n) => String(n).padStart(2, '0');\n  return h ? h + ':' + p(m) + ':' + p(sec) : m + ':' + p(sec);\n}\n\n// \"1:02:05\" / \"12:30\" / \"45\" -> seconds, or null\nfunction parseTs(t) {\n  const m = String(t == null ? '' : t).trim().replace(/^\\[|\\]$/g, '').match(/^(?:(\\d+):)?(\\d{1,2}):(\\d{2})$|^(\\d+)$/);\n  if (!m) return null;\n  if (m[4] != null) return Number(m[4]);\n  return Number(m[1] || 0) * 3600 + Number(m[2]) * 60 + Number(m[3]);\n}\n\nconst SOURCE_LABEL = { 'captions-manual': 'creator captions', 'captions-auto': 'YouTube auto-captions', parakeet: 'speech-to-text (Parakeet)' };\n\n// What triage reads: a header the model can cite, then [m:ss] paragraphs.\nfunction mediaMarkdown(t) {\n  const lines = [];\n  lines.push('# ' + (t.title || 'Untitled'));\n  const meta = [t.channel && 'Channel: ' + t.channel, t.duration && 'Length: ' + mmss(t.duration),\n    t.published_at && 'Published: ' + t.published_at, 'Transcript: ' + (SOURCE_LABEL[t.source] || t.source)].filter(Boolean);\n  lines.push(meta.join(' | '));\n  if (t.chapters && t.chapters.length) {\n    lines.push('', '## Chapters');\n    for (const c of t.chapters) lines.push('[' + mmss(c.start) + '] ' + c.title);\n  }\n  if (t.slides && t.slides.length) {\n    lines.push('', '## On screen (slides, charts, code; machine-read from video frames, may contain misreads)');\n    for (const s of t.slides) lines.push('[' + mmss(s.start) + '] ' + s.text);\n  }\n  lines.push('', '## Transcript');\n  for (const p of t.paragraphs || []) lines.push('[' + mmss(p.start) + '] ' + p.text);\n  return lines.join('\\n');\n}\n\n// Merged into the triage call for media documents (same mechanism as query skills).\nconst MEDIA_SKILL_PROMPT =\n  'This CONTENT is a timestamped transcript of a video or podcast. Lines start with [m:ss]. ' +\n  'In addition to the standard fields, return key_points: 6 to 12 of the most important, concrete points ' +\n  '(claims, numbers, names, decisions, how-tos), in the order they are made. For each, t is the [m:ss] timestamp ' +\n  'of the transcript line where it is made, copied exactly from the transcript (never invented), and point is one ' +\n  'self-contained sentence. Prefer specifics over generalities; skip intros, sponsor reads and calls to subscribe. ' +\n  'The On screen section is machine-read from video frames: use it for figures and names shown on slides, but when it ' +\n  'disagrees with what is said in the transcript, trust the transcript.';\nconst MEDIA_SKILL_SCHEMA = {\n  key_points: { type: 'array', items: { type: 'object', additionalProperties: false,\n    properties: { t: { type: 'string' }, point: { type: 'string' } }, required: ['t', 'point'] } }\n};\n\n// Link that opens the video at a moment. YouTube only; other hosts get none.\nfunction timeLink(canonicalUrl, seconds) {\n  const m = String(canonicalUrl || '').match(/youtube\\.com\\/watch\\?v=([A-Za-z0-9_-]{11})/);\n  return m ? 'https://youtu.be/' + m[1] + '?t=' + Math.floor(seconds) : null;\n}\n\n// The 9B gets the facts right but approximates timestamps (measured on the IBM\n// video: 2 of 4 checked points pointed at the wrong moment, one at a time that\n// is not in the transcript). Snap each point to the transcript line that shares\n// the most words with it, preferring lines near the model's guess; keep the\n// model's time when nothing matches well.\nconst STOP = new Set(['the', 'and', 'for', 'that', 'this', 'with', 'are', 'was', 'from', 'they', 'you', 'have', 'has',\n  'its', 'into', 'than', 'then', 'their', 'there', 'which', 'what', 'when', 'will', 'can', 'not', 'but', 'more', 'about', 'each']);\nconst words = (s) => new Set(String(s).toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').split(/\\s+/)\n  .filter((w) => (w.length >= 3 || /\\d/.test(w)) && !STOP.has(w)));\n\nfunction transcriptLines(markdown) {\n  const out = [];\n  const body = String(markdown || '').split('## Transcript')[1] || '';\n  for (const line of body.split('\\n')) {\n    const m = line.match(/^\\[(\\d+(?::\\d{2}){1,2})\\]\\s*(.*)$/);\n    if (m) out.push({ start: parseTs(m[1]), words: words(m[2]) });\n  }\n  return out;\n}\n\nfunction snapKeyPoints(points, markdown) {\n  const lines = transcriptLines(markdown);\n  if (!lines.length || !Array.isArray(points)) return points || [];\n  // Measured on the IBM video's 10 points: the model's own times 4/10 right;\n  // best-overlap snapping 8/10 right + 1 off by one 30s paragraph. (Trusting\n  // the model's time whenever it names a real line scored worse: 1:58 and\n  // 7:49 are real lines that share generic words with the wrong points.)\n  return points.map((p) => {\n    const pw = words(p.point);\n    const guess = parseTs(p.t);\n    let best = null, bestScore = 0;\n    for (const l of lines) {\n      let overlap = 0;\n      for (const w of pw) if (l.words.has(w)) overlap++;\n      const near = guess == null ? 0 : Math.max(0, 1 - Math.abs(l.start - guess) / 120) * 0.5;\n      const score = overlap + near;\n      if (score > bestScore) { bestScore = score; best = l; }\n    }\n    // need real lexical evidence (>= 3 shared words) to override the model\n    if (best && bestScore >= 3) return { t: mmss(best.start), point: p.point };\n    return { t: guess == null ? p.t : mmss(guess), point: p.point };\n  });\n}\n\n// Telegram (HTML parse mode) message for one summarised media item.\nfunction mediaMessage(item) {\n  const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n  const head = '\\u{1F3AC} <b>' + esc(item.title) + '</b>' + (item.score != null ? '  (score ' + item.score + '/10)' : '');\n  const out = [head];\n  if (item.summary) out.push('', esc(item.summary));\n  const pts = Array.isArray(item.key_points) ? item.key_points : [];\n  if (pts.length) {\n    out.push('', '<b>Key points</b>');\n    for (const p of pts) {\n      const sec = parseTs(p.t);\n      const link = sec == null ? null : timeLink(item.canonical_url, sec);\n      const stamp = sec == null ? '' : (link ? '<a href=\"' + link + '\">' + mmss(sec) + '</a> ' : mmss(sec) + ' ');\n      out.push('• ' + stamp + esc(p.point));\n    }\n  }\n  if (item.transcript_source) out.push('', '<i>from ' + esc(SOURCE_LABEL[item.transcript_source] || item.transcript_source) + '</i>');\n  return out.join('\\n').slice(0, 4000);   // Telegram's limit is 4096\n}\n\nconst j = $input.first().json;\nconst req = parseMediaRequest(j.user_message || '', j.url || '');\nreturn [{ json: { trigger: j.trigger || 'agent', user_message: String(j.user_message || j.url || ''), ...req,\n  need_last: req.urls.length === 0 && req.transcribe } }];"
+      }
+    },
+    {
+      "id": "guard",
+      "name": "Guard",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        400,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "with prev as (select value, updated_at from settings where key = 'last_scrape_msg'), up as (insert into settings (key, value, updated_at) values ('last_scrape_msg', $1, now()) on conflict (key) do update set value = excluded.value, updated_at = now()) select coalesce((select value = $1 and updated_at > now() - interval '2 minutes' from prev), false) as dup, (select value from settings where key = 'last_no_captions_url') as last_no_captions",
+        "options": {
+          "queryReplacement": "={{ $json.user_message }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "tzBuhu9KEXlaRRfW",
+          "name": "Postgres account"
+        }
+      },
+      "executeOnce": true,
+      "alwaysOutputData": true
+    },
+    {
+      "id": "split",
+      "name": "Split",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        600,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Media links (YouTube, podcasts, audio) in WF-20: detection, the transcript\n// markdown that triage reads, the key-points skill, and the Telegram message.\n// Inlined into WF-20 Code nodes; tests/media.test.js covers it.\n//\n// The transcript itself comes from media/server.py (native on Windows):\n// human captions -> auto-captions -> Parakeet speech-to-text.\n\n// Hosts yt-dlp handles that carry talk worth summarising. Direct audio files\n// count too (a podcast episode's enclosure URL).\nconst MEDIA_HOST = /^https?:\\/\\/(?:[a-z0-9-]+\\.)*(?:youtube\\.com|youtu\\.be|vimeo\\.com|soundcloud\\.com|podcasts\\.apple\\.com|twitch\\.tv|ted\\.com\\/talks|rumble\\.com)(?:[\\/?#]|$)/i;\nconst AUDIO_FILE = /\\.(mp3|m4a|aac|wav|ogg|opus|flac|mp4|webm)(\\?|#|$)/i;\n// YouTube pages that are not one video (channels, playlists, search) are not media items\nconst YT_NOT_VIDEO = /youtube\\.com\\/(?:@|c\\/|channel\\/|user\\/|playlist|results|feed)/i;\n\nfunction isMediaUrl(url) {\n  const u = String(url || '').trim();\n  if (!/^https?:\\/\\//i.test(u) || YT_NOT_VIDEO.test(u)) return false;\n  return MEDIA_HOST.test(u) || AUDIO_FILE.test(u.split('?')[0] + (u.includes('?') ? '?' : ''));\n}\n\n// One Telegram message -> every link in it (n >= 1, in order, deduped) plus\n// the trigger words Wasim chose (2026-10-11):\n//   slides | deck | presentation | watch | look  -> also read the screen\n//   transcribe | listen | hear                   -> speech-to-text on the audio\n// Links are cut out before matching: \"watch\" is in every youtube.com/watch URL.\nconst SLIDE_WORDS = /\\b(slides?|decks?|presentations?|watch(ing)?|look(ing)?)\\b/i;\nconst TRANSCRIBE_WORDS = /\\b(transcribe|transcription|listen(ing)?|hear(ing)?)\\b/i;\nfunction parseMediaRequest(text, extraUrl) {\n  const raw = String(text || '');\n  const found = raw.match(/https?:\\/\\/[^\\s<>\"')\\]]+/gi) || [];\n  if (extraUrl && /^https?:\\/\\//i.test(String(extraUrl).trim())) found.push(String(extraUrl).trim());\n  const seen = new Set();\n  const urls = [];\n  for (let u of found) {\n    u = u.replace(/[.,;:!?]+$/, '');\n    if (!seen.has(u)) { seen.add(u); urls.push(u); }\n  }\n  const words = raw.replace(/https?:\\/\\/[^\\s<>\"')\\]]+/gi, ' ');\n  return { urls, slides: SLIDE_WORDS.test(words), transcribe: TRANSCRIBE_WORDS.test(words) };\n}\n\nfunction mmss(seconds) {\n  const s = Math.max(0, Math.floor(Number(seconds) || 0));\n  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;\n  const p = (n) => String(n).padStart(2, '0');\n  return h ? h + ':' + p(m) + ':' + p(sec) : m + ':' + p(sec);\n}\n\n// \"1:02:05\" / \"12:30\" / \"45\" -> seconds, or null\nfunction parseTs(t) {\n  const m = String(t == null ? '' : t).trim().replace(/^\\[|\\]$/g, '').match(/^(?:(\\d+):)?(\\d{1,2}):(\\d{2})$|^(\\d+)$/);\n  if (!m) return null;\n  if (m[4] != null) return Number(m[4]);\n  return Number(m[1] || 0) * 3600 + Number(m[2]) * 60 + Number(m[3]);\n}\n\nconst SOURCE_LABEL = { 'captions-manual': 'creator captions', 'captions-auto': 'YouTube auto-captions', parakeet: 'speech-to-text (Parakeet)' };\n\n// What triage reads: a header the model can cite, then [m:ss] paragraphs.\nfunction mediaMarkdown(t) {\n  const lines = [];\n  lines.push('# ' + (t.title || 'Untitled'));\n  const meta = [t.channel && 'Channel: ' + t.channel, t.duration && 'Length: ' + mmss(t.duration),\n    t.published_at && 'Published: ' + t.published_at, 'Transcript: ' + (SOURCE_LABEL[t.source] || t.source)].filter(Boolean);\n  lines.push(meta.join(' | '));\n  if (t.chapters && t.chapters.length) {\n    lines.push('', '## Chapters');\n    for (const c of t.chapters) lines.push('[' + mmss(c.start) + '] ' + c.title);\n  }\n  if (t.slides && t.slides.length) {\n    lines.push('', '## On screen (slides, charts, code; machine-read from video frames, may contain misreads)');\n    for (const s of t.slides) lines.push('[' + mmss(s.start) + '] ' + s.text);\n  }\n  lines.push('', '## Transcript');\n  for (const p of t.paragraphs || []) lines.push('[' + mmss(p.start) + '] ' + p.text);\n  return lines.join('\\n');\n}\n\n// Merged into the triage call for media documents (same mechanism as query skills).\nconst MEDIA_SKILL_PROMPT =\n  'This CONTENT is a timestamped transcript of a video or podcast. Lines start with [m:ss]. ' +\n  'In addition to the standard fields, return key_points: 6 to 12 of the most important, concrete points ' +\n  '(claims, numbers, names, decisions, how-tos), in the order they are made. For each, t is the [m:ss] timestamp ' +\n  'of the transcript line where it is made, copied exactly from the transcript (never invented), and point is one ' +\n  'self-contained sentence. Prefer specifics over generalities; skip intros, sponsor reads and calls to subscribe. ' +\n  'The On screen section is machine-read from video frames: use it for figures and names shown on slides, but when it ' +\n  'disagrees with what is said in the transcript, trust the transcript.';\nconst MEDIA_SKILL_SCHEMA = {\n  key_points: { type: 'array', items: { type: 'object', additionalProperties: false,\n    properties: { t: { type: 'string' }, point: { type: 'string' } }, required: ['t', 'point'] } }\n};\n\n// Link that opens the video at a moment. YouTube only; other hosts get none.\nfunction timeLink(canonicalUrl, seconds) {\n  const m = String(canonicalUrl || '').match(/youtube\\.com\\/watch\\?v=([A-Za-z0-9_-]{11})/);\n  return m ? 'https://youtu.be/' + m[1] + '?t=' + Math.floor(seconds) : null;\n}\n\n// The 9B gets the facts right but approximates timestamps (measured on the IBM\n// video: 2 of 4 checked points pointed at the wrong moment, one at a time that\n// is not in the transcript). Snap each point to the transcript line that shares\n// the most words with it, preferring lines near the model's guess; keep the\n// model's time when nothing matches well.\nconst STOP = new Set(['the', 'and', 'for', 'that', 'this', 'with', 'are', 'was', 'from', 'they', 'you', 'have', 'has',\n  'its', 'into', 'than', 'then', 'their', 'there', 'which', 'what', 'when', 'will', 'can', 'not', 'but', 'more', 'about', 'each']);\nconst words = (s) => new Set(String(s).toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').split(/\\s+/)\n  .filter((w) => (w.length >= 3 || /\\d/.test(w)) && !STOP.has(w)));\n\nfunction transcriptLines(markdown) {\n  const out = [];\n  const body = String(markdown || '').split('## Transcript')[1] || '';\n  for (const line of body.split('\\n')) {\n    const m = line.match(/^\\[(\\d+(?::\\d{2}){1,2})\\]\\s*(.*)$/);\n    if (m) out.push({ start: parseTs(m[1]), words: words(m[2]) });\n  }\n  return out;\n}\n\nfunction snapKeyPoints(points, markdown) {\n  const lines = transcriptLines(markdown);\n  if (!lines.length || !Array.isArray(points)) return points || [];\n  // Measured on the IBM video's 10 points: the model's own times 4/10 right;\n  // best-overlap snapping 8/10 right + 1 off by one 30s paragraph. (Trusting\n  // the model's time whenever it names a real line scored worse: 1:58 and\n  // 7:49 are real lines that share generic words with the wrong points.)\n  return points.map((p) => {\n    const pw = words(p.point);\n    const guess = parseTs(p.t);\n    let best = null, bestScore = 0;\n    for (const l of lines) {\n      let overlap = 0;\n      for (const w of pw) if (l.words.has(w)) overlap++;\n      const near = guess == null ? 0 : Math.max(0, 1 - Math.abs(l.start - guess) / 120) * 0.5;\n      const score = overlap + near;\n      if (score > bestScore) { bestScore = score; best = l; }\n    }\n    // need real lexical evidence (>= 3 shared words) to override the model\n    if (best && bestScore >= 3) return { t: mmss(best.start), point: p.point };\n    return { t: guess == null ? p.t : mmss(guess), point: p.point };\n  });\n}\n\n// Telegram (HTML parse mode) message for one summarised media item.\nfunction mediaMessage(item) {\n  const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n  const head = '\\u{1F3AC} <b>' + esc(item.title) + '</b>' + (item.score != null ? '  (score ' + item.score + '/10)' : '');\n  const out = [head];\n  if (item.summary) out.push('', esc(item.summary));\n  const pts = Array.isArray(item.key_points) ? item.key_points : [];\n  if (pts.length) {\n    out.push('', '<b>Key points</b>');\n    for (const p of pts) {\n      const sec = parseTs(p.t);\n      const link = sec == null ? null : timeLink(item.canonical_url, sec);\n      const stamp = sec == null ? '' : (link ? '<a href=\"' + link + '\">' + mmss(sec) + '</a> ' : mmss(sec) + ' ');\n      out.push('• ' + stamp + esc(p.point));\n    }\n  }\n  if (item.transcript_source) out.push('', '<i>from ' + esc(SOURCE_LABEL[item.transcript_source] || item.transcript_source) + '</i>');\n  return out.join('\\n').slice(0, 4000);   // Telegram's limit is 4096\n}\n\nconst p = $('Plan').first().json;\nconst g = $input.first().json;\nif (g.dup === true || g.dup === 't') return [{ json: { dup: true, media: [], other: [], trigger: p.trigger } }];\nlet urls = p.urls;\nlet transcribe = p.transcribe;\nif (p.need_last) {\n  if (!g.last_no_captions) return [{ json: { media: [], other: [], trigger: p.trigger,\n    note: 'There is no recent video without captions to transcribe. Ask the user to send the link with the word transcribe.' } }];\n  urls = [g.last_no_captions];\n  transcribe = true;\n}\nconst media = urls.filter(isMediaUrl).map((url) => ({ url, slides: p.slides, transcribe }));\nconst other = urls.filter((u) => !isMediaUrl(u)).map((url) => ({ url, source: 'manual' }));\nreturn [{ json: { media, other, trigger: p.trigger } }];"
+      }
+    },
+    {
+      "id": "anymedia",
+      "name": "Any media?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        800,
+        -100
+      ],
+      "parameters": {
+        "options": {},
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.media.length > 0 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "queue",
+      "name": "Queue media",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1000,
+        -200
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "__WF43__",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "items_json": "={{ JSON.stringify($json.media) }}",
+            "trigger": "={{ $json.trigger }}"
+          },
           "matchingColumns": [],
           "schema": [
-            { "id": "urls", "displayName": "urls", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "array" },
-            { "id": "trigger", "displayName": "trigger", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" },
-            { "id": "scope", "displayName": "scope", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" } ] },
-        "options": { "waitForSubWorkflow": true } } }
+            {
+              "id": "items_json",
+              "displayName": "items_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "trigger",
+              "displayName": "trigger",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ]
+        },
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      }
+    },
+    {
+      "id": "anyarticles",
+      "name": "Any articles?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        0
+      ],
+      "parameters": {
+        "options": {},
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $('Split').first().json.other.length > 0 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "run20",
+      "name": "Run WF-20",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1400,
+        -100
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "__WF20__",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "urls": "={{ $('Split').first().json.other }}",
+            "trigger": "={{ $('Split').first().json.trigger }}",
+            "scope": "url"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "urls",
+              "displayName": "urls",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "array"
+            },
+            {
+              "id": "trigger",
+              "displayName": "trigger",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "scope",
+              "displayName": "scope",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ]
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      }
+    },
+    {
+      "id": "ret",
+      "name": "Return",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1600,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const s = $('Split').first().json;\nif (s.dup) return [{ json: { note: 'Already handled for this message. Do not call scrape_url again; reply in one short line.' } }];\nif (s.note) return [{ json: { note: s.note } }];\nlet article = null;\ntry { article = $('Run WF-20').first().json; } catch (e) {}\nconst n = s.media.length;\nconst notes = [];\nif (n) notes.push(n + ' video/audio link' + (n === 1 ? '' : 's') + ' queued. Each summary (or a no-captions / blocked notice) is sent to the user as its own Telegram message, one at a time, about 30 s to 2 min each. Reply in ONE short line, e.g. \"On it — ' + n + ' video' + (n === 1 ? '' : 's') + ' queued, summaries will arrive one by one.\" Do not summarise anything yourself.');\nif (article) notes.push('Article result: ' + JSON.stringify({ status: article.status, items_created: article.items_created, top_title: article.top_title }));\nreturn [{ json: { media_queued: n, articles: s.other.length, note: notes.join(' ') } }];"
+      }
+    }
   ],
   "connections": {
-    "WF Input": { "main": [[{ "node": "Build urls", "type": "main", "index": 0 }]] },
-    "Build urls": { "main": [[{ "node": "Run WF-20", "type": "main", "index": 0 }]] }
+    "WF Input": {
+      "main": [
+        [
+          {
+            "node": "Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plan": {
+      "main": [
+        [
+          {
+            "node": "Guard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guard": {
+      "main": [
+        [
+          {
+            "node": "Split",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split": {
+      "main": [
+        [
+          {
+            "node": "Any media?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any media?": {
+      "main": [
+        [
+          {
+            "node": "Queue media",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Any articles?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Queue media": {
+      "main": [
+        [
+          {
+            "node": "Any articles?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any articles?": {
+      "main": [
+        [
+          {
+            "node": "Run WF-20",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run WF-20": {
+      "main": [
+        [
+          {
+            "node": "Return",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
   },
-  "settings": { "executionOrder": "v1", "errorWorkflow": "PNJMA4NbQGmp1xKv" }
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "PNJMA4NbQGmp1xKv"
+  }
 }
