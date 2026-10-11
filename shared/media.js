@@ -29,8 +29,9 @@ const TRANSCRIBE_WORDS = /\b(transcribe|transcription|listen(ing)?|hear(ing)?)\b
 // after the bot said a video has no captions. The router hands it to WF-42
 // before the model runs — the 9B answered a bare "transcribe" without calling
 // the tool (2026-10-11). Anchored, so a question that merely mentions
-// transcribing stays chat.
-const BARE_MEDIA_REPLY = /^\s*(?:(?:yes|yeah|yep|ok|okay|sure|please|pls|go ahead(?: and)?)[\s,!.]*)*(?:transcribe|transcription|listen|hear)(?:\s+(?:it|this|that|the video|to it|please|pls|now))*[\s.!]*$/i;
+// transcribing stays chat. "transcribe slides" / "slides and transcribe" also
+// reads the screen (WF-42 picks the slide word up from the same message).
+const BARE_MEDIA_REPLY = /^\s*(?:(?:yes|yeah|yep|ok|okay|sure|please|pls|go ahead(?: and)?)[\s,!.]*)*(?:(?:the\s+)?(?:slides?|decks?|presentations?|screen)[\s,]+(?:(?:and|with|\+)\s+)?)?(?:transcribe|transcription|listen|hear)(?:[\s,]+(?:it|this|that|the video|to it|please|pls|now|and|with|\+|(?:the\s+)?(?:slides?|decks?|presentations?|screen)))*[\s.!]*$/i;
 function parseMediaRequest(text, extraUrl) {
   const raw = String(text || '');
   const found = raw.match(/https?:\/\/[^\s<>"')\]]+/gi) || [];

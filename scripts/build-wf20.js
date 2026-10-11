@@ -426,7 +426,7 @@ if (r.scope === 'url' && !(Number(r.items_created) > 0)) {
     '\\nIt usually lifts on its own within hours. Send the link again later.', remember: '' } }];
   const noCap = fails.find((x) => x.reason === 'media_no_captions');
   if (noCap) return [{ json: { text: '\u{1F3AC} <b>' + escT(noCap.media_title || noCap.url) + '</b> has no captions.\\n' +
-    'Reply "transcribe" and I will listen to it (about 1 minute per 20 minutes of video).', remember: noCap.canonical_url } }];
+    'Reply "transcribe" and I will listen to it (about 1 minute per 20 minutes of video), or "transcribe slides" to read the screen too.', remember: noCap.canonical_url } }];
 }
 if (r.media && r.scope === 'url') {
 

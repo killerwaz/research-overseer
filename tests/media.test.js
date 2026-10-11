@@ -90,9 +90,9 @@ test('parseMediaRequest: the tool url is merged in, text without links is fine',
 
 test('BARE_MEDIA_REPLY: a short "transcribe" reply yes; questions and chat no', () => {
   for (const t of ['transcribe', 'Transcribe', ' transcribe. ', 'yes transcribe', 'Yes, transcribe it', 'ok transcribe it please',
-    'please transcribe', 'listen', 'listen to it', 'hear it', 'go ahead and transcribe', 'transcription'])
+    'please transcribe', 'listen', 'listen to it', 'hear it', 'go ahead and transcribe', 'transcription', 'transcribe slides', 'slides and transcribe', 'yes transcribe the slides', 'transcribe it with slides', 'Transcribe + deck'])
     assert.strictEqual(BARE_MEDIA_REPLY.test(t), true, t);
   for (const t of ['do you transcribe podcasts?', 'can you transcribe what the CEO said?', 'I listen to podcasts', 'listen, what is new in fintech',
-    'transcribe https://youtu.be/x', 'what did you hear about Bkash', 'hearing aids startups', ''])
+    'transcribe https://youtu.be/x', 'what did you hear about Bkash', 'hearing aids startups', 'slides', 'transcribe slides https://youtu.be/x', 'transcribe the slides from the fintech deck', ''])
     assert.strictEqual(BARE_MEDIA_REPLY.test(t), false, t);
 });
