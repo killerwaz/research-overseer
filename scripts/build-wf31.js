@@ -63,7 +63,9 @@ const kw = (k) => `(exists (select 1 from unnest(c.tags) tg where tg like '%' ||
      >= greatest(1, ceil(coalesce(array_length(array_remove(tsvector_to_array(to_tsvector('english', ${k})), 'ai'), 1), 0) * 0.6)))`;
 
 // $1 since  $2 min_relevance  $3 topics ('|')  $4 limit  $5 min_score
-// $6 max_age_days  $7 group_stories  $8 vectors ('|', space-separated)
+// $6 max_age_days  $7 group_stories ('false' = every article; anything else
+//    = one row per story, the default since sql/012 dedupes by meaning)
+// $8 vectors ('|', space-separated)
 // $9 item n  $10 chat_id
 const COLS = 'id, canonical_url, title, summary, angle, relevance, specificity, angle_strength, score, tags, created_at, published_at, structured, articles';
 const SQL = `
@@ -80,13 +82,13 @@ lim as (select coalesce(nullif($4, '')::int, 20) as n),
 c0 as (
   select f.id, f.canonical_url, f.title, f.summary, f.angle, f.relevance, f.specificity, f.angle_strength, f.score,
          f.tags, f.created_at, f.published_at, f.structured, 1 as articles, f.embedding
-  from feed_items f where nullif($7, '') is null
+  from feed_items f where $7 = 'false'
   union all
   select r.id, s.canonical_url, s.title, s.summary, s.angle, null::int, s.specificity, s.angle_strength, s.score,
          s.tags, s.created_at, s.last_published, s.structured, s.articles, r.embedding
   from feed_stories s
   left join lateral (select id, embedding from feed_items fi where fi.canonical_url = s.canonical_url order by fi.id desc limit 1) r on true
-  where nullif($7, '') is not null
+  where coalesce($7, '') <> 'false'
 ),
 /* in_filter = passes the time/quality filters. Topic matching runs over ALL
    items so the matches the filters excluded can be reported separately
@@ -187,7 +189,7 @@ if (outsideRows.length) {
 const outsideNote = outsideRows.length ? ' ' + outsideTotal + ' more items match the topic but are outside your time/score filters (outside_filters) — mention them as older or lower-scored, never as matching the filter.' : '';
 if (!items.length) out.note = (p.topics.length ? 'nothing in the feed matches ' + p.topics.join(' / ') + ' within these filters.' : 'no feed items matched the filters.') + outsideNote;
 else out.note = 'Each item has n. Show n with each item you list; the user can say "#3" or "the first one" and get_item will fetch it.' +
-  (items.some((i) => i.articles) ? ' articles > 1 means several outlets covered the same story.' : '') + outsideNote;
+  (items.some((i) => i.articles) ? ' articles > 1 means several outlets covered the same story: write "(N sources)" after that title.' : '') + outsideNote;
 return [{ json: { remember, out } }];
 `.trim();
 
