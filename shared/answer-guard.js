@@ -28,6 +28,18 @@ function needsFreshLookup({ question, reply, toolsUsed }) {
   const feedQuestion = /\b(anything (on|about|new|good|from)|what about|what('s| is) (new|happening)|tell me (more|about)|more (on|about)|show me|catch me up|what did (you|we) (find|get)|any (news|updates?|items?)|(first|second|third|fourth|fifth|last) one)\b|#\s?\d+\b|\b(number|item|no\.?)\s?\d+\b|^\s*\d+[.)]\s/i.test(q);
   if (feedQuestion && !aboutSourcesQ) return { retry: true, reason: 'feed question answered without a lookup' };
 
+  // Any factual question answered without a tool (added 2026-10-12, end-to-end
+  // test of passage search): mid-chat the 9B answered "how long is the context
+  // Anthropic adds to each chunk?" with an invented "512 tokens" and no lookup;
+  // the reply never mentioned the feed, so the reply check below let it pass.
+  // Facts come from the feed (rule 0) until a general-knowledge fallback is
+  // designed. Small talk, and questions about sources/runs (answered from the
+  // per-message context), are exempt.
+  const smallTalk = /\b(how are you|thanks?|thank you|hello|good (morning|night|evening)|who are you|what can you do|what do you do|help me use|how do (i|you) use)\b|^\s*(hi|hey|ok(ay)?|cool|nice|great)\b/i.test(q);
+  const aboutRunsQ = /\b(runs?|status|break|broke|broken|fail(ed|ing)?|working|stuck|queue)\b/i.test(q);
+  const factQuestion = /\?\s*$|^\s*(who|what|which|when|where|why|how|is|are|was|were|does|do|did|can|could|has|have|should|tell me)\b/i.test(q);
+  if (factQuestion && !smallTalk && !aboutSourcesQ && !aboutRunsQ) return { retry: true, reason: 'question answered without a lookup' };
+
   const claimsFindings = /\b(found|items?|articles?|stor(y|ies)|findings?|coverage|headlines?|i checked|in the feed|the feed (has|shows)|nothing (on|about|new)|no (recent |new |fresh )?(items|news|coverage|results|stories))\b/i.test(r);
   if (!claimsFindings) return { retry: false, reason: 'no feed claims' };
 
@@ -58,7 +70,10 @@ function prefetchFor(question) {
     .replace(/[?!.]+\s*$/, '')
     .replace(/^the\s+/i, '')
     .trim();
-  return { item: '', tag: tag.split(/\s+/).length <= 12 ? tag : '' };
+  // 20 words, not 12: whole questions are fine now that WF-31 searches
+  // passages by meaning ("how long is the context Anthropic adds to each chunk
+  // in contextual retrieval" is 13 words and came back with no prefetch).
+  return { item: '', tag: tag.split(/\s+/).length <= 20 ? tag : '' };
 }
 
 module.exports = { needsFreshLookup, prefetchFor };

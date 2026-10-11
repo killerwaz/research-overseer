@@ -401,7 +401,8 @@ return [{ json: { output: a.output || '', retry: String(g.retry), guard_reason: 
     "Items are scored on two axes: specificity (1-5, how concrete and verifiable the claims are — vendor SEO content scores low) and angle_strength (1-5, how non-obvious the publishable hook is). score = the two added, 2-10. Use min_score 7+ for 'the good stuff', 8+ for 'only the best'. " +
     "Quality and recency are separate knobs and combine freely: min_score filters how good, max_age_days filters how fresh. 'anything good this week' = min_score 7 + max_age_days 7. Results always come back best-first. " +
     "Results are one row per story by default: several outlets covering the same event come back as one row with an articles count. Set group_stories to 'false' only when the user explicitly asks for every article or every source. " +
-    "Put the question's topic in tag ('nvidia export control'). It matches by keyword AND by meaning, so plain wording works ('AI that can buy things' finds agent-payment items). For several topics at once — comparisons, 'X and Y' — separate them with | ('nigeria ai | bangladesh bank'), up to 3; each topic gets its own share of the results and every item says which topic it matched. With a topic, results come back most-relevant-first. If a topic search comes back empty, the feed really has nothing on it: say so and offer a search. Time words and quality belong in max_age_days and min_score, never in tag. " +
+    "Put the question's topic in tag ('nvidia export control'). It searches titles, summaries AND the full text of every saved article and video transcript, by keyword AND by meaning, so plain wording works ('AI that can buy things' finds agent-payment items). " +
+    "SPECIFIC QUESTIONS — who, how much, when, which, what did X say ('who bought Langfuse?', 'how much has Harvey raised?', 'what does the video say about shapes?') — are query_feed too: put the names and key nouns in tag ('Langfuse acquisition', 'Harvey funding') and answer from the items' evidence field, which is the matching passage of the article itself. Quote its figures and names, say which item number it came from, and give evidence.link when there is one (a video at that moment). If no evidence answers the question, say the feed does not say — never fill the gap from memory. For several topics at once — comparisons, 'X and Y' — separate them with | ('nigeria ai | bangladesh bank'), up to 3; each topic gets its own share of the results and every item says which topic it matched. With a topic, results come back most-relevant-first. If a topic search comes back empty, the feed really has nothing on it: say so and offer a search. Time words and quality belong in max_age_days and min_score, never in tag. " +
     "Every item has a number n. Show it when you list items; follow-ups like 'the first one' go to get_item, not here. " +
     "Params: max_age_days (days since publication), min_score (2-10), since (ISO timestamp, for an exact cutoff), tag, limit (default 20), group_stories, min_relevance (legacy, leave empty).",
     WF.query_feed,
@@ -413,19 +414,21 @@ return [{ json: { output: a.output || '', retry: String(g.retry), guard_reason: 
       limit: { desc: 'max items to return, empty for default 20' },
       min_relevance: { desc: 'legacy 1-5 filter, leave empty' },
       item: { fixed: '' },
-      chat_id: { fixed: "={{ $('Agent input').first().json.chat_id }}" } }, [1720, 320]),
+      chat_id: { fixed: "={{ $('Agent input').first().json.chat_id }}" },
+      // WF-31 drops min_score / time filters this message never asked for (shared/feed-search.js userFilters).
+      user_text: { fixed: "={{ $('Agent input').first().json.text }}" } }, [1720, 320]),
 
   // Same workflow as query_feed, ITEM mode: resolves n against chat_results, the
   // list WF-31 stored for this chat. Its own tool because the router follows
   // tool descriptions far more than the system prompt (CLAUDE.md, Models).
   tool('get_item',
-    "Fetch ONE item from the list you last showed in this chat, by its number n, with an excerpt of the saved article. Use for every follow-up about a listed item: 'the first one', '#3', 'tell me more about number 2', 'what does 4 say', '1. especially the global south part'. " +
+    "Fetch ONE item from the list you last showed in this chat, by its number n, with the cleaned text of the saved article (page_excerpt). Use for every follow-up about a listed item: 'the first one', '#3', 'tell me more about number 2', 'what does 4 say', '1. especially the global south part'. " +
     "Never re-run query_feed for these — a new query returns a different list. Answer from the summary and page_excerpt it returns. If it says the item is not found, ask which item they mean.",
     WF.query_feed,
     { item: { desc: 'the number n of the item in your last list, e.g. 3' },
       chat_id: { fixed: "={{ $('Agent input').first().json.chat_id }}" },
       since: { fixed: '' }, min_relevance: { fixed: '' }, tag: { fixed: '' }, limit: { fixed: '' },
-      min_score: { fixed: '' }, max_age_days: { fixed: '' }, group_stories: { fixed: '' } }, [1790, 440]),
+      min_score: { fixed: '' }, max_age_days: { fixed: '' }, group_stories: { fixed: '' }, user_text: { fixed: '' } }, [1790, 440]),
 
   tool('run_status',
     "Report recent runs: when, scope, counts, ok/partial/failed. Use for 'did last night's run work', 'when did you last run', 'did anything break'.",
