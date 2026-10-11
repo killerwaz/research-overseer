@@ -298,7 +298,7 @@
           "conditions": [
             {
               "id": "c1",
-              "leftValue": "={{ /https?:\\/\\//i.test($json.text || '') }}",
+              "leftValue": "={{ /https?:\\/\\//i.test($json.text || '') || new RegExp(\"^\\\\s*(?:(?:yes|yeah|yep|ok|okay|sure|please|pls|go ahead(?: and)?)[\\\\s,!.]*)*(?:transcribe|transcription|listen|hear)(?:\\\\s+(?:it|this|that|the video|to it|please|pls|now))*[\\\\s.!]*$\", 'i').test($json.text || '') }}",
               "rightValue": true,
               "operator": {
                 "type": "boolean",
