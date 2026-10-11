@@ -16,3 +16,5 @@ eval/
 # media service cache and venv
 media/cache/
 media/.venv/
+media/cookies.txt
+*cookies*.txt

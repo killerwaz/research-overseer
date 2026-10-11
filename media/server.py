@@ -62,6 +62,11 @@ LM_KEY = ENV.get("LMSTUDIO_API_KEY", "")
 LM_BASE = ENV.get("LMSTUDIO_BASE", "http://localhost:1234")
 CACHE = pathlib.Path(ENV.get("MEDIA_CACHE", str(ROOT / "cache")))
 CACHE.mkdir(parents=True, exist_ok=True)
+# Optional sign-in: a cookies.txt exported from a THROWAWAY Google account
+# (never the main one — YouTube can ban the account it sees). Signed-in
+# requests get far more headroom before a bot check. In the container it lives
+# at /data/cookies.txt on the media_data volume; yt-dlp keeps it refreshed.
+COOKIES = pathlib.Path(ENV.get("MEDIA_COOKIES", str(CACHE.parent / "cookies.txt")))
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36"
 BOT_CHECK = re.compile(r"confirm you.?re not a bot|sign in to confirm", re.I)
 YT_ID = re.compile(r"(?:youtube\.com/(?:watch\?(?:[^#]*&)?v=|shorts/|embed/|live/)|youtu\.be/)([A-Za-z0-9_-]{11})")
@@ -100,7 +105,8 @@ def paced(fn):
 
 def ytdlp(args, timeout):
     def run():
-        return subprocess.run([YTDLP, "--no-warnings", "--no-playlist", *args], capture_output=True, text=True,
+        auth = ["--cookies", str(COOKIES)] if COOKIES.exists() else []
+        return subprocess.run([YTDLP, "--no-warnings", "--no-playlist", *auth, *args], capture_output=True, text=True,
                               encoding="utf-8", errors="replace", timeout=timeout)
     r = paced(run)
     if r.returncode != 0:
@@ -238,7 +244,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
             return self._send(200, {"ok": True, "ytdlp": bool(shutil.which("yt-dlp") or pathlib.Path(YTDLP).exists()),
-                                    "deno": bool(shutil.which("deno")), "asr_loaded": _asr is not None, "pace_s": PACE})
+                                    "deno": bool(shutil.which("deno")), "asr_loaded": _asr is not None, "pace_s": PACE,
+                                    "signed_in": COOKIES.exists()})
         self._send(404, {"error": "not found"})
 
     def do_POST(self):
