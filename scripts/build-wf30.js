@@ -17,6 +17,7 @@ const WF21_ID = I.workflows['wf21-triage-one'];
 const CHAT_ID = '__TG_CHAT__';
 
 const { TRIAGE_SYSTEM, TRIAGE_SCHEMA, TRIAGE_MODEL } = require('../shared/triage-config.js');
+const { TASTE_SQL } = require('../shared/feedback.js');
 
 // Backlog = any scraped doc that does not have exactly one feed_item: either it
 // was never triaged, or it carries stale rows from the mode:'once' fan-out bug.
@@ -39,7 +40,9 @@ select rd.id as raw_doc_id,
        coalesce(rd.scraper, '') as scraper,
        -- a media transcript is read at the media profile's 60k, not cut to 8k
        case when rd.scraper like 'media:%' then rd.markdown else left(rd.markdown, 8000) end as markdown,
-       (select count(*) from backlog) as backlog_total
+       (select count(*) from backlog) as backlog_total,
+       -- the same 👍/👎 examples live triage gets (shared/feedback.js)
+       ${TASTE_SQL} as taste
 from raw_docs rd
 where rd.id in (select id from backlog)
   -- opt-in: does nothing at all unless the user switched it on ("fix feed")
@@ -77,12 +80,14 @@ const inlineShared = (f) => fs.readFileSync(path.join(__dirname, '..', 'shared',
 // different settings than a normal run would have.
 // A media doc (scraper 'media:...') gets the media profile and the media skill,
 // exactly as WF-20's Prep media builds it, so a re-triage keeps its key points.
-const BUILD_BODY = inlineShared('triage-config.js') + inlineShared('triage-validate.js') + inlineShared('media.js') + `
+const BUILD_BODY = inlineShared('triage-config.js') + inlineShared('triage-validate.js') + inlineShared('media.js') + inlineShared('feedback.js') + `
 return $input.all().map(i => {
   const d = i.json;
   const isMedia = String(d.scraper || '').startsWith('media:');
   const prof = isMedia ? TRIAGE_PROFILES.media : profileFor(d.source);
-  const sys = isMedia ? TRIAGE_SYSTEM + '\\n\\nADDITIONAL EXTRACTION\\n' + MEDIA_SKILL_PROMPT : TRIAGE_SYSTEM;
+  let taste = [];
+  try { taste = JSON.parse(d.taste || '[]'); } catch (e) {}
+  const sys = (isMedia ? TRIAGE_SYSTEM + '\\n\\nADDITIONAL EXTRACTION\\n' + MEDIA_SKILL_PROMPT : TRIAGE_SYSTEM) + tasteBlock(taste);
   const schema = isMedia ? withSkill(TRIAGE_SCHEMA, MEDIA_SKILL_SCHEMA) : TRIAGE_SCHEMA;
   const dhaka = new Date(Date.now() + 6 * 3600 * 1000).toISOString().slice(0, 10);
   const pub = d.published_at ? String(d.published_at).slice(0, 10) : 'unknown';

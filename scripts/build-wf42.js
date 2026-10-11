@@ -18,7 +18,6 @@ const path = require('path');
 
 const I = require('./instance.json');
 const CRED_PG = I.credentials.postgres;
-const CRED_TG = I.credentials.telegram;
 const inline = (f) => fs.readFileSync(path.join(__dirname, '..', 'shared', f), 'utf8')
   .replace(/module\.exports[\s\S]*$/, '');
 
@@ -129,7 +128,7 @@ try { items = JSON.parse(j.items_json || '[]'); } catch (e) {}
 const out = items.map((m) => ({ url: m.url, canonical_url: canon(m.url) || m.url, slides: Boolean(m.slides), transcribe: Boolean(m.transcribe) }));
 if (!out.length) return [];
 const esc = (u) => String(u).replace(/'/g, "''");
-const query = "select coalesce(json_object_agg(f.canonical_url, json_build_object('title', f.title, 'summary', f.summary, 'score', f.score, " +
+const query = "select coalesce(json_object_agg(f.canonical_url, json_build_object('id', f.id, 'title', f.title, 'summary', f.summary, 'score', f.score, " +
   "'canonical_url', f.canonical_url, 'key_points', f.structured->'key_points', 'transcript_source', substr(d.scraper, 7))), '{}')::text as stored " +
   "from feed_items f join raw_docs d on d.id = f.raw_doc_id where d.scraper like 'media:%' and f.canonical_url in (" +
   out.map((o) => "'" + esc(o.canonical_url) + "'").join(',') + ")";
@@ -147,8 +146,8 @@ return s.items.map((it) => {
 });
 `.trim();
 
-const REUSE_MSG = inline('media.js') + `
-return { json: { text: '\\u{1F4DA} Already in your feed:\\n\\n' + mediaMessage($json.stored) } };
+const REUSE_MSG = inline('media.js') + inline('feedback.js') + `
+return { json: { text: '\\u{1F4DA} Already in your feed:\\n\\n' + mediaMessage($json.stored), reply_markup: itemKeyboard($json.stored.id) } };
 `.trim();
 
 const wf43 = {
@@ -161,9 +160,13 @@ const wf43 = {
     code('Decide', 'decide', [600, 0], DECIDE),
     ifNode('Already summarised?', 'reuse', [800, 0], '={{ $json.reuse }}'),
     code('Stored message', 'reusemsg', [1000, -150], REUSE_MSG, 'runOnceForEachItem'),
-    { id: 'tg', name: 'Send stored', type: 'n8n-nodes-base.telegram', typeVersion: 1.2, position: [1200, -150],
-      parameters: { chatId: '__TG_CHAT__', text: '={{ $json.text }}', additionalFields: { appendAttribution: false, parse_mode: 'HTML' } },
-      credentials: { telegramApi: CRED_TG }, onError: 'continueRegularOutput' },
+    // HTTP so the summary can carry its item's 👍/👎 buttons (shared/feedback.js)
+    { id: 'tg', name: 'Send stored', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [1200, -150],
+      parameters: { method: 'POST', url: 'https://api.telegram.org/bot__TG_TOKEN__/sendMessage',
+        sendBody: true, specifyBody: 'json',
+        jsonBody: "={{ JSON.stringify(Object.assign({ chat_id: '__TG_CHAT__', text: $json.text, parse_mode: 'HTML' }, $json.reply_markup ? { reply_markup: $json.reply_markup } : {})) }}",
+        options: { timeout: 15000 } },
+      retryOnFail: false, onError: 'continueRegularOutput' },
     // one WF-20 run per video, waited on in turn: summaries arrive one by one,
     // and the media service's own pacing spaces the YouTube requests
     Object.assign(execWf('Process video', 'process', [1000, 150], '__WF20__',

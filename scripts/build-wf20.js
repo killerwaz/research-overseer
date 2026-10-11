@@ -6,6 +6,7 @@ const path = require('path');
 // Instance-local ids live in instance.json; the chat id is substituted at
 // deploy time by scripts/deploy.js so it never lands in committed JSON.
 const I = require('./instance.json');
+const { TASTE_SQL } = require('../shared/feedback.js');
 const CRED_PG = I.credentials.postgres;
 const CRED_CRAWL = I.credentials.crawl4ai;
 const CRED_LM = I.credentials.lmstudio;
@@ -102,7 +103,10 @@ if ($json.results) {
 // A skill (resolved from the run's query) appends to the prompt and widens the
 // schema — one model call still, standard fields unchanged.
 const run = $('Create run').first().json;
-const sys = TRIAGE_SYSTEM + (run.skill_prompt ? '\\n\\nADDITIONAL EXTRACTION\\n' + run.skill_prompt : '');
+// Wasim's latest 👍/👎 as calibration examples (empty until the first tap).
+let taste = [];
+try { taste = JSON.parse(run.taste || '[]'); } catch (e) {}
+const sys = TRIAGE_SYSTEM + (run.skill_prompt ? '\\n\\nADDITIONAL EXTRACTION\\n' + run.skill_prompt : '') + tasteBlock(taste);
 let schema = TRIAGE_SCHEMA;
 if (run.skill_schema) {
   try { schema = withSkill(TRIAGE_SCHEMA, JSON.parse(run.skill_schema)); } catch (e) {}
@@ -138,14 +142,14 @@ const { TRIAGE_SYSTEM, TRIAGE_SCHEMA } = require('../shared/triage-config.js');
 
 // Triage request bodies are prebuilt in Code nodes (Prep doc / Build retry) because
 // n8n expressions reject multi-statement code. Substitute the constants into PREP_DOC.
-const PREP_DOC_FINAL = inline('triage-config.js') + '\n' + inline('triage-validate.js') + '\n' + PREP_DOC;
+const PREP_DOC_FINAL = inline('triage-config.js') + '\n' + inline('triage-validate.js') + '\n' + inline('feedback.js') + '\n' + PREP_DOC;
 
 // ---- media links (YouTube, podcasts, audio) ----
 // Transcript from media/server.py on the Windows host (captions -> Parakeet),
 // then the normal insert -> triage -> embed path, with the media skill merged
 // in so the same triage call also returns timestamped key points.
 const FILTER_NEW = inline('media.js') + '\n' + FILTER_NEW_BODY;
-const PREP_MEDIA = inline('triage-config.js') + '\n' + inline('triage-validate.js') + '\n' + inline('media.js') + `
+const PREP_MEDIA = inline('triage-config.js') + '\n' + inline('triage-validate.js') + '\n' + inline('media.js') + '\n' + inline('feedback.js') + `
 const orig = $('Filter new').item.json;
 const t = $json;
 const markdown = mediaMarkdown(t);
@@ -155,6 +159,7 @@ let sys = TRIAGE_SYSTEM + '\\n\\nADDITIONAL EXTRACTION\\n' + MEDIA_SKILL_PROMPT;
 let schema = withSkill(TRIAGE_SCHEMA, MEDIA_SKILL_SCHEMA);
 if (run.skill_prompt) sys += '\\n' + run.skill_prompt;
 if (run.skill_schema) { try { schema = withSkill(schema, JSON.parse(run.skill_schema)); } catch (e) {} }
+try { sys += tasteBlock(JSON.parse(run.taste || '[]')); } catch (e) {}
 const prof = TRIAGE_PROFILES.media;
 const dhaka = new Date(Date.now() + 6 * 3600 * 1000).toISOString().slice(0, 10);
 const published = orig.published_at || t.published_at || '';
@@ -303,7 +308,7 @@ const nodes = [
   // Resolves the skill in the same statement that opens the run, so Prep doc
   // needs no database access of its own.
   pgNode('Create run', 'createrun', [200, 0],
-    "insert into runs (trigger, scope, urls_found, query) values ($1, $2, $3::int, nullif($4,'')) returning id as run_id, (select s.extra_prompt from queries q join skills s on s.name = q.skill where lower(q.text) = lower(nullif($4,''))) as skill_prompt, (select s.extra_schema::text from queries q join skills s on s.name = q.skill where lower(q.text) = lower(nullif($4,''))) as skill_schema, (select q.skill from queries q where lower(q.text) = lower(nullif($4,''))) as skill_name",
+    "insert into runs (trigger, scope, urls_found, query) values ($1, $2, $3::int, nullif($4,'')) returning id as run_id, (select s.extra_prompt from queries q join skills s on s.name = q.skill where lower(q.text) = lower(nullif($4,''))) as skill_prompt, (select s.extra_schema::text from queries q join skills s on s.name = q.skill where lower(q.text) = lower(nullif($4,''))) as skill_schema, (select q.skill from queries q where lower(q.text) = lower(nullif($4,''))) as skill_name, " + TASTE_SQL + " as taste",
     "={{ $json.trigger }},{{ $json.scope }},{{ ($json.urls || []).length }},{{ $json.query || '' }}",
     { executeOnce: true }),
 
@@ -433,13 +438,13 @@ const nodes = [
   codeNode('Collect stats', 'stats', [3800, 0], 'runOnceForAllItems', COLLECT_STATS),
 
   pgNode('Finalize run', 'finalize', [4000, 0],
-    "update runs set finished_at = now(), urls_new = $2::int, urls_scraped = (select count(*) from raw_docs where run_id = $1::bigint), items_created = (select count(*) from feed_items where run_id = $1::bigint), error = nullif($3,''), status = case when $2::int = 0 and $3 = '' then 'ok' when (select count(*) from raw_docs where run_id = $1::bigint) = 0 and $2::int > 0 then 'failed' when (select count(*) from raw_docs where run_id = $1::bigint) < $2::int then 'partial' when (select count(*) from feed_items where run_id = $1::bigint) < (select count(*) from raw_docs where run_id = $1::bigint) then 'partial' else 'ok' end where id = $1::bigint returning id as run_id, status, scope, urls_found, urls_new, urls_scraped, items_created, error, (select title from feed_items where run_id = $1::bigint order by score desc, relevance desc nulls last, id desc limit 1) as top_title, (select json_build_object('title', f.title, 'summary', f.summary, 'score', f.score, 'canonical_url', f.canonical_url, 'key_points', f.structured->'key_points', 'transcript_source', substr(d.scraper, 7), 'screen', split_part(substring(d.markdown from 'Screen: (.*)'), chr(10), 1))::text from feed_items f join raw_docs d on d.id = f.raw_doc_id where f.run_id = $1::bigint and d.scraper like 'media:%' order by f.id desc limit 1) as media",
+    "update runs set finished_at = now(), urls_new = $2::int, urls_scraped = (select count(*) from raw_docs where run_id = $1::bigint), items_created = (select count(*) from feed_items where run_id = $1::bigint), error = nullif($3,''), status = case when $2::int = 0 and $3 = '' then 'ok' when (select count(*) from raw_docs where run_id = $1::bigint) = 0 and $2::int > 0 then 'failed' when (select count(*) from raw_docs where run_id = $1::bigint) < $2::int then 'partial' when (select count(*) from feed_items where run_id = $1::bigint) < (select count(*) from raw_docs where run_id = $1::bigint) then 'partial' else 'ok' end where id = $1::bigint returning id as run_id, status, scope, urls_found, urls_new, urls_scraped, items_created, error, (select title from feed_items where run_id = $1::bigint order by score desc, relevance desc nulls last, id desc limit 1) as top_title, (select json_build_object('id', f.id, 'title', f.title, 'summary', f.summary, 'score', f.score, 'canonical_url', f.canonical_url, 'key_points', f.structured->'key_points', 'transcript_source', substr(d.scraper, 7), 'screen', split_part(substring(d.markdown from 'Screen: (.*)'), chr(10), 1))::text from feed_items f join raw_docs d on d.id = f.raw_doc_id where f.run_id = $1::bigint and d.scraper like 'media:%' order by f.id desc limit 1) as media",
     "={{ $json.run_id }},{{ $json.urls_new }},{{ $json.error }}",
     { executeOnce: true }),
 
   // Plain-language summary. No run numbers, no "items", no scope codes — those
   // are for run_status when something actually needs looking at.
-  codeNode('Compose summary', 'compose', [4180, 0], 'runOnceForAllItems', inline('media.js') + `
+  codeNode('Compose summary', 'compose', [4180, 0], 'runOnceForAllItems', inline('media.js') + inline('feedback.js') + `
 const r = $('Finalize run').first().json;
 // Media outcomes the bot must explain (pasted links only).
 let fails = [];
@@ -456,7 +461,7 @@ if (r.scope === 'url' && !(Number(r.items_created) > 0)) {
 if (r.media && r.scope === 'url') {
 
   let m = null; try { m = JSON.parse(r.media); } catch (e) {}
-  if (m) return [{ json: { text: mediaMessage(m) } }];
+  if (m) return [{ json: { text: mediaMessage(m), reply_markup: itemKeyboard(m.id) } }];
 }
 let brief = '';
 try { brief = $('Collect stats').first().json.error_brief || ''; } catch (e) {}
@@ -488,13 +493,14 @@ return [{ json: { text } }];
     "insert into settings (key, value, updated_at) select 'last_no_captions_url', $1, now() where $1 <> '' on conflict (key) do update set value = excluded.value, updated_at = now()",
     "={{ $json.remember || '' }}", { executeOnce: true, alwaysOutputData: true, onError: 'continueRegularOutput' }),
 
-  { id: 'tgsummary', name: 'Telegram summary', type: 'n8n-nodes-base.telegram', typeVersion: 1.2, position: [4380, 0],
-    parameters: {
-      chatId: '__TG_CHAT__',
-      text: "={{ $('Compose summary').first().json.text }}",
-      additionalFields: { appendAttribution: false, parse_mode: 'HTML' } },
-    credentials: { telegramApi: I.credentials.telegram },
-    onError: 'continueRegularOutput' },
+  // HTTP rather than the Telegram node: a media summary carries 👍/👎 buttons
+  // for its own feed item, which the node's fixed keyboard cannot express.
+  { id: 'tgsummary', name: 'Telegram summary', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [4380, 0],
+    parameters: { method: 'POST', url: 'https://api.telegram.org/bot__TG_TOKEN__/sendMessage',
+      sendBody: true, specifyBody: 'json',
+      jsonBody: "={{ JSON.stringify(Object.assign({ chat_id: '__TG_CHAT__', text: $('Compose summary').first().json.text, parse_mode: 'HTML' }, $('Compose summary').first().json.reply_markup ? { reply_markup: $('Compose summary').first().json.reply_markup } : {})) }}",
+      options: { timeout: 15000 } },
+    executeOnce: true, retryOnFail: false, onError: 'continueRegularOutput' },
 
   codeNode('Return summary', 'retsummary', [4400, 0], 'runOnceForAllItems',
     "return $('Finalize run').all();")

@@ -16,7 +16,6 @@ const inline = (f) => fs.readFileSync(path.join(__dirname, '..', 'shared', f), '
 const I = require('./instance.json');
 const CRED_PG = I.credentials.postgres;
 const CRED_OR = I.credentials.openrouter;
-const CRED_TG = I.credentials.telegram;
 const CHAT_ID = '__TG_CHAT__';
 
 // Router model. Default is local Qwen in LM Studio (free); ROUTER_MODEL=haiku
@@ -113,6 +112,16 @@ const j = $input.first().json;
 if (!j.ok || !Array.isArray(j.result)) return [];
 const out = [];
 for (const u of j.result) {
+  // A 👍/👎 tap (shared/feedback.js) arrives as a callback_query; it becomes
+  // text "cb:<data>" so the dedupe table and allowlist treat it like a message.
+  const cq = u.callback_query;
+  if (cq) {
+    const cm = cq.message || {};
+    out.push({ json: { update_id: u.update_id, chat_id: (cm.chat && cm.chat.id) || 0,
+      text: ('cb:' + (cq.data || '')).slice(0, 200), callback_id: cq.id || '', message_id: cm.message_id || 0,
+      reply_markup: cm.reply_markup || null } });
+    continue;
+  }
   const m = u.message || u.edited_message || {};
   out.push({ json: {
     update_id: u.update_id,
@@ -146,6 +155,51 @@ return out;`.trim() } },
     parameters: { mode: 'runOnceForAllItems', jsCode: `
 const b = $input.first().json.body || {};
 return [{ json: { chat_id: Number(b.chat_id) || ${CHAT_ID}, text: String(b.text || ''), test: true } }];`.trim() } },
+
+  // ---- 👍/👎 taps (sql/013, shared/feedback.js) — no model involved ----
+  { id: 'istap', name: 'Feedback tap?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1000, 300],
+    parameters: { options: {}, conditions: {
+      options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, combinator: 'and',
+      conditions: [ { id: 't1', leftValue: "={{ String($json.text || '').startsWith('cb:fb:') }}", rightValue: true,
+        operator: { type: 'boolean', operation: 'equals' } } ] } } },
+
+  { id: 'prepfb', name: 'Prep feedback', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1180, 420],
+    parameters: { mode: 'runOnceForEachItem', jsCode: inline('feedback.js') + `
+const r = $json;
+let src = {};
+try { src = $('Extract messages').all().map((i) => i.json).find((x) => String(x.update_id) === String(r.update_id)) || {}; } catch (e) {}
+const v = parseVote(String(r.text || '').slice(3));
+return { json: { vote: v ? v.vote : 0, id: v ? v.id : 0, chat_id: r.chat_id, callback_id: src.callback_id || '',
+  message_id: src.message_id || 0, markup: src.reply_markup || null } };`.trim() } },
+
+  // Upsert only if the item still exists; returns its title for the toast.
+  { id: 'savefb', name: 'Save feedback', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [1360, 420],
+    parameters: { operation: 'executeQuery',
+      query: "insert into feedback (feed_item_id, vote, chat_id) select $1::bigint, $2::smallint, nullif($3, '')::bigint where exists (select 1 from feed_items where id = $1::bigint) and $2::int in (-1, 1) on conflict (feed_item_id) do update set vote = excluded.vote, chat_id = excluded.chat_id, updated_at = now() returning feed_item_id, vote, (select title from feed_items where id = $1::bigint) as title",
+      options: { queryReplacement: "={{ String($json.id) }},{{ String($json.vote) }},{{ String($json.chat_id || '') }}" } },
+    credentials: { postgres: CRED_PG }, alwaysOutputData: true, onError: 'continueRegularOutput' },
+
+  { id: 'ackfb', name: 'Ack tap', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1540, 420],
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('feedback.js') + `
+const p = $('Prep feedback').first().json;
+const s = $input.first().json || {};
+const saved = Number(s.feed_item_id) > 0;
+const mark = saved ? (Number(s.vote) === 1 ? '\\u{1F44D}' : '\\u{1F44E}') : '';
+const title = String(s.title || '').slice(0, 80);
+return [{ json: {
+  answer: { callback_query_id: p.callback_id, text: saved ? mark + ' saved: ' + title : 'Could not save that — the item may be gone.' },
+  edit: p.markup && saved ? { chat_id: p.chat_id, message_id: p.message_id, reply_markup: votedKeyboard(p.markup, p.id, Number(s.vote)) } : null,
+  saved, title } }];`.trim() } },
+
+  { id: 'answerfb', name: 'Answer tap', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [1720, 420],
+    parameters: { method: 'POST', url: 'https://api.telegram.org/bot__TG_TOKEN__/answerCallbackQuery',
+      sendBody: true, specifyBody: 'json', jsonBody: '={{ JSON.stringify($json.answer) }}', options: { timeout: 10000 } },
+    retryOnFail: false, onError: 'continueRegularOutput' },
+
+  { id: 'tickfb', name: 'Tick button', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [1900, 420],
+    parameters: { method: 'POST', url: 'https://api.telegram.org/bot__TG_TOKEN__/editMessageReplyMarkup',
+      sendBody: true, specifyBody: 'json', jsonBody: "={{ JSON.stringify($('Ack tap').first().json.edit || {}) }}", options: { timeout: 10000 } },
+    retryOnFail: false, onError: 'continueRegularOutput' },
 
   // Deterministic switch, handled before the LLM: no tokens, no mis-routing,
   // and it keeps the router at the 7 tools the spec caps it at.
@@ -384,18 +438,28 @@ return [{ json: { output: a.output || '', retry: String(g.retry), guard_reason: 
       id: { desc: 'source id for remove, else empty' } }, [2140, 320]),
 
   { id: 'prepreply', name: 'Prep reply', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1400, 100],
-    parameters: { mode: 'runOnceForEachItem', jsCode: inline('telegram-format.js') + `
+    parameters: { mode: 'runOnceForEachItem', jsCode: inline('telegram-format.js') + inline('feedback.js') + `
 let chat_id = ${CHAT_ID};
 try { chat_id = $('Record update').item.json.chat_id || chat_id; } catch (e) {
   try { chat_id = $('Test normalize').item.json.chat_id || chat_id; } catch (e2) {}
 }
-return { json: { chat_id, output: forTelegram($json.output) || '(empty reply)' } };`.trim() } },
+// 👍/👎 for the items this reply showed: the redo's steps and prefetch when the
+// guard redid the answer, else the first agent's tool steps.
+const sources = [];
+if ($json.intermediateSteps) sources.push($json.intermediateSteps);
+try { sources.push($('Prefetch').all().map((i) => i.json)); } catch (e) {}
+if (!sources.length) { try { sources.push($('Overseer Agent').first().json.intermediateSteps); } catch (e) {} }
+const reply_markup = listKeyboard(shownItems(sources));
+return { json: { chat_id, output: forTelegram($json.output) || '(empty reply)', reply_markup } };`.trim() } },
 
-  { id: 'reply', name: 'Send reply', type: 'n8n-nodes-base.telegram', typeVersion: 1.2, position: [1600, 100],
-    parameters: { chatId: '={{ $json.chat_id }}', text: '={{ $json.output }}',
-      additionalFields: { appendAttribution: false, parse_mode: 'HTML' } },
-    credentials: { telegramApi: CRED_TG },
-    onError: 'continueRegularOutput' }
+  // HTTP, not the Telegram node: the node's inline keyboard is fixed at build
+  // time, and these buttons depend on the items each reply showed.
+  { id: 'reply', name: 'Send reply', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [1600, 100],
+    parameters: { method: 'POST', url: 'https://api.telegram.org/bot__TG_TOKEN__/sendMessage',
+      sendBody: true, specifyBody: 'json',
+      jsonBody: "={{ JSON.stringify(Object.assign({ chat_id: $json.chat_id, text: $json.output, parse_mode: 'HTML' }, $json.reply_markup ? { reply_markup: $json.reply_markup } : {})) }}",
+      options: { timeout: 15000 } },
+    retryOnFail: false, onError: 'continueRegularOutput' }
 ];
 
 const connections = {
@@ -405,11 +469,19 @@ const connections = {
   'Extract messages': { main: [[{ node: 'Record update', type: 'main', index: 0 }]] },
   'Record update': { main: [[{ node: 'Allowlisted?', type: 'main', index: 0 }]] },
   'Allowlisted?': { main: [
-    [{ node: 'Feed switch?', type: 'main', index: 0 }],
+    [{ node: 'Feedback tap?', type: 'main', index: 0 }],
     []
   ] },
   'Test webhook': { main: [[{ node: 'Test normalize', type: 'main', index: 0 }]] },
-  'Test normalize': { main: [[{ node: 'Feed switch?', type: 'main', index: 0 }]] },
+  'Test normalize': { main: [[{ node: 'Feedback tap?', type: 'main', index: 0 }]] },
+  'Feedback tap?': { main: [
+    [{ node: 'Prep feedback', type: 'main', index: 0 }],
+    [{ node: 'Feed switch?', type: 'main', index: 0 }]
+  ] },
+  'Prep feedback': { main: [[{ node: 'Save feedback', type: 'main', index: 0 }]] },
+  'Save feedback': { main: [[{ node: 'Ack tap', type: 'main', index: 0 }]] },
+  'Ack tap': { main: [[{ node: 'Answer tap', type: 'main', index: 0 }]] },
+  'Answer tap': { main: [[{ node: 'Tick button', type: 'main', index: 0 }]] },
   'Feed switch?': { main: [
     [{ node: 'Toggle drain', type: 'main', index: 0 }],
     [{ node: 'Agent context', type: 'main', index: 0 }]
