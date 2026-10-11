@@ -25,6 +25,12 @@ function isMediaUrl(url) {
 // Links are cut out before matching: "watch" is in every youtube.com/watch URL.
 const SLIDE_WORDS = /\b(slides?|decks?|presentations?|watch(ing)?|look(ing)?)\b/i;
 const TRANSCRIBE_WORDS = /\b(transcribe|transcription|listen(ing)?|hear(ing)?)\b/i;
+// A short no-link reply asking for the audio ("transcribe", "yes transcribe it")
+// after the bot said a video has no captions. The router hands it to WF-42
+// before the model runs — the 9B answered a bare "transcribe" without calling
+// the tool (2026-10-11). Anchored, so a question that merely mentions
+// transcribing stays chat.
+const BARE_MEDIA_REPLY = /^\s*(?:(?:yes|yeah|yep|ok|okay|sure|please|pls|go ahead(?: and)?)[\s,!.]*)*(?:transcribe|transcription|listen|hear)(?:\s+(?:it|this|that|the video|to it|please|pls|now))*[\s.!]*$/i;
 function parseMediaRequest(text, extraUrl) {
   const raw = String(text || '');
   const found = raw.match(/https?:\/\/[^\s<>"')\]]+/gi) || [];
@@ -160,4 +166,4 @@ function mediaMessage(item) {
   return out.join('\n').slice(0, 4000);   // Telegram's limit is 4096
 }
 
-module.exports = { isMediaUrl, parseMediaRequest, mmss, parseTs, mediaMarkdown, MEDIA_SKILL_PROMPT, MEDIA_SKILL_SCHEMA, timeLink, mediaMessage, snapKeyPoints };
+module.exports = { isMediaUrl, parseMediaRequest, BARE_MEDIA_REPLY, mmss, parseTs, mediaMarkdown, MEDIA_SKILL_PROMPT, MEDIA_SKILL_SCHEMA, timeLink, mediaMessage, snapKeyPoints };
