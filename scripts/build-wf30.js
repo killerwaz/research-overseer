@@ -36,7 +36,9 @@ select rd.id as raw_doc_id,
        coalesce(rd.run_id, 0) as run_id,
        -- raw_docs has no source column; seen_urls records it at ingest
        coalesce((select su.source from seen_urls su where su.canonical_url = rd.canonical_url), '') as source,
-       left(rd.markdown, 8000) as markdown,
+       coalesce(rd.scraper, '') as scraper,
+       -- a media transcript is read at the media profile's 60k, not cut to 8k
+       case when rd.scraper like 'media:%' then rd.markdown else left(rd.markdown, 8000) end as markdown,
        (select count(*) from backlog) as backlog_total
 from raw_docs rd
 where rd.id in (select id from backlog)
@@ -73,10 +75,15 @@ const inlineShared = (f) => fs.readFileSync(path.join(__dirname, '..', 'shared',
 
 // Same profiles as the live pipeline — the drain must not score documents on
 // different settings than a normal run would have.
-const BUILD_BODY = inlineShared('triage-config.js') + `
+// A media doc (scraper 'media:...') gets the media profile and the media skill,
+// exactly as WF-20's Prep media builds it, so a re-triage keeps its key points.
+const BUILD_BODY = inlineShared('triage-config.js') + inlineShared('triage-validate.js') + inlineShared('media.js') + `
 return $input.all().map(i => {
   const d = i.json;
-  const prof = profileFor(d.source);
+  const isMedia = String(d.scraper || '').startsWith('media:');
+  const prof = isMedia ? TRIAGE_PROFILES.media : profileFor(d.source);
+  const sys = isMedia ? TRIAGE_SYSTEM + '\\n\\nADDITIONAL EXTRACTION\\n' + MEDIA_SKILL_PROMPT : TRIAGE_SYSTEM;
+  const schema = isMedia ? withSkill(TRIAGE_SCHEMA, MEDIA_SKILL_SCHEMA) : TRIAGE_SCHEMA;
   const dhaka = new Date(Date.now() + 6 * 3600 * 1000).toISOString().slice(0, 10);
   const pub = d.published_at ? String(d.published_at).slice(0, 10) : 'unknown';
   const user = 'TODAY: ' + dhaka + '\\n' + 'PUBLISHED: ' + pub + '\\n' +
@@ -90,8 +97,8 @@ return $input.all().map(i => {
     run_id: d.run_id,
     triage_body: JSON.stringify({
       model: prof.model, temperature: 0.2, max_tokens: prof.max_tokens,
-      reasoning_effort: prof.reasoning_effort, response_format: TRIAGE_SCHEMA,
-      messages: [ { role: 'system', content: TRIAGE_SYSTEM }, { role: 'user', content: user } ]
+      reasoning_effort: prof.reasoning_effort, response_format: schema,
+      messages: [ { role: 'system', content: sys }, { role: 'user', content: user } ]
     })
   } };
 });
