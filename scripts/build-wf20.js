@@ -564,6 +564,33 @@ fs.mkdirSync(path.dirname(out), { recursive: true });
 fs.writeFileSync(out, JSON.stringify(workflow, null, 2));
 console.log('wrote', out);
 
+// Passage search (#12, sql/014): after triage and dedupe, the saved page is
+// cleaned, cut into passages and each passage embedded (title in front).
+// Like the item embedding it can never fail the triage: every node continues
+// on error and a skip turns the store into a no-op. A missed doc is picked up
+// by scripts/backfill-chunks.js. Replacing per doc keeps re-triage (the WF-30
+// drain) from duplicating passages.
+const CHUNK = inline('chunk.js');
+const BUILD_CHUNKS = CHUNK + '\n' + EMBED + `
+const d = $input.first().json || {};
+if (!d.markdown) return [{ json: { __skip: true, embed_body: '{}' } }];
+const out = chunkDoc(d);
+if (!out.chunks.length) return [{ json: { __skip: true, empty: true, raw_doc_id: d.id, embed_body: '{}' } }];
+return [{ json: { raw_doc_id: d.id, chunks: out.chunks, embed_body: JSON.stringify({ model: EMBED_MODEL,
+  input: out.chunks.map((c) => passageText(d.title, c.text)) }) } }];
+`.trim();
+const BUILD_CHUNK_STORE = CHUNK + '\n' + EMBED + `
+const b = $('Build chunks').first().json;
+const noop = [{ json: { query: 'select 1 as skipped' } }];
+// A page that cleans to nothing clears any passages it had before.
+if (b.empty) return [{ json: { query: chunkStoreSql(b.raw_doc_id, [], [], vectorLiteral) } }];
+if (b.__skip) return noop;
+try {
+  const vecs = $input.first().json.data.slice().sort((x, y) => x.index - y.index).map((x) => x.embedding);
+  return [{ json: { query: chunkStoreSql(b.raw_doc_id, b.chunks, vecs, vectorLiteral) } }];
+} catch (e) { return noop; }
+`.trim();
+
 // ---- WF-21 triage_one: one doc per execution (called per item by WF-20) ----
 const wf21 = {
   name: 'WF-21 triage_one',
@@ -651,7 +678,21 @@ return $input.all();
       credentials: { httpBearerAuth: CRED_LM }, retryOnFail: false, onError: 'continueRegularOutput' },
     codeNode('Verdict', 'verdict', [3200, -100], 'runOnceForAllItems', MARK_QUERY(true)),
     codeNode('Rule', 'rule', [3200, 100], 'runOnceForAllItems', MARK_QUERY(false)),
-    pgNode('Mark duplicate', 'markdup', [3400, 0], '={{ $json.query }}', null, { onError: 'continueRegularOutput' })
+    pgNode('Mark duplicate', 'markdup', [3400, 0], '={{ $json.query }}', null, { onError: 'continueRegularOutput' }),
+
+    // ---- passages (sql/014, shared/chunk.js) — never fails the triage ----
+    pgNode('Load page', 'loadpage', [3600, 0], 'select id, scraper, title, markdown from raw_docs where id = $1::bigint',
+      "={{ $('WF Input').first().json.raw_doc_id }}", { onError: 'continueRegularOutput', alwaysOutputData: true }),
+    codeNode('Build chunks', 'buildchunks', [3800, 0], 'runOnceForAllItems', BUILD_CHUNKS),
+    { id: 'embedchunks', name: 'Embed chunks', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [4000, 0],
+      parameters: { method: 'POST', url: 'http://host.docker.internal:1234/v1/embeddings',
+        authentication: 'genericCredentialType', genericAuthType: 'httpBearerAuth',
+        sendBody: true, specifyBody: 'json', jsonBody: '={{ $json.embed_body }}',
+        options: { timeout: 180000 } },
+      credentials: { httpBearerAuth: CRED_LM },
+      retryOnFail: true, maxTries: 2, waitBetweenTries: 2000, onError: 'continueRegularOutput' },
+    codeNode('Build chunk store', 'buildchunkstore', [4200, 0], 'runOnceForAllItems', BUILD_CHUNK_STORE),
+    pgNode('Store chunks', 'storechunks', [4400, 0], '={{ $json.query }}', null, { onError: 'continueRegularOutput' })
   ],
   connections: {
     'WF Input': { main: [[{ node: 'Guard single item', type: 'main', index: 0 }]] },
@@ -676,7 +717,12 @@ return $input.all();
     'Ask the 9B?': { main: [[{ node: 'Same story?', type: 'main', index: 0 }], [{ node: 'Rule', type: 'main', index: 0 }]] },
     'Same story?': { main: [[{ node: 'Verdict', type: 'main', index: 0 }]] },
     'Verdict': { main: [[{ node: 'Mark duplicate', type: 'main', index: 0 }]] },
-    'Rule': { main: [[{ node: 'Mark duplicate', type: 'main', index: 0 }]] }
+    'Rule': { main: [[{ node: 'Mark duplicate', type: 'main', index: 0 }]] },
+    'Mark duplicate': { main: [[{ node: 'Load page', type: 'main', index: 0 }]] },
+    'Load page': { main: [[{ node: 'Build chunks', type: 'main', index: 0 }]] },
+    'Build chunks': { main: [[{ node: 'Embed chunks', type: 'main', index: 0 }]] },
+    'Embed chunks': { main: [[{ node: 'Build chunk store', type: 'main', index: 0 }]] },
+    'Build chunk store': { main: [[{ node: 'Store chunks', type: 'main', index: 0 }]] }
   },
   settings: { executionOrder: 'v1', errorWorkflow: 'PNJMA4NbQGmp1xKv' }
 };

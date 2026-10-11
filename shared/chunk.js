@@ -178,4 +178,39 @@ function chunkDoc(doc) {
   return { cleaned_chars: text.length, chunks: chunkText(text) };
 }
 
-module.exports = { CHUNK_SIZE, CHUNK_MAX, MIN_DOC_CHARS, classifyLines, cleanMarkdown, chunkText, chunkTranscript, chunkDoc };
+// What gets embedded: the passage with its article title in front, so "the
+// company raised $2B" still knows which company. Mostly non-Latin text
+// (Bengali items) costs several times more tokens per char; the embedding
+// model runs at context 2048, so those passages are embedded from their first
+// 1,500 chars. The stored text is always the whole passage.
+function passageText(title, text) {
+  const t = String(text || '');
+  const nonAscii = (t.match(/[^\x00-\x7F]/g) || []).length;
+  const body = nonAscii > t.length * 0.3 ? t.slice(0, 1500) : t;
+  return (title ? String(title).trim().slice(0, 200) + '\n' : '') + body;
+}
+
+// One statement pair that replaces a doc's passages: delete, then insert
+// from a single JSON payload. Passage text is web content, so it travels
+// base64-encoded: no quote, '$' or backslash of it ever reaches the SQL
+// text. Measured 2026-10-12: a plain literal containing "$785606.5" fails
+// inside n8n's Postgres node ("$142.75" and "$785606" pass) — n8n reads
+// some $-digit runs as parameters even inside a string. Same fix as WF-00's
+// 'Fix memory'. toVector validates each embedding.
+function chunkStoreSql(rawDocId, chunks, vectors, toVector) {
+  const id = Number(rawDocId);
+  if (!Number.isInteger(id) || id <= 0) throw new Error('bad raw_doc_id: ' + rawDocId);
+  if (!Array.isArray(chunks) || !Array.isArray(vectors) || chunks.length !== vectors.length) {
+    throw new Error('chunks and vectors differ in length');
+  }
+  const del = 'delete from doc_chunks where raw_doc_id = ' + id + ';';
+  if (!chunks.length) return del;
+  const rows = chunks.map((c, i) => ({ n: Number(c.n), text: String(c.text).replace(/\u0000/g, ''),
+    start_s: c.start_s == null ? null : Math.round(Number(c.start_s)), e: toVector(vectors[i]) }));
+  const b64 = Buffer.from(JSON.stringify(rows), 'utf8').toString('base64');
+  return del + ' insert into doc_chunks (raw_doc_id, n, text, start_s, embedding) select ' + id +
+    ", r.n, r.text, r.start_s, r.e::vector from jsonb_to_recordset(convert_from(decode('" + b64 +
+    "', 'base64'), 'UTF8')::jsonb) as r(n int, text text, start_s int, e text);";
+}
+
+module.exports = { passageText, chunkStoreSql, CHUNK_SIZE, CHUNK_MAX, MIN_DOC_CHARS, classifyLines, cleanMarkdown, chunkText, chunkTranscript, chunkDoc };

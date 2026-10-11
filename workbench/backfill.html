@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Overseer Backfill</title>
+<style>
+  :root { --bg: #f7f7f5; --panel: #fff; --ink: #1d1d1b; --muted: #6b6b66; --line: #e3e2dd; --ok: #187a3e; --bad: #b42318; --accent: #2f5bd3; --track: #eceae4; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #161615; --panel: #1f1f1d; --ink: #ecebe6; --muted: #9b9a93; --line: #33332f; --ok: #6fd39a; --bad: #ff8a7a; --accent: #7fa2ff; --track: #2b2b28; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 900px; margin: 0 auto; padding: 16px; }
+  nav a { color: var(--accent); margin-right: 12px; font-size: 13px; }
+  h1 { font-size: 16px; margin: 8px 0 2px; }
+  .live { color: var(--muted); font-size: 12px; }
+  .bar { height: 14px; background: var(--track); border-radius: 7px; overflow: hidden; margin: 14px 0 6px; }
+  .bar i { display: block; height: 100%; background: var(--ok); transition: width .6s ease; }
+  .stats { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 16px; }
+  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; min-width: 110px; }
+  .stat .v { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 16px 0 6px; }
+  ul { list-style: none; padding: 0; margin: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+  li { padding: 5px 10px; border-top: 1px solid var(--line); display: flex; justify-content: space-between; gap: 12px; }
+  li:first-child { border-top: 0; }
+  li span:last-child { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .bad { color: var(--bad); }
+  .done { color: var(--ok); font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+  <nav><a href="index.html">Cleaning</a><a href="backfill.html">Backfill</a><a href="eval.html">Eval</a></nav>
+  <h1>Passage backfill</h1>
+  <div class="live" id="live">waiting… run <code>node scripts/backfill-chunks.js --apply</code></div>
+  <div class="bar"><i id="bar" style="width:0"></i></div>
+  <div class="stats" id="stats"></div>
+  <div id="check"></div>
+  <h2>Latest pages</h2><ul id="recent"><li><span>—</span><span></span></li></ul>
+  <div id="fails"></div>
+</main>
+<script>
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const dur = (s) => s == null ? '—' : s >= 60 ? Math.floor(s / 60) + 'm ' + (s % 60) + 's' : s + 's';
+let stamp = '';
+async function poll() {
+  try {
+    const r = await fetch('data/backfill.json?t=' + Date.now(), { cache: 'no-store' });
+    if (r.ok) {
+      const p = await r.json();
+      if (p.updated_at !== stamp) {
+        stamp = p.updated_at;
+        const pct = p.docs_total ? Math.round(100 * p.docs_done / p.docs_total) : 0;
+        document.getElementById('bar').style.width = pct + '%';
+        document.getElementById('live').innerHTML = (p.finished ? '<span class="done">finished</span>' : '● running') +
+          ' · ' + esc(p.mode) + ' · updated ' + new Date(p.updated_at).toLocaleTimeString() + (p.error ? ' · <span class="bad">' + esc(p.error) + '</span>' : '');
+        document.getElementById('stats').innerHTML = [['pages', p.docs_done + ' / ' + p.docs_total], ['done', pct + '%'],
+          ['passages', p.passages], ['empty pages', p.empty], ['failed', p.failed],
+          [p.finished ? 'took' : 'time left', dur(p.finished ? p.elapsed_s : p.eta_s)]]
+          .map(([k, v]) => '<div class="stat"><div class="v">' + v + '</div><div class="k">' + k + '</div></div>').join('');
+        document.getElementById('check').innerHTML = p.check ? '<p class="done">Database: ' + esc(p.check) + '</p>' : '';
+        document.getElementById('recent').innerHTML = (p.recent || []).map((x) =>
+          '<li><span>' + esc(x.doc) + '</span><span>' + (x.passages ? x.passages + ' passages' : 'empty') + '</span></li>').join('') || '<li><span>—</span><span></span></li>';
+        document.getElementById('fails').innerHTML = (p.failures || []).length ? '<h2 class="bad">Failures</h2><ul>' +
+          p.failures.map((f) => '<li><span>' + esc(f.doc) + '</span><span class="bad">' + esc(f.error) + '</span></li>').join('') + '</ul>' : '';
+      }
+    }
+  } catch (e) {}
+  setTimeout(poll, 1500);
+}
+poll();
+</script>
+</body>
+</html>
