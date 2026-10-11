@@ -83,3 +83,30 @@ test('chunkDoc: media goes through the transcript path, junk pages give no passa
   assert.ok(PROSE.length < MIN_DOC_CHARS);
   assert.deepStrictEqual(chunkDoc({ scraper: 'crawl4ai', markdown: null }).chunks, []);
 });
+
+const { passageText, chunkStoreSql } = require('../shared/chunk.js');
+const { vectorLiteral } = require('../shared/embed.js');
+const vec = () => Array(1024).fill(0.5);
+
+test('passageText puts the title first and caps mostly non-Latin text', () => {
+  assert.strictEqual(passageText('Kimi', 'body text'), 'Kimi\nbody text');
+  assert.strictEqual(passageText('', 'body'), 'body');
+  const bn = 'বাংলাদেশ ব্যাংক '.repeat(300);
+  assert.strictEqual(passageText('T', bn).length, 2 + 1500);
+});
+
+test('chunkStoreSql replaces the doc and never puts web text in the SQL', () => {
+  const evil = "it's a '); drop table x; -- CapEx: $785606.5 \\ end";
+  const q = chunkStoreSql(7, [{ n: 1, text: evil, start_s: null }, { n: 2, text: 'two', start_s: 48 }],
+    [vec(), vec()], vectorLiteral);
+  assert.ok(q.startsWith('delete from doc_chunks where raw_doc_id = 7;'));
+  assert.ok(!q.includes('drop table') && !q.includes('$785606') && !q.includes('\\'));
+  const b64 = q.match(/decode\('([A-Za-z0-9+/=]+)', 'base64'\)/)[1];
+  const rows = JSON.parse(Buffer.from(b64, 'base64').toString('utf8'));
+  assert.strictEqual(rows[0].text, evil);
+  assert.strictEqual(rows[1].start_s, 48);
+  assert.strictEqual(chunkStoreSql(7, [], [], vectorLiteral), 'delete from doc_chunks where raw_doc_id = 7;');
+  assert.throws(() => chunkStoreSql('7; drop', [], [], vectorLiteral));
+  assert.throws(() => chunkStoreSql(7, [{ n: 1, text: 'a' }], [], vectorLiteral));
+  assert.throws(() => chunkStoreSql(7, [{ n: 1, text: 'a' }], [[1, 2]], vectorLiteral));
+});
