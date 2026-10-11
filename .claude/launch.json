@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "workbench",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["workbench/server.js"],
+      "env": { "NO_OPEN": "1" },
+      "port": 5690
+    }
+  ]
+}
