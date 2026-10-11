@@ -14,10 +14,12 @@ class Modes(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.p = [mock.patch.object(server, "CACHE", pathlib.Path(self.tmp.name)),
-                  mock.patch.object(server, "PACE", 0)]
+                  mock.patch.object(server, "PACE", 0),
+                  mock.patch.object(server, "LM_KEY", "k")]
         for p in self.p:
             p.start()
         self.calls = []
+        self.verdict = {"look": False, "kind": "interview", "reason": "step 1"}
 
     def tearDown(self):
         for p in self.p:
@@ -40,12 +42,19 @@ class Modes(unittest.TestCase):
              mock.patch.object(server, "parakeet", lambda url: (self.calls.append("parakeet") or
                                {"source": "parakeet", "caption_lang": "", "paragraphs": [{"start": 0, "text": "p"}]})), \
              mock.patch.object(server, "on_screen", lambda url, d: (self.calls.append("slides") or
-                               ([{"start": 15, "text": "slide"}], ""))):
+                               ([{"start": 15, "text": "slide"}], ""))), \
+             mock.patch.object(server.vision, "decide_look", self.fake_decide):
             return server.transcript("https://youtu.be/abcdefghijk", **kw)
+
+    def fake_decide(self, doc, key, base=None):
+        self.calls.append("decide")
+        if isinstance(self.verdict, Exception):
+            raise self.verdict
+        return dict(self.verdict)
 
     def test_default_is_two_requests_captions_only(self):
         out = self.run_t()
-        self.assertEqual(self.calls, ["dump", "caption"])
+        self.assertEqual(self.calls, ["dump", "caption", "decide"])   # decide is local, not YouTube
         self.assertEqual(out["source"], "captions-auto")
         self.assertEqual(out["slides"], [])
 
@@ -65,7 +74,7 @@ class Modes(unittest.TestCase):
         self.run_t(meta={**META, "automatic_captions": {}})
         self.calls.clear()
         out = self.run_t(transcribe=True)
-        self.assertEqual(self.calls, ["parakeet"])
+        self.assertEqual(self.calls, ["parakeet", "decide"])   # a transcript, then the screen check
         self.assertEqual(out["source"], "parakeet")
 
     def test_slides_only_when_asked_and_only_once(self):
@@ -77,6 +86,48 @@ class Modes(unittest.TestCase):
         self.calls.clear()
         self.run_t(slides=True)
         self.assertEqual(self.calls, [])
+
+    def test_auto_look_reads_the_screen_once(self):
+        self.verdict = {"look": True, "kind": "software tutorial", "reason": "rule 2"}
+        out = self.run_t()
+        self.assertEqual(self.calls, ["dump", "caption", "decide", "slides"])
+        self.assertEqual(out["screen_note"], "screen read: software tutorial")
+        self.calls.clear()
+        out = self.run_t()                       # verdict and frames are cached
+        self.assertEqual(self.calls, [])
+        self.assertEqual(out["screen_note"], "screen read: software tutorial")
+
+    def test_auto_skip_is_cached_and_says_why(self):
+        out = self.run_t()
+        self.assertEqual(out["screen_note"], "screen not read: interview")
+        self.assertEqual(out["slides"], [])
+        self.calls.clear()
+        self.run_t()
+        self.assertNotIn("decide", self.calls)
+
+    def test_asking_for_slides_skips_the_check(self):
+        out = self.run_t(slides=True)
+        self.assertNotIn("decide", self.calls)
+        self.assertEqual(out["screen_note"], "screen read: you asked")
+
+    def test_failed_check_means_no_look_and_is_retried_next_time(self):
+        self.verdict = RuntimeError("LM Studio down")
+        out = self.run_t()
+        self.assertNotIn("slides", self.calls)
+        self.assertEqual(out["screen_note"], "screen not read: the check failed")
+        self.verdict = {"look": True, "kind": "demo", "reason": "r"}
+        self.calls.clear()
+        self.run_t()
+        self.assertEqual(self.calls, ["decide", "slides"])
+
+    def test_no_captions_never_asks(self):
+        self.run_t(meta={**META, "automatic_captions": {}})
+        self.assertNotIn("decide", self.calls)
+
+    def test_auto_false_skips_the_check(self):
+        out = self.run_t(auto=False)
+        self.assertNotIn("decide", self.calls)
+        self.assertEqual(out["screen_note"], "")
 
     def test_bot_check_raises_blocked(self):
         r = mock.Mock(returncode=1, stdout="", stderr="ERROR: Sign in to confirm you're not a bot")
@@ -97,3 +148,13 @@ class Pacing(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LookParsing(unittest.TestCase):
+    def test_text_after_the_json_is_ignored(self):
+        v = server.vision.parse_look({"content": '{"look": true, "kind": "demo", "reason": "r"}\n\n{"look": false}'})
+        self.assertEqual(v, {"look": True, "kind": "demo", "reason": "r"})
+
+    def test_json_stranded_in_reasoning_is_recovered(self):
+        v = server.vision.parse_look({"content": "", "reasoning_content": 'thinking...\n{"look": false, "kind": "vlog", "reason": "step 1"}'})
+        self.assertFalse(v["look"])

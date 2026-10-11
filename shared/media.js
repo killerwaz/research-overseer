@@ -70,6 +70,8 @@ function mediaMarkdown(t) {
   const meta = [t.channel && 'Channel: ' + t.channel, t.duration && 'Length: ' + mmss(t.duration),
     t.published_at && 'Published: ' + t.published_at, 'Transcript: ' + (SOURCE_LABEL[t.source] || t.source)].filter(Boolean);
   lines.push(meta.join(' | '));
+  // the media service's auto-look verdict; Compose summary reads it back for the footer
+  if (t.screen_note) lines.push('Screen: ' + t.screen_note);
   if (t.chapters && t.chapters.length) {
     lines.push('', '## Chapters');
     for (const c of t.chapters) lines.push('[' + mmss(c.start) + '] ' + c.title);
@@ -163,7 +165,8 @@ function mediaMessage(item) {
       out.push('• ' + stamp + esc(p.point));
     }
   }
-  if (item.transcript_source) out.push('', '<i>from ' + esc(SOURCE_LABEL[item.transcript_source] || item.transcript_source) + '</i>');
+  const via = [item.transcript_source && 'from ' + (SOURCE_LABEL[item.transcript_source] || item.transcript_source), item.screen].filter(Boolean);
+  if (via.length) out.push('', '<i>' + esc(via.join(' · ')) + '</i>');
   return out.join('\n').slice(0, 4000);   // Telegram's limit is 4096
 }
 
