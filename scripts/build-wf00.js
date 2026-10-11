@@ -5,6 +5,7 @@
 // stack; the old ngrok tunnel is dead). Update ids dedupe through tg_updates.
 const fs = require('fs');
 const path = require('path');
+const { BARE_MEDIA_REPLY } = require('../shared/media.js');
 
 // Inlined from shared/ so the committed tests cover what actually ships.
 const inline = (f) => fs.readFileSync(path.join(__dirname, '..', 'shared', f), 'utf8')
@@ -210,7 +211,9 @@ return $('Feed switch?').all(1).map(i => ({ json: { ...i.json, sources, runs } }
   // and trigger word from the message itself; the model only writes the reply.
   { id: 'haslink', name: 'Has link?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1080, 260],
     parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' },
-      combinator: 'and', conditions: [ { id: 'c1', leftValue: "={{ /https?:\\/\\//i.test($json.text || '') }}", rightValue: true,
+      // ...or a bare "transcribe" reply, which WF-42 resolves to the last captionless video
+      combinator: 'and', conditions: [ { id: 'c1', leftValue: "={{ /https?:\\/\\//i.test($json.text || '') || new RegExp(" +
+        JSON.stringify(BARE_MEDIA_REPLY.source) + ", 'i').test($json.text || '') }}", rightValue: true,
         operator: { type: 'boolean', operation: 'equals' } } ] } } },
   { id: 'ingest', name: 'Ingest links', type: 'n8n-nodes-base.executeWorkflow', typeVersion: 1.2, position: [1100, 400],
     parameters: { workflowId: { __rl: true, value: WF.scrape_url, mode: 'id' },

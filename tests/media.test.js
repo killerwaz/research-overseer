@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { isMediaUrl, mmss, parseTs, mediaMarkdown, timeLink, mediaMessage } = require('../shared/media.js');
+const { isMediaUrl, BARE_MEDIA_REPLY, mmss, parseTs, mediaMarkdown, timeLink, mediaMessage } = require('../shared/media.js');
 
 test('isMediaUrl: videos, podcasts and audio files yes; pages and channels no', () => {
   for (const u of ['https://www.youtube.com/watch?v=sjzHT_QUATM', 'https://youtu.be/sjzHT_QUATM', 'https://vimeo.com/123',
@@ -86,4 +86,13 @@ test('parseMediaRequest: watch inside a URL is not a trigger, the word is', () =
 test('parseMediaRequest: the tool url is merged in, text without links is fine', () => {
   assert.deepStrictEqual(parseMediaRequest('transcribe', 'https://youtu.be/aaaaaaaaaaa').urls, ['https://youtu.be/aaaaaaaaaaa']);
   assert.deepStrictEqual(parseMediaRequest('transcribe').urls, []);
+});
+
+test('BARE_MEDIA_REPLY: a short "transcribe" reply yes; questions and chat no', () => {
+  for (const t of ['transcribe', 'Transcribe', ' transcribe. ', 'yes transcribe', 'Yes, transcribe it', 'ok transcribe it please',
+    'please transcribe', 'listen', 'listen to it', 'hear it', 'go ahead and transcribe', 'transcription'])
+    assert.strictEqual(BARE_MEDIA_REPLY.test(t), true, t);
+  for (const t of ['do you transcribe podcasts?', 'can you transcribe what the CEO said?', 'I listen to podcasts', 'listen, what is new in fintech',
+    'transcribe https://youtu.be/x', 'what did you hear about Bkash', 'hearing aids startups', ''])
+    assert.strictEqual(BARE_MEDIA_REPLY.test(t), false, t);
 });
