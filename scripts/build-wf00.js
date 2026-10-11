@@ -102,7 +102,10 @@ const nodes = [
 
   { id: 'fetch', name: 'Fetch updates', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [360, 0],
     parameters: { method: 'GET',
-      url: "=https://api.telegram.org/bot__TG_TOKEN__/getUpdates?offset={{ $json.tg_offset || 1 }}&timeout=0",
+      // allowed_updates is sticky on Telegram's side: it was ["message"] from some
+      // earlier call, which silently dropped every 👍/👎 tap (callback_query).
+      // Sent on every poll so it can never drift again.
+      url: "=https://api.telegram.org/bot__TG_TOKEN__/getUpdates?offset={{ $json.tg_offset || 1 }}&timeout=0&allowed_updates=%5B%22message%22%2C%22edited_message%22%2C%22callback_query%22%5D",
       options: { timeout: 10000 } },
     retryOnFail: false, onError: 'continueRegularOutput' },
 
