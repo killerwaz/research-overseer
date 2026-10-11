@@ -74,7 +74,7 @@
       ],
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const j = $input.first().json;\nif (!j.ok || !Array.isArray(j.result)) return [];\nconst out = [];\nfor (const u of j.result) {\n  const m = u.message || u.edited_message || {};\n  out.push({ json: {\n    update_id: u.update_id,\n    chat_id: (m.chat && m.chat.id) || 0,\n    text: (m.text || '').slice(0, 4000)\n  } });\n}\nreturn out;"
+        "jsCode": "const j = $input.first().json;\nif (!j.ok || !Array.isArray(j.result)) return [];\nconst out = [];\nfor (const u of j.result) {\n  // A 👍/👎 tap (shared/feedback.js) arrives as a callback_query; it becomes\n  // text \"cb:<data>\" so the dedupe table and allowlist treat it like a message.\n  const cq = u.callback_query;\n  if (cq) {\n    const cm = cq.message || {};\n    out.push({ json: { update_id: u.update_id, chat_id: (cm.chat && cm.chat.id) || 0,\n      text: ('cb:' + (cq.data || '')).slice(0, 200), callback_id: cq.id || '', message_id: cm.message_id || 0,\n      reply_markup: cm.reply_markup || null } });\n    continue;\n  }\n  const m = u.message || u.edited_message || {};\n  out.push({ json: {\n    update_id: u.update_id,\n    chat_id: (m.chat && m.chat.id) || 0,\n    text: (m.text || '').slice(0, 4000)\n  } });\n}\nreturn out;"
       }
     },
     {
@@ -170,6 +170,135 @@
         "mode": "runOnceForAllItems",
         "jsCode": "const b = $input.first().json.body || {};\nreturn [{ json: { chat_id: Number(b.chat_id) || __TG_CHAT__, text: String(b.text || ''), test: true } }];"
       }
+    },
+    {
+      "id": "istap",
+      "name": "Feedback tap?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        300
+      ],
+      "parameters": {
+        "options": {},
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "t1",
+              "leftValue": "={{ String($json.text || '').startsWith('cb:fb:') }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "prepfb",
+      "name": "Prep feedback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1180,
+        420
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// 👍/👎 feedback: the Telegram buttons, reading a tap, and turning the votes\n// into calibration examples for triage (sql/013).\n//\n// callback_data is \"fb:<vote>:<feed_item_id>\" — the item id, not the list\n// number, so a tap on an old message still rates the right item after the\n// chat has moved on to another list. Telegram caps callback_data at 64 bytes.\n\nconst UP = '\\u{1F44D}';\nconst DOWN = '\\u{1F44E}';\nconst CHOSEN = '✅';\n\nfunction itemKeyboard(id) {\n  const n = Number(id);\n  if (!Number.isInteger(n) || n <= 0) return null;\n  return { inline_keyboard: [[{ text: UP, callback_data: 'fb:1:' + n }, { text: DOWN, callback_data: 'fb:-1:' + n }]] };\n}\n\n// A numbered list: \"1 👍\" \"1 👎\" \"2 👍\" \"2 👎\" — two items per row, first 10 items.\nfunction listKeyboard(items, max = 10) {\n  const ok = (items || []).filter((i) => i && Number.isInteger(Number(i.id)) && Number(i.id) > 0 && i.n != null).slice(0, max);\n  if (!ok.length) return null;\n  if (ok.length === 1) return itemKeyboard(ok[0].id);\n  const rows = [];\n  for (let k = 0; k < ok.length; k += 2) {\n    rows.push(ok.slice(k, k + 2).flatMap((i) => [\n      { text: i.n + ' ' + UP, callback_data: 'fb:1:' + Number(i.id) },\n      { text: i.n + ' ' + DOWN, callback_data: 'fb:-1:' + Number(i.id) }]));\n  }\n  return { inline_keyboard: rows };\n}\n\nfunction parseVote(data) {\n  const m = String(data || '').match(/^fb:(-?1):(\\d+)$/);\n  return m ? { vote: Number(m[1]), id: Number(m[2]) } : null;\n}\n\n// The same keyboard with the tapped choice ticked (and the item's other button un-ticked).\nfunction votedKeyboard(markup, id, vote) {\n  if (!markup || !Array.isArray(markup.inline_keyboard)) return null;\n  const strip = (t) => String(t).replace(' ' + CHOSEN, '');\n  return { inline_keyboard: markup.inline_keyboard.map((row) => row.map((b) => {\n    const v = parseVote(b.callback_data);\n    if (!v || v.id !== Number(id)) return b;\n    return { ...b, text: strip(b.text) + (v.vote === vote ? ' ' + CHOSEN : '') };\n  })) };\n}\n\n// Which items did this reply show? The query_feed / get_item results in the\n// agent's tool steps (or the guard's prefetch), as {n, id}. Observations can\n// be JSON strings or objects, possibly wrapped — walk whatever comes back.\nfunction shownItems(sources) {\n  const found = new Map();\n  const visit = (x, depth) => {\n    if (x == null || depth > 8) return;\n    if (typeof x === 'string') {\n      const s = x.trim();\n      if (s[0] === '{' || s[0] === '[') { try { visit(JSON.parse(s), depth + 1); } catch (e) {} }\n      return;\n    }\n    if (Array.isArray(x)) { x.forEach((y) => visit(y, depth + 1)); return; }\n    if (typeof x !== 'object') return;\n    if (x.n != null && Number(x.id) > 0 && (x.title || x.canonical_url)) found.set(Number(x.n), { n: Number(x.n), id: Number(x.id) });\n    for (const k of Object.keys(x)) if (k !== 'structured') visit(x[k], depth + 1);\n  };\n  visit(sources, 0);\n  return [...found.values()].sort((a, b) => a.n - b.n);\n}\n\n// Few-shot calibration for triage. rows: [{vote, title, summary}], newest\n// first. Empty string when there is nothing to show, so triage is unchanged\n// until the first tap.\nfunction tasteBlock(rows, perSide = 6) {\n  const list = Array.isArray(rows) ? rows : [];\n  const line = (r) => '- ' + String(r.title || '').trim().slice(0, 120) +\n    (r.summary ? ' — ' + String(r.summary).replace(/\\s+/g, ' ').trim().slice(0, 160) : '');\n  const liked = list.filter((r) => Number(r.vote) === 1).slice(0, perSide).map(line);\n  const disliked = list.filter((r) => Number(r.vote) === -1).slice(0, perSide).map(line);\n  if (!liked.length && !disliked.length) return '';\n  const out = ['', '', \"WASIM'S RATINGS OF PAST FEED ITEMS (newest first)\",\n    'He tapped these in Telegram. Use them to calibrate angle_strength and specificity for items LIKE them —',\n    'they show what he finds useful or useless beyond the written beat. They never override the beat, and an',\n    'item unlike any of them is scored on the beat alone.'];\n  if (liked.length) out.push('Liked (' + UP + '):', ...liked);\n  if (disliked.length) out.push('Disliked (' + DOWN + '):', ...disliked);\n  return out.join('\\n');\n}\n\n// The rows tasteBlock reads: latest 6 likes + latest 6 dislikes, newest first,\n// as JSON text. A scalar subquery, so it drops into any SELECT or RETURNING.\nconst TASTE_SQL = \"(select coalesce(json_agg(t order by t.updated_at desc), '[]')::text from (\" +\n  \"(select fb.vote, fb.updated_at, f.title, left(f.summary, 160) as summary from feedback fb join feed_items f on f.id = fb.feed_item_id where fb.vote = 1 order by fb.updated_at desc limit 6) \" +\n  \"union all \" +\n  \"(select fb.vote, fb.updated_at, f.title, left(f.summary, 160) as summary from feedback fb join feed_items f on f.id = fb.feed_item_id where fb.vote = -1 order by fb.updated_at desc limit 6)) t)\";\n\nconst r = $json;\nlet src = {};\ntry { src = $('Extract messages').all().map((i) => i.json).find((x) => String(x.update_id) === String(r.update_id)) || {}; } catch (e) {}\nconst v = parseVote(String(r.text || '').slice(3));\nreturn { json: { vote: v ? v.vote : 0, id: v ? v.id : 0, chat_id: r.chat_id, callback_id: src.callback_id || '',\n  message_id: src.message_id || 0, markup: src.reply_markup || null } };"
+      }
+    },
+    {
+      "id": "savefb",
+      "name": "Save feedback",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        1360,
+        420
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "insert into feedback (feed_item_id, vote, chat_id) select $1::bigint, $2::smallint, nullif($3, '')::bigint where exists (select 1 from feed_items where id = $1::bigint) and $2::int in (-1, 1) on conflict (feed_item_id) do update set vote = excluded.vote, chat_id = excluded.chat_id, updated_at = now() returning feed_item_id, vote, (select title from feed_items where id = $1::bigint) as title",
+        "options": {
+          "queryReplacement": "={{ String($json.id) }},{{ String($json.vote) }},{{ String($json.chat_id || '') }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "tzBuhu9KEXlaRRfW",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "ackfb",
+      "name": "Ack tap",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        420
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// 👍/👎 feedback: the Telegram buttons, reading a tap, and turning the votes\n// into calibration examples for triage (sql/013).\n//\n// callback_data is \"fb:<vote>:<feed_item_id>\" — the item id, not the list\n// number, so a tap on an old message still rates the right item after the\n// chat has moved on to another list. Telegram caps callback_data at 64 bytes.\n\nconst UP = '\\u{1F44D}';\nconst DOWN = '\\u{1F44E}';\nconst CHOSEN = '✅';\n\nfunction itemKeyboard(id) {\n  const n = Number(id);\n  if (!Number.isInteger(n) || n <= 0) return null;\n  return { inline_keyboard: [[{ text: UP, callback_data: 'fb:1:' + n }, { text: DOWN, callback_data: 'fb:-1:' + n }]] };\n}\n\n// A numbered list: \"1 👍\" \"1 👎\" \"2 👍\" \"2 👎\" — two items per row, first 10 items.\nfunction listKeyboard(items, max = 10) {\n  const ok = (items || []).filter((i) => i && Number.isInteger(Number(i.id)) && Number(i.id) > 0 && i.n != null).slice(0, max);\n  if (!ok.length) return null;\n  if (ok.length === 1) return itemKeyboard(ok[0].id);\n  const rows = [];\n  for (let k = 0; k < ok.length; k += 2) {\n    rows.push(ok.slice(k, k + 2).flatMap((i) => [\n      { text: i.n + ' ' + UP, callback_data: 'fb:1:' + Number(i.id) },\n      { text: i.n + ' ' + DOWN, callback_data: 'fb:-1:' + Number(i.id) }]));\n  }\n  return { inline_keyboard: rows };\n}\n\nfunction parseVote(data) {\n  const m = String(data || '').match(/^fb:(-?1):(\\d+)$/);\n  return m ? { vote: Number(m[1]), id: Number(m[2]) } : null;\n}\n\n// The same keyboard with the tapped choice ticked (and the item's other button un-ticked).\nfunction votedKeyboard(markup, id, vote) {\n  if (!markup || !Array.isArray(markup.inline_keyboard)) return null;\n  const strip = (t) => String(t).replace(' ' + CHOSEN, '');\n  return { inline_keyboard: markup.inline_keyboard.map((row) => row.map((b) => {\n    const v = parseVote(b.callback_data);\n    if (!v || v.id !== Number(id)) return b;\n    return { ...b, text: strip(b.text) + (v.vote === vote ? ' ' + CHOSEN : '') };\n  })) };\n}\n\n// Which items did this reply show? The query_feed / get_item results in the\n// agent's tool steps (or the guard's prefetch), as {n, id}. Observations can\n// be JSON strings or objects, possibly wrapped — walk whatever comes back.\nfunction shownItems(sources) {\n  const found = new Map();\n  const visit = (x, depth) => {\n    if (x == null || depth > 8) return;\n    if (typeof x === 'string') {\n      const s = x.trim();\n      if (s[0] === '{' || s[0] === '[') { try { visit(JSON.parse(s), depth + 1); } catch (e) {} }\n      return;\n    }\n    if (Array.isArray(x)) { x.forEach((y) => visit(y, depth + 1)); return; }\n    if (typeof x !== 'object') return;\n    if (x.n != null && Number(x.id) > 0 && (x.title || x.canonical_url)) found.set(Number(x.n), { n: Number(x.n), id: Number(x.id) });\n    for (const k of Object.keys(x)) if (k !== 'structured') visit(x[k], depth + 1);\n  };\n  visit(sources, 0);\n  return [...found.values()].sort((a, b) => a.n - b.n);\n}\n\n// Few-shot calibration for triage. rows: [{vote, title, summary}], newest\n// first. Empty string when there is nothing to show, so triage is unchanged\n// until the first tap.\nfunction tasteBlock(rows, perSide = 6) {\n  const list = Array.isArray(rows) ? rows : [];\n  const line = (r) => '- ' + String(r.title || '').trim().slice(0, 120) +\n    (r.summary ? ' — ' + String(r.summary).replace(/\\s+/g, ' ').trim().slice(0, 160) : '');\n  const liked = list.filter((r) => Number(r.vote) === 1).slice(0, perSide).map(line);\n  const disliked = list.filter((r) => Number(r.vote) === -1).slice(0, perSide).map(line);\n  if (!liked.length && !disliked.length) return '';\n  const out = ['', '', \"WASIM'S RATINGS OF PAST FEED ITEMS (newest first)\",\n    'He tapped these in Telegram. Use them to calibrate angle_strength and specificity for items LIKE them —',\n    'they show what he finds useful or useless beyond the written beat. They never override the beat, and an',\n    'item unlike any of them is scored on the beat alone.'];\n  if (liked.length) out.push('Liked (' + UP + '):', ...liked);\n  if (disliked.length) out.push('Disliked (' + DOWN + '):', ...disliked);\n  return out.join('\\n');\n}\n\n// The rows tasteBlock reads: latest 6 likes + latest 6 dislikes, newest first,\n// as JSON text. A scalar subquery, so it drops into any SELECT or RETURNING.\nconst TASTE_SQL = \"(select coalesce(json_agg(t order by t.updated_at desc), '[]')::text from (\" +\n  \"(select fb.vote, fb.updated_at, f.title, left(f.summary, 160) as summary from feedback fb join feed_items f on f.id = fb.feed_item_id where fb.vote = 1 order by fb.updated_at desc limit 6) \" +\n  \"union all \" +\n  \"(select fb.vote, fb.updated_at, f.title, left(f.summary, 160) as summary from feedback fb join feed_items f on f.id = fb.feed_item_id where fb.vote = -1 order by fb.updated_at desc limit 6)) t)\";\n\nconst p = $('Prep feedback').first().json;\nconst s = $input.first().json || {};\nconst saved = Number(s.feed_item_id) > 0;\nconst mark = saved ? (Number(s.vote) === 1 ? '\\u{1F44D}' : '\\u{1F44E}') : '';\nconst title = String(s.title || '').slice(0, 80);\nreturn [{ json: {\n  answer: { callback_query_id: p.callback_id, text: saved ? mark + ' saved: ' + title : 'Could not save that — the item may be gone.' },\n  edit: p.markup && saved ? { chat_id: p.chat_id, message_id: p.message_id, reply_markup: votedKeyboard(p.markup, p.id, Number(s.vote)) } : null,\n  saved, title } }];"
+      }
+    },
+    {
+      "id": "answerfb",
+      "name": "Answer tap",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1720,
+        420
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.telegram.org/bot__TG_TOKEN__/answerCallbackQuery",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.answer) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "retryOnFail": false,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "tickfb",
+      "name": "Tick button",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1900,
+        420
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.telegram.org/bot__TG_TOKEN__/editMessageReplyMarkup",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Ack tap').first().json.edit || {}) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "retryOnFail": false,
+      "onError": "continueRegularOutput"
     },
     {
       "id": "iscmd",
@@ -1234,32 +1363,29 @@
       ],
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "// Telegram message preparation. Inlined into WF-00's Prep reply node by\n// scripts/build-wf00.js, so tests/telegram-format.test.js covers what ships.\n//\n// Messages are sent with parse_mode HTML because the node's legacy Markdown\n// default breaks on a single stray asterisk. That means two obligations:\n// escape HTML-significant characters, and strip the markdown the model emits\n// anyway despite being told not to (it would otherwise show as literal * and _).\n\nfunction escapeHtml(s) {\n  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n}\n\nfunction stripMarkdown(s) {\n  return String(s)\n    .replace(/\\*\\*(.+?)\\*\\*/g, '$1')\n    .replace(/(^|\\s)\\*(?!\\s)(.+?)(?<!\\s)\\*(?=\\s|$)/g, '$1$2')\n    .replace(/(^|\\s)_(?!\\s)(.+?)(?<!\\s)_(?=\\s|$)/g, '$1$2')\n    .replace(/^\\s{0,3}#{1,6}\\s+/gm, '');\n}\n\n// What actually goes on the wire.\nfunction forTelegram(s, maxLen = 4000) {\n  return escapeHtml(stripMarkdown(String(s == null ? '' : s).slice(0, maxLen)));\n}\n\nlet chat_id = __TG_CHAT__;\ntry { chat_id = $('Record update').item.json.chat_id || chat_id; } catch (e) {\n  try { chat_id = $('Test normalize').item.json.chat_id || chat_id; } catch (e2) {}\n}\nreturn { json: { chat_id, output: forTelegram($json.output) || '(empty reply)' } };"
+        "jsCode": "// Telegram message preparation. Inlined into WF-00's Prep reply node by\n// scripts/build-wf00.js, so tests/telegram-format.test.js covers what ships.\n//\n// Messages are sent with parse_mode HTML because the node's legacy Markdown\n// default breaks on a single stray asterisk. That means two obligations:\n// escape HTML-significant characters, and strip the markdown the model emits\n// anyway despite being told not to (it would otherwise show as literal * and _).\n\nfunction escapeHtml(s) {\n  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n}\n\nfunction stripMarkdown(s) {\n  return String(s)\n    .replace(/\\*\\*(.+?)\\*\\*/g, '$1')\n    .replace(/(^|\\s)\\*(?!\\s)(.+?)(?<!\\s)\\*(?=\\s|$)/g, '$1$2')\n    .replace(/(^|\\s)_(?!\\s)(.+?)(?<!\\s)_(?=\\s|$)/g, '$1$2')\n    .replace(/^\\s{0,3}#{1,6}\\s+/gm, '');\n}\n\n// What actually goes on the wire.\nfunction forTelegram(s, maxLen = 4000) {\n  return escapeHtml(stripMarkdown(String(s == null ? '' : s).slice(0, maxLen)));\n}\n\n// 👍/👎 feedback: the Telegram buttons, reading a tap, and turning the votes\n// into calibration examples for triage (sql/013).\n//\n// callback_data is \"fb:<vote>:<feed_item_id>\" — the item id, not the list\n// number, so a tap on an old message still rates the right item after the\n// chat has moved on to another list. Telegram caps callback_data at 64 bytes.\n\nconst UP = '\\u{1F44D}';\nconst DOWN = '\\u{1F44E}';\nconst CHOSEN = '✅';\n\nfunction itemKeyboard(id) {\n  const n = Number(id);\n  if (!Number.isInteger(n) || n <= 0) return null;\n  return { inline_keyboard: [[{ text: UP, callback_data: 'fb:1:' + n }, { text: DOWN, callback_data: 'fb:-1:' + n }]] };\n}\n\n// A numbered list: \"1 👍\" \"1 👎\" \"2 👍\" \"2 👎\" — two items per row, first 10 items.\nfunction listKeyboard(items, max = 10) {\n  const ok = (items || []).filter((i) => i && Number.isInteger(Number(i.id)) && Number(i.id) > 0 && i.n != null).slice(0, max);\n  if (!ok.length) return null;\n  if (ok.length === 1) return itemKeyboard(ok[0].id);\n  const rows = [];\n  for (let k = 0; k < ok.length; k += 2) {\n    rows.push(ok.slice(k, k + 2).flatMap((i) => [\n      { text: i.n + ' ' + UP, callback_data: 'fb:1:' + Number(i.id) },\n      { text: i.n + ' ' + DOWN, callback_data: 'fb:-1:' + Number(i.id) }]));\n  }\n  return { inline_keyboard: rows };\n}\n\nfunction parseVote(data) {\n  const m = String(data || '').match(/^fb:(-?1):(\\d+)$/);\n  return m ? { vote: Number(m[1]), id: Number(m[2]) } : null;\n}\n\n// The same keyboard with the tapped choice ticked (and the item's other button un-ticked).\nfunction votedKeyboard(markup, id, vote) {\n  if (!markup || !Array.isArray(markup.inline_keyboard)) return null;\n  const strip = (t) => String(t).replace(' ' + CHOSEN, '');\n  return { inline_keyboard: markup.inline_keyboard.map((row) => row.map((b) => {\n    const v = parseVote(b.callback_data);\n    if (!v || v.id !== Number(id)) return b;\n    return { ...b, text: strip(b.text) + (v.vote === vote ? ' ' + CHOSEN : '') };\n  })) };\n}\n\n// Which items did this reply show? The query_feed / get_item results in the\n// agent's tool steps (or the guard's prefetch), as {n, id}. Observations can\n// be JSON strings or objects, possibly wrapped — walk whatever comes back.\nfunction shownItems(sources) {\n  const found = new Map();\n  const visit = (x, depth) => {\n    if (x == null || depth > 8) return;\n    if (typeof x === 'string') {\n      const s = x.trim();\n      if (s[0] === '{' || s[0] === '[') { try { visit(JSON.parse(s), depth + 1); } catch (e) {} }\n      return;\n    }\n    if (Array.isArray(x)) { x.forEach((y) => visit(y, depth + 1)); return; }\n    if (typeof x !== 'object') return;\n    if (x.n != null && Number(x.id) > 0 && (x.title || x.canonical_url)) found.set(Number(x.n), { n: Number(x.n), id: Number(x.id) });\n    for (const k of Object.keys(x)) if (k !== 'structured') visit(x[k], depth + 1);\n  };\n  visit(sources, 0);\n  return [...found.values()].sort((a, b) => a.n - b.n);\n}\n\n// Few-shot calibration for triage. rows: [{vote, title, summary}], newest\n// first. Empty string when there is nothing to show, so triage is unchanged\n// until the first tap.\nfunction tasteBlock(rows, perSide = 6) {\n  const list = Array.isArray(rows) ? rows : [];\n  const line = (r) => '- ' + String(r.title || '').trim().slice(0, 120) +\n    (r.summary ? ' — ' + String(r.summary).replace(/\\s+/g, ' ').trim().slice(0, 160) : '');\n  const liked = list.filter((r) => Number(r.vote) === 1).slice(0, perSide).map(line);\n  const disliked = list.filter((r) => Number(r.vote) === -1).slice(0, perSide).map(line);\n  if (!liked.length && !disliked.length) return '';\n  const out = ['', '', \"WASIM'S RATINGS OF PAST FEED ITEMS (newest first)\",\n    'He tapped these in Telegram. Use them to calibrate angle_strength and specificity for items LIKE them —',\n    'they show what he finds useful or useless beyond the written beat. They never override the beat, and an',\n    'item unlike any of them is scored on the beat alone.'];\n  if (liked.length) out.push('Liked (' + UP + '):', ...liked);\n  if (disliked.length) out.push('Disliked (' + DOWN + '):', ...disliked);\n  return out.join('\\n');\n}\n\n// The rows tasteBlock reads: latest 6 likes + latest 6 dislikes, newest first,\n// as JSON text. A scalar subquery, so it drops into any SELECT or RETURNING.\nconst TASTE_SQL = \"(select coalesce(json_agg(t order by t.updated_at desc), '[]')::text from (\" +\n  \"(select fb.vote, fb.updated_at, f.title, left(f.summary, 160) as summary from feedback fb join feed_items f on f.id = fb.feed_item_id where fb.vote = 1 order by fb.updated_at desc limit 6) \" +\n  \"union all \" +\n  \"(select fb.vote, fb.updated_at, f.title, left(f.summary, 160) as summary from feedback fb join feed_items f on f.id = fb.feed_item_id where fb.vote = -1 order by fb.updated_at desc limit 6)) t)\";\n\nlet chat_id = __TG_CHAT__;\ntry { chat_id = $('Record update').item.json.chat_id || chat_id; } catch (e) {\n  try { chat_id = $('Test normalize').item.json.chat_id || chat_id; } catch (e2) {}\n}\n// 👍/👎 for the items this reply showed: the redo's steps and prefetch when the\n// guard redid the answer, else the first agent's tool steps.\nconst sources = [];\nif ($json.intermediateSteps) sources.push($json.intermediateSteps);\ntry { sources.push($('Prefetch').all().map((i) => i.json)); } catch (e) {}\nif (!sources.length) { try { sources.push($('Overseer Agent').first().json.intermediateSteps); } catch (e) {} }\nconst reply_markup = listKeyboard(shownItems(sources));\nreturn { json: { chat_id, output: forTelegram($json.output) || '(empty reply)', reply_markup } };"
       }
     },
     {
       "id": "reply",
       "name": "Send reply",
-      "type": "n8n-nodes-base.telegram",
-      "typeVersion": 1.2,
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [
         1600,
         100
       ],
       "parameters": {
-        "chatId": "={{ $json.chat_id }}",
-        "text": "={{ $json.output }}",
-        "additionalFields": {
-          "appendAttribution": false,
-          "parse_mode": "HTML"
+        "method": "POST",
+        "url": "https://api.telegram.org/bot__TG_TOKEN__/sendMessage",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify(Object.assign({ chat_id: $json.chat_id, text: $json.output, parse_mode: 'HTML' }, $json.reply_markup ? { reply_markup: $json.reply_markup } : {})) }}",
+        "options": {
+          "timeout": 15000
         }
       },
-      "credentials": {
-        "telegramApi": {
-          "id": "6RLwMp4ODoesGE4v",
-          "name": "telegram-overseer-bot"
-        }
-      },
+      "retryOnFail": false,
       "onError": "continueRegularOutput"
     }
   ],
@@ -1323,7 +1449,7 @@
       "main": [
         [
           {
-            "node": "Feed switch?",
+            "node": "Feedback tap?",
             "type": "main",
             "index": 0
           }
@@ -1346,7 +1472,69 @@
       "main": [
         [
           {
+            "node": "Feedback tap?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Feedback tap?": {
+      "main": [
+        [
+          {
+            "node": "Prep feedback",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
             "node": "Feed switch?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prep feedback": {
+      "main": [
+        [
+          {
+            "node": "Save feedback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save feedback": {
+      "main": [
+        [
+          {
+            "node": "Ack tap",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ack tap": {
+      "main": [
+        [
+          {
+            "node": "Answer tap",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Answer tap": {
+      "main": [
+        [
+          {
+            "node": "Tick button",
             "type": "main",
             "index": 0
           }
