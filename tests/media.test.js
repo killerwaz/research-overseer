@@ -34,6 +34,14 @@ test('timeLink only for YouTube', () => {
   assert.strictEqual(timeLink('https://vimeo.com/1', 10), null);
 });
 
+test('the screen verdict rides in the markdown and ends the message', () => {
+  assert.match(mediaMarkdown({ title: 'T', source: 'captions-auto', screen_note: 'screen read: software tutorial', paragraphs: [] }),
+    /\nScreen: screen read: software tutorial\n/);
+  assert.doesNotMatch(mediaMarkdown({ title: 'T', source: 'captions-auto', paragraphs: [] }), /Screen:/);
+  const m = mediaMessage({ title: 'T', canonical_url: 'https://youtu.be/x', transcript_source: 'captions-auto', screen: 'screen not read: interview' });
+  assert.match(m, /<i>from YouTube auto-captions · screen not read: interview<\/i>$/);
+});
+
 test('mediaMessage escapes HTML and links timestamps', () => {
   const m = mediaMessage({ title: 'A <b> & C', score: 8, summary: 's', canonical_url: 'https://www.youtube.com/watch?v=sjzHT_QUATM',
     key_points: [{ t: '1:05', point: 'x < y' }, { t: '??', point: 'no time' }], transcript_source: 'captions-auto' });

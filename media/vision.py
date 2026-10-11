@@ -74,3 +74,58 @@ def slides(video, api_key, base="http://localhost:1234", **kw):
         if frames:
             shutil.rmtree(frames[0][1].parent, ignore_errors=True)
     return out
+
+
+# ---- should the screen be read at all? (2026-10-11) ----
+# Asked once per video, after the transcript exists, when the user did not type
+# a slides word. Prompt v3 scored 10/10 on Wasim's labelled set (7 look: the
+# tutorials, demos and technical explainers; 3 skip: two interviews and a vlog).
+# The video TYPE is decided first: v2, without that step, read a vlog's "let me
+# show you the game room" as a reason to look.
+LOOK_PROMPT = """You decide whether a video summariser should also look at a video's frames, or whether its transcript is enough.
+Step 1 - what kind of video is it?
+  If it is a conversation, interview, podcast, panel, vlog or opinion piece -> look=false,
+  UNLESS most of it is a screen demo or slides (then continue to step 2).
+  Everyday phrases like "let me show you" in a vlog do NOT count as a screen demo.
+Step 2 - otherwise, look=true if ANY of these is true:
+  1. The speaker refers to something visible ("as you can see", "this chart", "click", "on screen", any language).
+  2. It is a software demo, tutorial or screen recording.
+  3. It explains how a technical system works (architecture, mechanism, how a model or product works).
+  If none applies -> look=false.
+The transcript can be in any language. 'kind' is the video type from step 1 in 2-4 plain English words
+(e.g. "software tutorial", "technical explainer", "interview", "vlog"). In 'reason', name the rule that decided it."""
+
+LOOK_SCHEMA = {"type": "json_schema", "json_schema": {"name": "look_decision", "strict": True, "schema": {
+    "type": "object", "additionalProperties": False, "required": ["look", "kind", "reason"],
+    "properties": {"look": {"type": "boolean"}, "kind": {"type": "string"}, "reason": {"type": "string"}}}}}
+
+
+def look_input(doc, max_chars=24000):
+    lines = ["[%d:%02d] %s" % (int(p["start"]) // 60, int(p["start"]) % 60, p["text"]) for p in doc.get("paragraphs") or []]
+    return (f"TITLE: {doc.get('title', '')}\nCHANNEL: {doc.get('channel', '')}\n"
+            f"DURATION: {round((doc.get('duration') or 0) / 60)} min\nDESCRIPTION: {(doc.get('description') or '')[:800]}\n\n"
+            "TRANSCRIPT:\n" + "\n".join(lines)[:max_chars])
+
+
+def parse_look(msg):
+    """The JSON answer from content, or from reasoning_content when thinking overran the budget."""
+    # The first complete object wins: the 9B sometimes writes text after it.
+    text = (msg.get("content") or "").strip()
+    if "{" in text:
+        o = json.JSONDecoder().raw_decode(text[text.index("{"):])[0]
+    else:
+        tail = msg.get("reasoning_content") or ""
+        o = json.JSONDecoder().raw_decode(tail[tail.rindex("{"):])[0]
+    return {"look": bool(o["look"]), "kind": " ".join(str(o.get("kind", "")).split())[:40],
+            "reason": " ".join(str(o.get("reason", "")).split())[:300]}
+
+
+def decide_look(doc, api_key, model="qwen/qwen3.5-9b", base="http://localhost:1234"):
+    """{"look": bool, "kind": str, "reason": str}. Thinking on: the type judgement is the point."""
+    body = {"model": model, "temperature": 0.2, "max_tokens": 6000, "reasoning_effort": "medium",
+            "response_format": LOOK_SCHEMA,
+            "messages": [{"role": "system", "content": LOOK_PROMPT}, {"role": "user", "content": look_input(doc)}]}
+    req = urllib.request.Request(base + "/v1/chat/completions", data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json", "Authorization": "Bearer " + api_key})
+    with urllib.request.urlopen(req, timeout=300) as r:
+        return parse_look(json.loads(r.read())["choices"][0]["message"])

@@ -14,6 +14,10 @@ Modes (Wasim's choice, 2026-10-11):
               him to reply "transcribe". Nothing is downloaded.
   transcribe  audio -> Parakeet on CPU (+1 request, ~0.05x real time)
   slides      720p video -> a frame every 30 s -> the 9B's vision (+1 request)
+  auto-look   no slides word: once the transcript exists, the 9B decides from it
+              whether the screen matters (vision.decide_look, ~35 s, no request);
+              "look" runs slides. The verdict is cached with the video and shown
+              to Wasim ("screen read: software tutorial"). {"auto": false} skips it.
 
 Protecting the IP without a cap: every YouTube request goes through one lock
 with a paced gap (MEDIA_PACE_SECONDS, default 15, +/-30% jitter) — a steady
@@ -184,7 +188,33 @@ def save(doc):
     cache_path(doc["extractor"], doc["id"]).write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
 
 
-def transcript(url, slides=False, transcribe=False):
+def look_decision(doc):
+    """Cached auto-look verdict; a failed check means no look, never a failed summary."""
+    if "look" not in doc:
+        try:
+            t = time.time()
+            doc["look"] = vision.decide_look(doc, LM_KEY, base=LM_BASE)
+            log(f"{doc['id']} auto-look: {'LOOK' if doc['look']['look'] else 'skip'} ({doc['look']['kind']}) {time.time()-t:.0f}s")
+        except Exception as e:
+            log("auto-look failed", doc.get("id"), e)
+            return {"look": False, "kind": "", "reason": "check failed", "failed": True}
+    return doc["look"]
+
+
+def screen_note(asked, verdict, slides_note):
+    if slides_note:                       # e.g. too long for the frame pass
+        return "screen not read: " + slides_note.replace("skipped: ", "")
+    if asked:
+        return "screen read: you asked"
+    if not verdict:
+        return ""
+    if verdict.get("failed"):
+        return "screen not read: the check failed"
+    kind = verdict.get("kind") or "auto"
+    return ("screen read: " if verdict["look"] else "screen not read: ") + kind
+
+
+def transcript(url, slides=False, transcribe=False, auto=True):
     doc = None
     m = YT_ID.search(url)
     if m and cache_path("Youtube", m.group(1)).exists():
@@ -215,6 +245,13 @@ def transcript(url, slides=False, transcribe=False):
     if transcribe and doc.get("source") != "parakeet":
         doc.update(parakeet(doc["url"]))
         changed = True
+    asked = slides
+    verdict = None
+    if not slides and auto and doc.get("paragraphs") and LM_KEY:
+        had = "look" in doc
+        verdict = look_decision(doc)
+        slides = verdict["look"]
+        changed = changed or (not had and not verdict.get("failed"))
     if slides and not doc.get("slides"):
         doc["slides"], doc["slides_note"] = on_screen(doc["url"], doc.get("duration"))
         changed = True
@@ -226,6 +263,7 @@ def transcript(url, slides=False, transcribe=False):
                 "note": doc.get("caption_note", "no captions")}
     out = dict(doc)
     out["slides"] = out.get("slides") or []
+    out["screen_note"] = screen_note(asked, verdict, doc.get("slides_note", "") if slides else "")
     return out
 
 
@@ -261,11 +299,12 @@ class Handler(BaseHTTPRequestHandler):
         if not url.startswith(("http://", "https://")):
             return self._send(400, {"error": "url required"})
         slides, transcribe = bool(body.get("slides")), bool(body.get("transcribe"))
+        auto = body.get("auto", True) is not False
         t = time.time()
         try:
-            out = transcript(url, slides=slides, transcribe=transcribe)
+            out = transcript(url, slides=slides, transcribe=transcribe, auto=auto)
             log(f"{out['id']} {'no captions' if out.get('no_captions') else out['source']}"
-                f"{' +slides' if slides else ''}{' (cached)' if out.get('cached') else ''} {time.time()-t:.1f}s")
+                f"{' +slides' if slides else ''}{' | ' + out['screen_note'] if out.get('screen_note') else ''}{' (cached)' if out.get('cached') else ''} {time.time()-t:.1f}s")
             self._send(200, out)
         except Blocked as e:
             self._send(502, {"error": "YouTube bot check: " + str(e), "blocked": True})
