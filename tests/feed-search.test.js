@@ -27,3 +27,20 @@ test('packVectors joins by space and |, blanks bad vectors', () => {
   assert.strictEqual(packVectors(null, 2), '|');
   assert.ok(!packVectors([[0.1, 0.2]], 1).includes(','));
 });
+
+const { userFilters } = require('../shared/feed-search.js');
+
+test('userFilters drops filters the message never asked for', () => {
+  const f = { min_score: '5', max_age_days: '7', since: '' };
+  const r = userFilters('Who bought Langfuse?', f);
+  assert.deepStrictEqual([r.min_score, r.max_age_days, r.dropped], ['', '', ['min_score', 'max_age_days']]);
+  assert.strictEqual(userFilters('anything good this week?', f).min_score, '5');
+  assert.strictEqual(userFilters('anything good this week?', f).max_age_days, '7');
+  assert.strictEqual(userFilters('show me the best agent stuff', f).max_age_days, '');
+  assert.strictEqual(userFilters('what came in today', { since: '2026-10-12T00:00:00+06:00' }).since, '2026-10-12T00:00:00+06:00');
+});
+
+test('userFilters passes everything through when there is no message', () => {
+  assert.deepStrictEqual(userFilters('', { min_score: '7', max_age_days: '3', since: 'x' }),
+    { min_score: '7', max_age_days: '3', since: 'x', dropped: [] });
+});

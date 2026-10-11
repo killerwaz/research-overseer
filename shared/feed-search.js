@@ -51,4 +51,25 @@ function packVectors(vecs, count) {
   return out.join('|');
 }
 
-module.exports = { MAX_TOPICS, SIM_CUTOFF, parseTopics, parseItemRef, packVectors };
+// "Filters come only from the user's current words" — enforced here, not just
+// asked for in the tool description. End-to-end test 2026-10-12: mid-chat the
+// router began adding min_score 5 to every call ("who bought Langfuse?"), which
+// hid the articles that answered and led it to invent an answer. With the
+// user's message at hand, a quality filter survives only if the message asks
+// for quality, a time filter only if it names a time. No message (test
+// harness, older callers) = filters pass through unchanged.
+const QUALITY_WORDS = /\b(good|best|top|great|worth|important|interesting|strong|quality|high[- ]?scor\w*|score[ds]?|rated|must[- ]read)\b/i;
+const TIME_WORDS = /\b(today|tonight|yesterday|morning|evening|night|week|weekend|month|year|recent(ly)?|latest|new(est)?|lately|just now|hours?|days?|since|past|last|this|ago|fresh|current(ly)?|20\d\d|jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|june?|july?|aug(ust)?|sep(tember)?|oct(ober)?|nov(ember)?|dec(ember)?)\b/i;
+function userFilters(userText, f) {
+  const text = String(userText == null ? '' : userText).trim();
+  const out = { min_score: f.min_score || '', max_age_days: f.max_age_days || '', since: f.since || '', dropped: [] };
+  if (!text) return out;
+  if (out.min_score && !QUALITY_WORDS.test(text)) { out.dropped.push('min_score'); out.min_score = ''; }
+  if (!TIME_WORDS.test(text)) {
+    if (out.max_age_days) { out.dropped.push('max_age_days'); out.max_age_days = ''; }
+    if (out.since) { out.dropped.push('since'); out.since = ''; }
+  }
+  return out;
+}
+
+module.exports = { MAX_TOPICS, SIM_CUTOFF, parseTopics, parseItemRef, packVectors, userFilters };

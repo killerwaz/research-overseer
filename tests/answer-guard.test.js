@@ -66,3 +66,24 @@ test('a runs question whose reply talks findings without a run number is still r
 test('empty replies are redone', () => {
   assert.equal(g('catch me up', ''), true);
 });
+
+test('a factual question answered from general knowledge is redone (2026-10-12)', () => {
+  assert.equal(g('How long is the context Anthropic adds to each chunk in contextual retrieval?', 'Anthropic adds 512 tokens of context to each chunk.'), true);
+  assert.equal(g('Which command shows how much of your Claude usage limit is left?', 'There is no command; check your dashboard.'), true);
+  assert.equal(g('Where should you start when giving an AI agent autonomy?', 'Start by defining clear boundaries and guardrails.'), true);
+  assert.equal(g('who bought langfuse', 'ClickHouse.'), true); // a who-question still needs the feed
+  assert.equal(g('who bought langfuse?', 'ClickHouse.', ['query_feed']), false);
+});
+
+test('small talk and context questions are not redone', () => {
+  assert.equal(g('how are you?', 'Doing well!'), false);
+  assert.equal(g('thanks!', 'Any time.'), false);
+  assert.equal(g('what can you do?', 'I read and search your feed.'), false);
+  assert.equal(g('which feeds are you watching?', 'Ten feeds: ...'), false);
+  assert.equal(g('did the last run work?', 'Run 90 finished ok.'), false);
+});
+
+test('prefetch keeps whole questions up to 20 words', () => {
+  assert.strictEqual(prefetchFor('How long is the context Anthropic adds to each chunk in contextual retrieval?').tag,
+    'How long is the context Anthropic adds to each chunk in contextual retrieval');
+});
