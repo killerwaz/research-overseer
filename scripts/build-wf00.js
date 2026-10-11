@@ -18,28 +18,55 @@ const CRED_OR = I.credentials.openrouter;
 const CRED_TG = I.credentials.telegram;
 const CHAT_ID = '__TG_CHAT__';
 
+// Router model. Default is local Qwen in LM Studio (free); ROUTER_MODEL=haiku
+// at build time switches back to paid Haiku over OpenRouter.
+//
+// Qwen only works here with thinking OFF: with thinking on it returns an empty
+// reply after a tool result in most configurations (benched 2026-10-09; LM
+// Studio bug class #1592). n8n's chat-model node cannot send the one field that
+// switches thinking off (reasoning_effort 'none' — the node drops it for any
+// model not named like o1/o3/gpt-5), so LM Studio's DEFAULT for this model must
+// be thinking off, and triage opts back in (shared/triage-config.js). Chat
+// Completions, not the Responses API: n8n sends `text: {}` on Responses, which
+// LM Studio rejects ("text.format Required").
+const ROUTER_MODEL = (process.env.ROUTER_MODEL || 'qwen').toLowerCase();
+const MODEL_NODE = ROUTER_MODEL === 'haiku'
+  ? { id: 'model', name: 'OpenRouter Haiku', type: '@n8n/n8n-nodes-langchain.lmChatOpenRouter', typeVersion: 1, position: [1000, 320],
+      parameters: { model: 'anthropic/claude-haiku-4.5', options: { temperature: 0 } },
+      credentials: { openRouterApi: CRED_OR } }
+  : { id: 'model', name: 'LM Studio Qwen', type: '@n8n/n8n-nodes-langchain.lmChatOpenAi', typeVersion: 1.3, position: [1000, 320],
+      parameters: { model: { __rl: true, mode: 'id', value: 'qwen/qwen3.5-9b' }, responsesApiEnabled: false,
+        // first message after LM Studio's idle unload pays a ~19s model load
+        options: { temperature: 0, timeout: 120000, maxRetries: 1 } },
+      credentials: { openAiApi: I.credentials.lmstudio_openai } };
+
 const WF = {
   run_discovery: I.workflows['wf41-run-discovery'],
   full_sweep: I.workflows['wf40-full-sweep'],
   scrape_url: I.workflows['wf42-scrape-url'],
   query_feed: I.workflows['wf31-query-feed'],
   run_status: I.workflows['wf32-run-status'],
-  manage_schedule: I.workflows['wf33-manage-schedule'],
   manage_sources: I.workflows['wf34-manage-sources']
 };
 
 const SYSTEM = `=You are Research Overseer's dispatcher on Telegram. Route requests to tools; never do research yourself; never fabricate results or data — if a tool returns nothing, say so.
 
 Rules:
-1. Free and instant actions run immediately, no confirmation: a pasted URL -> scrape_url; status questions -> run_status; reading existing findings -> query_feed; 'anything new today' -> run_discovery with source rss. These touch nothing that costs money.
-2. Anything that starts a web search costs money and about six minutes, so it needs the user's word first. Run it immediately ONLY if they used an explicit search verb (search, find me, look up, go get, dig into). If they merely asked a question — 'what's happening with X', 'anything on X', 'how is X going' — reply with a one-line proposal naming the source and query, then STOP and wait. Execute on their next message if they say yes. full_sweep always needs confirmation.
+0. You know NOTHING about runs or findings except what a tool returns for the CURRENT message. Earlier tool results in this chat are stale — runs start and finish, items arrive. Every question about runs or findings MUST call the matching tool again, even if you answered the same question a minute ago. Never answer from chat history or general knowledge. (The feed list below is fresh every message.)
+1. Free and instant actions run immediately, no confirmation: a pasted URL -> scrape_url; status questions -> run_status; 'what feeds/sources are you watching' -> manage_sources with action list; reading existing findings -> query_feed; 'anything new today' -> run_discovery with source rss. These touch nothing that costs money.
+2. Anything that starts a web search costs money and about six minutes, so it needs the user's word first. Run it immediately ONLY if they used an explicit search verb (search, find me, look up, go get, dig into). If they merely asked a question — 'what's happening with X', 'anything on X', 'how is X going' — answer it from query_feed first (free), then end your reply with a one-line offer naming the search source and query you would run. Do NOT start the search; execute it on their next message if they say yes. full_sweep always needs confirmation.
 3. Retrospective questions are ALWAYS query_feed or run_status, and this OVERRIDES everything else even when a topic is named. Retrospective phrasing includes: catch me up, what did you find, what's new, anything good, show me, what did I miss, brief me, recap. "Catch me up on funding this week" is query_feed with max_age_days 7 — NOT a search, and NOT a confirmation prompt either; just read the feed and answer.
-3b. Before reporting that little or nothing was found, consider whether your own filters caused it: a near-empty result after you passed a tag is far more likely a bad filter than an empty feed. Retry query_feed once without the tag before telling the user there is nothing — and never answer a thin result by starting a search instead. If the question names a time ('today', 'last night', 'this week'), compute the ISO timestamp for the start of that window from the current time below and pass it to query_feed as the since parameter. Never answer a time-scoped question from an unfiltered read.
+3b. If a topic read comes back thin, retry query_feed once with fewer, broader keywords in tag. Never present items as being about the topic unless they are, and never answer a thin result by starting a search — say what the feed has and offer the search. If the question names a time ('today', 'last night', 'this week'), compute the ISO timestamp for the start of that window from the current time below and pass it to query_feed as the since parameter. Never answer a time-scoped question from an unfiltered read.
+3c. Follow-ups about an item you just listed — 'the first one', '#3', 'tell me more about number 2', '1. especially the X part', 'open the second' — call get_item with that number. Do NOT call query_feed again for these: a fresh query returns a different list. If they describe an item without a number, match it to the list you showed and use its n.
 4. When uncertain between search sources, fail WIDE: prefer full_sweep (with confirmation) or brave. Never guess narrow.
 4b. Call at most ONE discovery tool per user request, ever. After full_sweep or run_discovery returns, summarize what it returned and stop. If it found little, say so — do NOT run it again with different wording. Each run costs money and minutes.
-5. manage_schedule: parse natural language into cron, timezone Asia/Dhaka (UTC+6). 'every day at 8am' -> cron '0 8 * * *' via action create_recurring. Relative one-times ('in 3 hours') -> action create_onetime with an ISO timestamp you compute from the current time below. If phrasing is ambiguous ('tomorrow morning'), ask ONE clarifying question. Always echo the parsed schedule back and get a yes before creating. Other actions: cancel (needs id), list.
+5. Scheduling is OFF — this is a live chat agent; nothing runs on a timer. If asked to schedule, repeat, or run something later or every day, say scheduling is switched off and offer to run it now (searches still need their usual yes).
 6. manage_sources actions: add (url, optional label), remove (id or url), list.
-7. Reply tersely — this is Telegram. Plain text, no markdown formatting.
+7. Reply tersely — this is Telegram. Plain text, no markdown formatting. When you list feed items, start each line with its n from the tool result (e.g. '3. Title — one line why') so the user can say 'tell me about 3'.
+
+Feeds you are watching right now (read from the database this message — authoritative, the ONLY true list): {{ $json.sources }}
+
+Latest runs, newest first (read from the database this message — these OVERRIDE anything said earlier in the chat): {{ $json.runs }}
 
 Current time: {{ $now.setZone('Asia/Dhaka').toFormat('cccc yyyy-MM-dd HH:mm') }} (Asia/Dhaka, UTC+6). This is the local date and time — use it directly, do not convert it.`;
 
@@ -156,22 +183,129 @@ try { chat_id = $('Record update').first().json.chat_id || chat_id; } catch (e) 
 return [{ json: { chat_id, output: text } }];
 `.trim() } },
 
-  { id: 'agent', name: 'Overseer Agent', type: '@n8n/n8n-nodes-langchain.agent', typeVersion: 3.1, position: [1120, 100],
-    parameters: { promptType: 'define', text: '={{ $json.text }}',
-      options: { systemMessage: SYSTEM, maxIterations: 6 } } },
+  // Facts the model must not invent. Without thinking, the 9B answers "which
+  // sources do you follow?" with a confident made-up list (benched 2026-10-09:
+  // BBC, The Verge, Reuters...) however the rules are worded, and it repeats an
+  // old run_status answer from chat memory instead of calling the tool again.
+  // Handing it the real list and the latest runs each message removes the gap
+  // it fills. One cheap query per message.
+  { id: 'ctx', name: 'Agent context', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [1000, -100],
+    parameters: { operation: 'executeQuery',
+      query: "select coalesce((select string_agg(coalesce(nullif(label, ''), url) || ' <' || url || '>', '; ' order by id) from sources where active and kind = 'rss'), 'none') as sources, " +
+        "coalesce((select string_agg('run ' || id || ' ' || scope || ' ' || status || ' started ' || to_char(started_at at time zone 'Asia/Dhaka', 'YYYY-MM-DD HH24:MI') || ', ' || coalesce(items_created, 0) || ' items' || coalesce(' (error: ' || left(error, 80) || ')', ''), '; ' order by id desc) from (select * from runs order by id desc limit 3) r), 'no runs yet') as runs",
+      options: {} },
+    credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true },
 
-  { id: 'model', name: 'OpenRouter Haiku', type: '@n8n/n8n-nodes-langchain.lmChatOpenRouter', typeVersion: 1, position: [1000, 320],
-    parameters: { model: 'anthropic/claude-haiku-4.5', options: { temperature: 0 } },
-    credentials: { openRouterApi: CRED_OR } },
+  // Re-attach the context to every message item (Feed switch? output 1 = not a
+  // feed-switch command); chat memory keys on $json.chat_id, so it must survive.
+  { id: 'ctxmerge', name: 'Agent input', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1060, 100],
+    parameters: { mode: 'runOnceForAllItems', jsCode: `
+const ctx = $('Agent context').first().json;
+const sources = ctx.sources || 'none', runs = ctx.runs || 'unknown';
+return $('Feed switch?').all(1).map(i => ({ json: { ...i.json, sources, runs } }));`.trim() } },
+
+  // Links are ingested deterministically, BEFORE the model runs (2026-10-11):
+  // the 9B answered a two-link message with "I've ingested both YouTube links"
+  // without calling scrape_url, and nothing was queued. WF-42 reads every link
+  // and trigger word from the message itself; the model only writes the reply.
+  { id: 'haslink', name: 'Has link?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1080, 260],
+    parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' },
+      combinator: 'and', conditions: [ { id: 'c1', leftValue: "={{ /https?:\\/\\//i.test($json.text || '') }}", rightValue: true,
+        operator: { type: 'boolean', operation: 'equals' } } ] } } },
+  { id: 'ingest', name: 'Ingest links', type: 'n8n-nodes-base.executeWorkflow', typeVersion: 1.2, position: [1100, 400],
+    parameters: { workflowId: { __rl: true, value: WF.scrape_url, mode: 'id' },
+      workflowInputs: { mappingMode: 'defineBelow', value: { url: '', trigger: 'agent', user_message: '={{ $json.text }}' },
+        matchingColumns: [], schema: ['url', 'trigger', 'user_message'].map((id) => ({ id, displayName: id, required: false,
+          defaultMatch: false, display: true, canBeUsedToMatch: true, type: 'string' })) },
+      options: { waitForSubWorkflow: true } },
+    onError: 'continueRegularOutput' },
+  { id: 'linknote', name: 'Link note', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1110, 520],
+    parameters: { mode: 'runOnceForAllItems', jsCode: `
+const base = $('Agent input').first().json;
+const r = $input.first().json;
+const note = String(r.note || (r.error && (r.error.message || r.error)) || 'links handed to the pipeline');
+return [{ json: { ...base, ingest_note: note } }];`.trim() } },
+
+  { id: 'agent', name: 'Overseer Agent', type: '@n8n/n8n-nodes-langchain.agent', typeVersion: 3.1, position: [1120, 100],
+    // Live run data rides in the USER turn, not just the system prompt: with it
+    // only in the system prompt the 9B still copied a stale run_status answer
+    // from chat history (it saw run 58, answered "run 57"). The latest turn wins.
+    parameters: { promptType: 'define', text: '={{ $json.text }}\n\n[live data, fetched just now: latest runs: {{ $json.runs }}]{{ $json.ingest_note ? "\\n[ALREADY DONE for this message, by the system: " + $json.ingest_note + " Do NOT call scrape_url. Reply in one short line.]" : "" }}',
+      options: { systemMessage: SYSTEM, maxIterations: 6, returnIntermediateSteps: true } } },
+
+  // ---- answer guard (2026-10-09) ----
+  // A reply that talks about the feed without a tool having run this turn is
+  // redone by a memoryless agent that is told to look it up. The decision is
+  // shared/answer-guard.js (tested); the model cannot argue its way past it.
+  { id: 'guard', name: 'Guard check', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1300, 100],
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('answer-guard.js') + `
+const a = $input.first().json;
+const question = $('Agent input').first().json.text || '';
+const toolsUsed = (a.intermediateSteps || []).map(s => (s.action && s.action.tool) || '').filter(Boolean);
+const g = needsFreshLookup({ question, reply: a.output, toolsUsed });
+const pf = prefetchFor(question);
+return [{ json: { output: a.output || '', retry: String(g.retry), guard_reason: g.reason, tools_used: toolsUsed.join(','), prefetch_item: pf.item, prefetch_tag: pf.tag } }];`.trim() } },
+
+  { id: 'retryif', name: 'Redo?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1460, 100],
+    parameters: { options: {}, conditions: {
+      options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, combinator: 'and',
+      conditions: [{ id: 'r1', leftValue: '={{ $json.retry }}', rightValue: 'true', operator: { type: 'string', operation: 'equals' } }] } } },
+
+  // The lookup the rejected answer skipped, run deterministically so the redo
+  // does not depend on the model choosing to call a tool (it was seen not to).
+  { id: 'prefetch', name: 'Prefetch', type: 'n8n-nodes-base.executeWorkflow', typeVersion: 1.2, position: [1540, -120],
+    parameters: { workflowId: { __rl: true, value: WF.query_feed, mode: 'id' },
+      workflowInputs: { mappingMode: 'defineBelow', value: {
+        item: '={{ $json.prefetch_item }}', tag: '={{ $json.prefetch_tag }}', limit: '10',
+        chat_id: "={{ String($('Agent input').first().json.chat_id) }}",
+        since: '', min_relevance: '', min_score: '', max_age_days: '', group_stories: '' },
+        matchingColumns: [], schema: ['item', 'tag', 'limit', 'chat_id', 'since', 'min_relevance', 'min_score', 'max_age_days', 'group_stories']
+          .map((id) => ({ id, displayName: id, required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: 'string' })) },
+      options: { waitForSubWorkflow: true } },
+    onError: 'continueRegularOutput', alwaysOutputData: true },
+
+  // the exchange before this one, so "tell me more about the first one" still
+  // works in the memoryless redo. Offset 2 skips the rejected attempt itself.
+  { id: 'retryctx', name: 'Redo context', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [1620, 0],
+    parameters: { operation: 'executeQuery',
+      query: "select coalesce((select string_agg(case when t = 'human' then 'You: ' else 'Bot: ' end || left(regexp_replace(c, '\\s*\\[live data, fetched just now:.*$', '', 's'), 600), ' | ' order by id) from (select id, message->>'type' as t, message->>'content' as c from n8n_chat_histories where session_id = $1::text and message->>'type' in ('human', 'ai') order by id desc offset 2 limit 2) h), 'nothing') as previous",
+      options: { queryReplacement: "={{ $('Agent input').first().json.chat_id }}" } },
+    credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true },
+
+  { id: 'agent2', name: 'Guarded agent', type: '@n8n/n8n-nodes-langchain.agent', typeVersion: 3.1, position: [1780, 0],
+    parameters: { promptType: 'define',
+      text: "={{ $('Agent input').first().json.text }}\n\n[previous exchange, for reference: {{ $json.previous }}]\n[live data, fetched just now: latest runs: {{ $('Agent input').first().json.runs }}]\n[live data, feed lookup run just now for this message: {{ JSON.stringify($('Prefetch').first().json).slice(0, 7000) }}]\n[Your first answer to this was rejected because it described the feed without checking it. Answer ONLY from the feed lookup above (list items with their n); call a tool only if the lookup clearly does not answer the question.]",
+      options: { systemMessage: SYSTEM.replace(/\{\{ \$json\.(sources|runs) \}\}/g, "{{ $('Agent input').first().json.$1 }}"), maxIterations: 6 } } },
+
+  // put the corrected answer into memory in place of the rejected one (base64
+  // keeps free text out of the comma-split queryReplacement)
+  { id: 'fixmem', name: 'Fix memory', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [1940, -100],
+    parameters: { operation: 'executeQuery',
+      query: "update n8n_chat_histories set message = jsonb_set(message, '{content}', to_jsonb(convert_from(decode($2, 'base64'), 'UTF8'))) where id = (select max(id) from n8n_chat_histories where session_id = $1::text and message->>'type' = 'ai') returning id",
+      options: { queryReplacement: "={{ $('Agent input').first().json.chat_id }},{{ Buffer.from(String($json.output || ''), 'utf8').toString('base64') }}" } },
+    credentials: { postgres: CRED_PG }, alwaysOutputData: true, onError: 'continueRegularOutput' },
+
+  // memory keeps the conversation, not the bulk: drop tool calls + raw tool
+  // output (n8n saves full results — 10 feed items — and offers no switch to
+  // stop it) and the per-message [live data ...] suffix.
+  { id: 'tidy', name: 'Tidy memory', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [1600, 300],
+    parameters: { operation: 'executeQuery',
+      query: "with d as (delete from n8n_chat_histories where session_id = $1::text and (message->>'type' = 'tool' or (message->>'type' = 'ai' and jsonb_typeof(message->'tool_calls') = 'array' and jsonb_array_length(message->'tool_calls') > 0)) returning 1), " +
+        "u as (update n8n_chat_histories set message = jsonb_set(message, '{content}', to_jsonb(regexp_replace(message->>'content', '\\s*\\[live data, fetched just now:.*$', '', 's'))) where session_id = $1::text and message->>'type' = 'human' and message->>'content' like '%[live data, fetched just now:%' returning 1) " +
+        "select (select count(*) from d) as dropped, (select count(*) from u) as stripped",
+      options: { queryReplacement: "={{ $('Agent input').first().json.chat_id }}" } },
+    credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true, onError: 'continueRegularOutput' },
+
+  MODEL_NODE,
 
   { id: 'memory', name: 'Chat memory', type: '@n8n/n8n-nodes-langchain.memoryPostgresChat', typeVersion: 1.3, position: [1160, 320],
-    parameters: { sessionIdType: 'customKey', sessionKey: '={{ $json.chat_id }}', contextWindowLength: 10 },
+    parameters: { sessionIdType: 'customKey', sessionKey: '={{ $json.chat_id }}', contextWindowLength: 10 }, // 10 exchanges. Safe only because of 'Tidy memory' + 'Guard check' below — see shared/answer-guard.js
     credentials: { postgres: CRED_PG } },
 
   tool('run_discovery',
     "Run ONE search source now. COSTS MONEY AND ~6 MINUTES. " +
     "Call it immediately ONLY when the user used an explicit search verb — search, find me, look up, go get, dig into, run a search. " +
-    "For anything phrased as a question ('what's happening with X', 'anything on X', 'how is X going') you MUST reply with a one-line proposal and STOP, without calling this tool. Call it on their next message only if they said yes. Asking costs one line; guessing wrong costs six minutes of their machine. " +
+    "For anything phrased as a question ('what's happening with X', 'anything on X', 'how is X going') do NOT call this tool: read query_feed instead and offer this search in one line. Call it on their next message only if they said yes. Asking costs one line; guessing wrong costs six minutes of their machine. " +
     "Params: source (exa|tavily|brave|rss), query. exa = conceptual or thematic digs. tavily = a specific named topic. brave = broad general sweep. rss = recency from known feeds ('anything new today', cheap, no confirmation needed). Does NOT read past results.",
     WF.run_discovery,
     { source: { desc: 'one of exa, tavily, brave, rss' },
@@ -179,48 +313,64 @@ return [{ json: { chat_id, output: text } }];
       trigger: { fixed: 'agent' } }, [1300, 320]),
 
   tool('full_sweep',
-    "Run ALL discovery sources (exa, tavily, brave, rss). Only for 'sweep', 'go wide', 'full run'. Expensive — always confirm with the user first. Only call after the user has confirmed.",
+    "Run ALL discovery sources (exa, tavily, brave, rss). The most expensive action there is. NEVER call it in response to the message that first asks for it — 'sweep', 'go wide', 'full run on X' get a one-line confirmation question and nothing else. " +
+    "Call it ONLY when your previous message asked to confirm a sweep and the user's reply is a yes.",
     WF.full_sweep,
     { query: { desc: 'optional focus query; empty string runs the default sweep' },
-      trigger: { fixed: 'agent' } }, [1440, 320]),
+      trigger: { fixed: 'agent' },
+      // filled by n8n, not the model: WF-40's gate needs the user's actual words
+      // and which chat they came from
+      user_message: { fixed: "={{ $('Agent input').first().json.text }}" },
+      chat_id: { fixed: "={{ $('Agent input').first().json.chat_id }}" } }, [1440, 320]),
 
   tool('scrape_url',
-    'Ingest one URL the user pasted. Use whenever the message contains a link. Cheap — execute immediately, no confirmation.',
+    'Ingest the links the user pasted: articles, PDFs, YouTube videos, podcast and audio links. Call it ONCE per message, even when the message has several links — it reads every link in the message itself. Cheap — execute immediately, no confirmation. ' +
+    'Also call it, with url empty, when the user just says transcribe / listen / hear after being told a video has no captions. ' +
+    'Videos are summarised in the background and each summary arrives as its own Telegram message; words like slides, deck, presentation, watch, look (read the screen) or transcribe, listen, hear (use the audio) in the message are picked up automatically. ' +
+    'Reply with ONE short line based on the note it returns. Never write a summary of a video yourself.',
     WF.scrape_url,
-    { url: { desc: 'the full URL to scrape' },
-      trigger: { fixed: 'agent' } }, [1580, 320]),
+    { url: { desc: 'one URL from the message (any of them), or empty for a bare transcribe request' },
+      trigger: { fixed: 'agent' },
+      user_message: { fixed: "={{ $('Agent input').first().json.text }}" } }, [1580, 320]),
 
   tool('query_feed',
     "Read EXISTING triaged results. Use for 'what did you find', 'show me', 'anything good last night'. NEVER triggers a new run. " +
     "CRITICAL: if the question implies ANY time window — today, tonight, last night, this morning, yesterday, this week, recently, just now — you MUST pass `since` as an ISO timestamp you compute from the current time given above. Omitting it returns the whole archive, and you will report old items as if they were new. " +
     "Only omit `since` for questions with no time element at all ('show me the best stuff', 'anything on agents'). " +
+    "FILTERS COME ONLY FROM THE USER'S CURRENT WORDS. 'anything on X?' / 'what about X' / 'what do we have on X' = tag ONLY: no min_score, no max_age_days, no since — even if earlier messages asked for 'good' or 'this week'. Add min_score only when this message says good/best/top/worth reading; add a time filter only when this message names a time. Keep the user's topic words as they are; do not add words like 'ai' to tag. " +
     "Items are scored on two axes: specificity (1-5, how concrete and verifiable the claims are — vendor SEO content scores low) and angle_strength (1-5, how non-obvious the publishable hook is). score = the two added, 2-10. Use min_score 7+ for 'the good stuff', 8+ for 'only the best'. " +
     "Quality and recency are separate knobs and combine freely: min_score filters how good, max_age_days filters how fresh. 'anything good this week' = min_score 7 + max_age_days 7. Results always come back best-first. " +
     "Set group_stories to 'true' when the user wants an overview rather than every article — it collapses multiple outlets covering the same event into one row with an articles count. Prefer it for 'what's happening with X', 'catch me up', 'what did I miss'. Leave empty when they want individual pieces to read. " +
-    "DO NOT invent a tag. Leave tag empty unless the user names a topic you have actually seen in earlier results — a guessed tag silently filters almost everything out and makes an empty feed look like an empty world. Time words and quality belong in max_age_days and min_score, never in tag. " +
+    "Put the question's topic in tag ('nvidia export control'). It matches by keyword AND by meaning, so plain wording works ('AI that can buy things' finds agent-payment items). For several topics at once — comparisons, 'X and Y' — separate them with | ('nigeria ai | bangladesh bank'), up to 3; each topic gets its own share of the results and every item says which topic it matched. With a topic, results come back most-relevant-first. If a topic search comes back empty, the feed really has nothing on it: say so and offer a search. Time words and quality belong in max_age_days and min_score, never in tag. " +
+    "Every item has a number n. Show it when you list items; follow-ups like 'the first one' go to get_item, not here. " +
     "Params: max_age_days (days since publication), min_score (2-10), since (ISO timestamp, for an exact cutoff), tag, limit (default 20), group_stories, min_relevance (legacy, leave empty).",
     WF.query_feed,
     { group_stories: { desc: "'true' to collapse duplicate coverage of one event into a single row, empty for every article" },
-      max_age_days: { desc: 'only items published within this many days, empty for any age' },
-      min_score: { desc: 'minimum combined score 2-10, empty for none' },
+      max_age_days: { desc: 'only when THIS message names a time window; otherwise empty' },
+      min_score: { desc: 'only when THIS message asks for good/best items; otherwise empty' },
       since: { desc: 'ISO timestamp lower bound, empty for none' },
-      tag: { desc: 'leave empty unless the user named a topic you have seen in the feed; partial matches work' },
+      tag: { desc: 'the topic from the question (e.g. \'nvidia export control\'); several topics separated by | (max 3); empty for no topic. Matched by keyword and by meaning. Never put time words or quality words here' },
       limit: { desc: 'max items to return, empty for default 20' },
-      min_relevance: { desc: 'legacy 1-5 filter, leave empty' } }, [1720, 320]),
+      min_relevance: { desc: 'legacy 1-5 filter, leave empty' },
+      item: { fixed: '' },
+      chat_id: { fixed: "={{ $('Agent input').first().json.chat_id }}" } }, [1720, 320]),
+
+  // Same workflow as query_feed, ITEM mode: resolves n against chat_results, the
+  // list WF-31 stored for this chat. Its own tool because the router follows
+  // tool descriptions far more than the system prompt (CLAUDE.md, Models).
+  tool('get_item',
+    "Fetch ONE item from the list you last showed in this chat, by its number n, with an excerpt of the saved article. Use for every follow-up about a listed item: 'the first one', '#3', 'tell me more about number 2', 'what does 4 say', '1. especially the global south part'. " +
+    "Never re-run query_feed for these — a new query returns a different list. Answer from the summary and page_excerpt it returns. If it says the item is not found, ask which item they mean.",
+    WF.query_feed,
+    { item: { desc: 'the number n of the item in your last list, e.g. 3' },
+      chat_id: { fixed: "={{ $('Agent input').first().json.chat_id }}" },
+      since: { fixed: '' }, min_relevance: { fixed: '' }, tag: { fixed: '' }, limit: { fixed: '' },
+      min_score: { fixed: '' }, max_age_days: { fixed: '' }, group_stories: { fixed: '' } }, [1790, 440]),
 
   tool('run_status',
     "Report recent runs: when, scope, counts, ok/partial/failed. Use for 'did last night's run work', 'when did you last run', 'did anything break'.",
     WF.run_status,
     { limit: { desc: 'how many recent runs to return, empty for default 5' } }, [1860, 320]),
-
-  tool('manage_schedule',
-    "Create, cancel or list schedules. Params: action (create_recurring|create_onetime|cancel|list); cron (for create_recurring, 5-field, Asia/Dhaka); run_at (for create_onetime, ISO timestamp); label; id (for cancel). Echo the parsed schedule back for confirmation BEFORE calling create.",
-    WF.manage_schedule,
-    { action: { desc: 'create_recurring, create_onetime, cancel, or list' },
-      cron: { desc: '5-field cron expression for create_recurring, else empty' },
-      run_at: { desc: 'ISO timestamp for create_onetime, else empty' },
-      label: { desc: 'short human label for the schedule, optional' },
-      id: { desc: 'schedule id for cancel, else empty' } }, [2000, 320]),
 
   tool('manage_sources',
     "Add, remove or list RSS feeds. Use for 'add this feed', 'stop following X', 'what feeds are you watching'. Params: action (add|remove|list); url (for add/remove); label (optional); id (for remove).",
@@ -259,21 +409,31 @@ const connections = {
   'Test normalize': { main: [[{ node: 'Feed switch?', type: 'main', index: 0 }]] },
   'Feed switch?': { main: [
     [{ node: 'Toggle drain', type: 'main', index: 0 }],
-    [{ node: 'Overseer Agent', type: 'main', index: 0 }]
+    [{ node: 'Agent context', type: 'main', index: 0 }]
   ] },
   'Toggle drain': { main: [[{ node: 'Switch reply', type: 'main', index: 0 }]] },
   'Switch reply': { main: [[{ node: 'Send reply', type: 'main', index: 0 }]] },
-  'OpenRouter Haiku': { ai_languageModel: [[{ node: 'Overseer Agent', type: 'ai_languageModel', index: 0 }]] },
+  [MODEL_NODE.name]: { ai_languageModel: [[{ node: 'Overseer Agent', type: 'ai_languageModel', index: 0 }, { node: 'Guarded agent', type: 'ai_languageModel', index: 0 }]] },
   'Chat memory': { ai_memory: [[{ node: 'Overseer Agent', type: 'ai_memory', index: 0 }]] },
-  'run_discovery': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }]] },
-  'full_sweep': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }]] },
-  'scrape_url': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }]] },
-  'query_feed': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }]] },
-  'run_status': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }]] },
-  'manage_schedule': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }]] },
-  'manage_sources': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }]] },
-  'Overseer Agent': { main: [[{ node: 'Prep reply', type: 'main', index: 0 }]] },
-  'Prep reply': { main: [[{ node: 'Send reply', type: 'main', index: 0 }]] }
+  'run_discovery': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }, { node: 'Guarded agent', type: 'ai_tool', index: 0 }]] },
+  'full_sweep': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }, { node: 'Guarded agent', type: 'ai_tool', index: 0 }]] },
+  'scrape_url': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }, { node: 'Guarded agent', type: 'ai_tool', index: 0 }]] },
+  'query_feed': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }, { node: 'Guarded agent', type: 'ai_tool', index: 0 }]] },
+  'get_item': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }, { node: 'Guarded agent', type: 'ai_tool', index: 0 }]] },
+  'run_status': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }, { node: 'Guarded agent', type: 'ai_tool', index: 0 }]] },
+  'manage_sources': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }, { node: 'Guarded agent', type: 'ai_tool', index: 0 }]] },
+  'Agent context': { main: [[{ node: 'Agent input', type: 'main', index: 0 }]] },
+  'Agent input': { main: [[{ node: 'Has link?', type: 'main', index: 0 }]] },
+  'Has link?': { main: [[{ node: 'Ingest links', type: 'main', index: 0 }], [{ node: 'Overseer Agent', type: 'main', index: 0 }]] },
+  'Ingest links': { main: [[{ node: 'Link note', type: 'main', index: 0 }]] },
+  'Link note': { main: [[{ node: 'Overseer Agent', type: 'main', index: 0 }]] },
+  'Overseer Agent': { main: [[{ node: 'Guard check', type: 'main', index: 0 }]] },
+  'Guard check': { main: [[{ node: 'Redo?', type: 'main', index: 0 }]] },
+  'Redo?': { main: [[{ node: 'Prefetch', type: 'main', index: 0 }], [{ node: 'Prep reply', type: 'main', index: 0 }]] },
+  'Prefetch': { main: [[{ node: 'Redo context', type: 'main', index: 0 }]] },
+  'Redo context': { main: [[{ node: 'Guarded agent', type: 'main', index: 0 }]] },
+  'Guarded agent': { main: [[{ node: 'Prep reply', type: 'main', index: 0 }, { node: 'Fix memory', type: 'main', index: 0 }]] },
+  'Prep reply': { main: [[{ node: 'Send reply', type: 'main', index: 0 }, { node: 'Tidy memory', type: 'main', index: 0 }]] }
 };
 
 const workflow = { name: 'WF-00 agent_router', nodes, connections,

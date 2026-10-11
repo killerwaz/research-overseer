@@ -6,7 +6,8 @@
     "lmstudio":   { "id": "JsTIc0R9trd31PsV", "name": "lmstudio-bearer" },
     "firecrawl":  { "id": "J7cbHkpEdHeUIhif", "name": "firecrawl-api" },
     "telegram":   { "id": "6RLwMp4ODoesGE4v", "name": "telegram-overseer-bot" },
-    "openrouter": { "id": "CZJ5Mo20Hr8BNBxG", "name": "openrouter-api" }
+    "openrouter": { "id": "CZJ5Mo20Hr8BNBxG", "name": "openrouter-api" },
+    "lmstudio_openai": { "id": "7FnRHC0HF6R3yzW8", "name": "lmstudio-openai" }
   },
   "workflows": {
     "wf00-agent-router": "VQha8UiuOesJYa11",
@@ -24,6 +25,7 @@
     "wf40-full-sweep": "du4KagpWdi5AT84v",
     "wf41-run-discovery": "ccdGJn47aX7PHBti",
     "wf42-scrape-url": "fzgIhUYkPOaSdCUu",
+    "wf43-media-queue": "wsaWy5VQOvilEzjR",
     "wf99-error-workflow": "PNJMA4NbQGmp1xKv",
     "tools/zz-sql-runner": "8j9wepeJJdgAGiDQ",
     "tools/zz-test-harness": "P1AzZsL482pg0euG",

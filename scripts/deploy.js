@@ -51,6 +51,7 @@ async function main() {
     __TG_TOKEN__: env.TELEGRAM_BOT_TOKEN,
     __TG_CHAT__: env.TG_CHAT_ID,
     __ZZ_SECRET__: env.ZZ_WEBHOOK_SECRET,
+    __MEDIA_TOKEN__: env.MEDIA_TOKEN,
     __BEAT__: loadBeat()
   };
   // __WF31__ / __WF40_ID__ style tokens resolve to workflow ids by number.

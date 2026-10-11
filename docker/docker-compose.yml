@@ -1,4 +1,4 @@
-# Research Overseer's two containers. n8n and Crawl4AI share the user-defined network
+# Research Overseer's containers: n8n, Crawl4AI and the media service share the user-defined network
 # "overseer" (n8n reaches Crawl4AI as http://crawl4ai:11235). LM Studio runs
 # natively on the host and is reached as http://host.docker.internal:1234 —
 # it is NOT a container, see README.
@@ -48,9 +48,34 @@ services:
     networks:
       - overseer
 
+  # YouTube / podcast transcripts, Parakeet speech-to-text, on-screen frames
+  # (media/server.py). n8n reaches it as http://media:8765. Its outbound
+  # requests leave through this PC's home connection, like a native program.
+  # Port published on loopback only, for debugging; the bearer token gates it.
+  media:
+    build: ../media
+    image: research-overseer-media
+    container_name: media
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8765:8765"
+    environment:
+      - MEDIA_TOKEN=${MEDIA_TOKEN}
+      - LMSTUDIO_API_KEY=${LMSTUDIO_API_KEY}
+      - LMSTUDIO_BASE=http://host.docker.internal:1234
+      - TZ=Asia/Dhaka
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - media_data:/data
+    networks:
+      - overseer
+
 volumes:
   n8n_data:
     external: true
+  media_data:
+    name: media_data
 
 networks:
   overseer:

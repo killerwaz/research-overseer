@@ -1,15 +1,18 @@
-// Builds workflows/wf30-poller.json, embedding shared/cron-match.js into the
-// evaluation Code node. Run: node scripts/build-wf30.js
+// Builds workflows/wf30-poller.json. Run: node scripts/build-wf30.js
+//
+// 2026-10-09: scheduling removed — the agent is chat-only (research runs when
+// asked on Telegram, never on a timer). The 5-minute trigger now only drives the
+// opt-in backlog drain, the LM Studio watch and the backlog notice.
+// shared/cron-match.js and the schedules table are kept but no longer read.
 const fs = require('fs');
 const path = require('path');
 
-// Instance-local ids live in instance.json; chat id and WF-40 id are
-// substituted at deploy time by scripts/deploy.js.
+// Instance-local ids live in instance.json; the chat id is substituted at
+// deploy time by scripts/deploy.js.
 const I = require('./instance.json');
 const CRED_PG = I.credentials.postgres;
 const CRED_TG = I.credentials.telegram;
 const CRED_LM = I.credentials.lmstudio;
-const WF40_ID = '__WF40_ID__'; // substituted at deploy time
 const WF21_ID = I.workflows['wf21-triage-one'];
 const CHAT_ID = '__TG_CHAT__';
 
@@ -33,7 +36,9 @@ select rd.id as raw_doc_id,
        coalesce(rd.run_id, 0) as run_id,
        -- raw_docs has no source column; seen_urls records it at ingest
        coalesce((select su.source from seen_urls su where su.canonical_url = rd.canonical_url), '') as source,
-       left(rd.markdown, 8000) as markdown,
+       coalesce(rd.scraper, '') as scraper,
+       -- a media transcript is read at the media profile's 60k, not cut to 8k
+       case when rd.scraper like 'media:%' then rd.markdown else left(rd.markdown, 8000) end as markdown,
        (select count(*) from backlog) as backlog_total
 from raw_docs rd
 where rd.id in (select id from backlog)
@@ -70,10 +75,15 @@ const inlineShared = (f) => fs.readFileSync(path.join(__dirname, '..', 'shared',
 
 // Same profiles as the live pipeline — the drain must not score documents on
 // different settings than a normal run would have.
-const BUILD_BODY = inlineShared('triage-config.js') + `
+// A media doc (scraper 'media:...') gets the media profile and the media skill,
+// exactly as WF-20's Prep media builds it, so a re-triage keeps its key points.
+const BUILD_BODY = inlineShared('triage-config.js') + inlineShared('triage-validate.js') + inlineShared('media.js') + `
 return $input.all().map(i => {
   const d = i.json;
-  const prof = profileFor(d.source);
+  const isMedia = String(d.scraper || '').startsWith('media:');
+  const prof = isMedia ? TRIAGE_PROFILES.media : profileFor(d.source);
+  const sys = isMedia ? TRIAGE_SYSTEM + '\\n\\nADDITIONAL EXTRACTION\\n' + MEDIA_SKILL_PROMPT : TRIAGE_SYSTEM;
+  const schema = isMedia ? withSkill(TRIAGE_SCHEMA, MEDIA_SKILL_SCHEMA) : TRIAGE_SCHEMA;
   const dhaka = new Date(Date.now() + 6 * 3600 * 1000).toISOString().slice(0, 10);
   const pub = d.published_at ? String(d.published_at).slice(0, 10) : 'unknown';
   const user = 'TODAY: ' + dhaka + '\\n' + 'PUBLISHED: ' + pub + '\\n' +
@@ -87,31 +97,12 @@ return $input.all().map(i => {
     run_id: d.run_id,
     triage_body: JSON.stringify({
       model: prof.model, temperature: 0.2, max_tokens: prof.max_tokens,
-      response_format: TRIAGE_SCHEMA,
-      messages: [ { role: 'system', content: TRIAGE_SYSTEM }, { role: 'user', content: user } ]
+      reasoning_effort: prof.reasoning_effort, response_format: schema,
+      messages: [ { role: 'system', content: sys }, { role: 'user', content: user } ]
     })
   } };
 });
 `.trim();
-
-let cronLib = fs.readFileSync(path.join(__dirname, '..', 'shared', 'cron-match.js'), 'utf8');
-cronLib = cronLib.slice(0, cronLib.indexOf('if (typeof module')); // strip exports
-
-const EVAL = cronLib + `
-const nowE = Math.floor(Date.now() / 1000);
-const due = [];
-for (const item of $input.all()) {
-  const j = item.json || {};
-  if (!j.id) continue;
-  if (j.type === 'onetime') { due.push(j); continue; }
-  if (j.type === 'recurring' && j.cron) {
-    const lastE = j.last_run_e ? Number(j.last_run_e) : nowE - 330;
-    const from = Math.max(lastE, nowE - 6 * 3600);
-    if (cronFiredInWindow(j.cron, from, nowE)) due.push(j);
-  }
-}
-return due.map(j => ({ json: { id: j.id, type: j.type, label: j.label || '' } }));
-`;
 
 const workflow = {
   name: 'WF-30 poller',
@@ -119,38 +110,7 @@ const workflow = {
     { id: 'sched', name: 'Every 5 min', type: 'n8n-nodes-base.scheduleTrigger', typeVersion: 1.2, position: [0, 0],
       parameters: { rule: { interval: [ { field: 'minutes', minutesInterval: 5 } ] } } },
 
-    { id: 'getdue', name: 'Get candidates', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [200, 0],
-      parameters: { operation: 'executeQuery',
-        query: "select id, type, cron, label, extract(epoch from last_run) as last_run_e from schedules where active and ((type = 'onetime' and run_at <= now()) or (type = 'recurring' and cron is not null))",
-        options: {} },
-      credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true },
-
-    { id: 'eval', name: 'Evaluate due', type: 'n8n-nodes-base.code', typeVersion: 2, position: [400, 0],
-      parameters: { mode: 'runOnceForAllItems', jsCode: EVAL } },
-
-    // last_run is stamped BEFORE firing so a >5min sweep cannot double-fire
-    { id: 'mark', name: 'Mark fired', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [600, 0],
-      parameters: { operation: 'executeQuery',
-        query: "update schedules set last_run = now(), active = case when type = 'onetime' then false else active end where id = $1::bigint returning id",
-        options: { queryReplacement: '={{ $json.id }}' } },
-      credentials: { postgres: CRED_PG } },
-
-    { id: 'fire', name: 'Fire full sweep', type: 'n8n-nodes-base.executeWorkflow', typeVersion: 1.2, position: [800, 0],
-      parameters: {
-        workflowId: { __rl: true, value: WF40_ID, mode: 'id' },
-        workflowInputs: {
-          mappingMode: 'defineBelow',
-          value: { query: '', trigger: 'schedule' },
-          matchingColumns: [],
-          schema: [
-            { id: 'query', displayName: 'query', required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: 'string' },
-            { id: 'trigger', displayName: 'trigger', required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: 'string' }
-          ]
-        },
-        options: { waitForSubWorkflow: false }
-      } },
-
-    // ---- backlog drain (independent of scheduling) ----
+    // ---- backlog drain ----
     { id: 'findbacklog', name: 'Find backlog', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [200, 200],
       parameters: { operation: 'executeQuery', query: FIND_BACKLOG, options: {} },
       credentials: { postgres: CRED_PG }, alwaysOutputData: true },
@@ -245,7 +205,6 @@ return [{ json: { lm_state: up ? 'up' : 'down' } }];
   ],
   connections: {
     'Every 5 min': { main: [[
-      { node: 'Get candidates', type: 'main', index: 0 },
       { node: 'Find backlog', type: 'main', index: 0 },
       { node: 'Check idle backlog', type: 'main', index: 0 },
       { node: 'Ping LM Studio', type: 'main', index: 0 }
@@ -257,10 +216,7 @@ return [{ json: { lm_state: up ? 'up' : 'down' } }];
     'Build triage body': { main: [[{ node: 'Drain triage', type: 'main', index: 0 }]] },
     'Check idle backlog': { main: [[{ node: 'Should ask?', type: 'main', index: 0 }]] },
     'Should ask?': { main: [[{ node: 'Stamp notice', type: 'main', index: 0 }], []] },
-    'Stamp notice': { main: [[{ node: 'Send notice', type: 'main', index: 0 }]] },
-    'Get candidates': { main: [[{ node: 'Evaluate due', type: 'main', index: 0 }]] },
-    'Evaluate due': { main: [[{ node: 'Mark fired', type: 'main', index: 0 }]] },
-    'Mark fired': { main: [[{ node: 'Fire full sweep', type: 'main', index: 0 }]] }
+    'Stamp notice': { main: [[{ node: 'Send notice', type: 'main', index: 0 }]] }
   },
   settings: { executionOrder: 'v1', errorWorkflow: 'PNJMA4NbQGmp1xKv' }
 };
