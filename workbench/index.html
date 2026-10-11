@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Overseer Workbench</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6b66; --line: #e3e2dd;
+    --keep: #1d1d1b; --drop: #b42318; --drop-bg: #fdecea; --accent: #2f5bd3; --chip: #eceae4; --ok: #187a3e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #161615; --panel: #1f1f1d; --ink: #ecebe6; --muted: #9b9a93; --line: #33332f;
+      --keep: #ecebe6; --drop: #ff8a7a; --drop-bg: #3a1e1a; --accent: #7fa2ff; --chip: #2b2b28; --ok: #6fd39a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { position: sticky; top: 0; z-index: 2; background: var(--bg); border-bottom: 1px solid var(--line); padding: 12px 16px; }
+  h1 { font-size: 16px; margin: 0 0 2px; }
+  .live { color: var(--muted); font-size: 12px; }
+  .live b { color: var(--ok); font-weight: 600; }
+  .flash { animation: flash 1.2s ease-out; }
+  @keyframes flash { from { background: color-mix(in srgb, var(--accent) 25%, transparent); } to { background: transparent; } }
+  .stats { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; min-width: 110px; }
+  .stat .v { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .filters { margin-top: 10px; display: flex; gap: 6px; flex-wrap: wrap; }
+  .filters button { border: 1px solid var(--line); background: var(--chip); color: var(--ink); border-radius: 999px; padding: 3px 12px; cursor: pointer; font: inherit; font-size: 13px; }
+  .filters button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  main { padding: 12px 16px 40px; max-width: 1400px; margin: 0 auto; }
+  details.page { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; margin-bottom: 8px; }
+  details.page > summary { list-style: none; cursor: pointer; padding: 10px 12px; display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-items: baseline; }
+  details.page > summary::-webkit-details-marker { display: none; }
+  .ttl { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .meta { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .bar { grid-column: 1 / -1; height: 4px; background: var(--drop-bg); border-radius: 2px; overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--ok); }
+  .tag { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 4px; background: var(--chip); color: var(--muted); margin-right: 6px; }
+  .tag.empty { background: var(--drop-bg); color: var(--drop); }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 0 12px 12px; }
+  @media (max-width: 800px) { .cols { grid-template-columns: 1fr; } }
+  .col h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 4px 0 6px; }
+  .raw, .chunk { font: 12px/1.45 ui-monospace, "Cascadia Mono", Consolas, monospace; white-space: pre-wrap; word-break: break-word; }
+  .raw { max-height: 70vh; overflow: auto; border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+  .raw div { color: var(--keep); }
+  .raw div.d { color: var(--drop); background: var(--drop-bg); text-decoration: line-through; text-decoration-thickness: 1px; }
+  .raw div.d:hover::after { content: "  ← " attr(data-r); text-decoration: none; display: inline; font-style: italic; }
+  .chunks { max-height: 70vh; overflow: auto; }
+  .chunk { border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; margin-bottom: 6px; }
+  .chunk .h { color: var(--accent); font-weight: 600; display: block; margin-bottom: 2px; }
+  .more { margin-top: 6px; font: inherit; font-size: 12px; cursor: pointer; background: none; border: 1px solid var(--line); color: var(--accent); border-radius: 6px; padding: 2px 8px; }
+  .empty-state { color: var(--muted); padding: 40px 0; text-align: center; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Overseer Workbench · Cleaning saved pages</h1>
+  <div class="live" id="live">waiting for data… run <code>npm run workbench:chunks</code></div>
+  <div class="stats" id="stats"></div>
+  <div class="filters" id="filters"></div>
+</header>
+<main id="main"><div class="empty-state">No data yet.</div></main>
+<script>
+const RAW_LIMIT = 800;
+let data = null, stamp = '', filter = 'all';
+const open = new Set();
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const k = (n) => n >= 10000 ? Math.round(n / 1000) + 'k' : n.toLocaleString();
+const group = (s) => s.startsWith('media:') ? 'media' : s;
+const ts = (s) => { s = Math.round(s); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60;
+  return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(x).padStart(2, '0'); };
+
+function stats(pages) {
+  const raw = pages.reduce((a, p) => a + p.raw_chars, 0), kept = pages.reduce((a, p) => a + p.cleaned_chars, 0);
+  const ch = pages.reduce((a, p) => a + p.chunks.length, 0), empty = pages.filter((p) => !p.chunks.length).length;
+  return [['pages', pages.length], ['chars before', k(raw)], ['chars after', k(kept)],
+    ['kept', Math.round(100 * kept / (raw || 1)) + '%'], ['passages', ch],
+    ['per page', (ch / (pages.length || 1)).toFixed(1)], ['empty pages', empty]];
+}
+
+function render() {
+  if (!data) return;
+  const pages = data.pages.filter((p) => filter === 'all' || group(p.scraper) === filter);
+  document.getElementById('stats').innerHTML = stats(pages).map(([key, v]) =>
+    '<div class="stat"><div class="v">' + v + '</div><div class="k">' + key + '</div></div>').join('');
+  const groups = ['all', ...new Set(data.pages.map((p) => group(p.scraper)))];
+  document.getElementById('filters').innerHTML = groups.map((g) =>
+    '<button data-g="' + g + '" class="' + (g === filter ? 'on' : '') + '">' + g + '</button>').join('');
+  document.getElementById('main').innerHTML = pages.map((p) => {
+    const pct = Math.round(100 * p.cleaned_chars / (p.raw_chars || 1));
+    return '<details class="page" data-id="' + p.id + '"' + (open.has(p.id) ? ' open' : '') + '><summary>' +
+      '<span class="ttl"><span class="tag">' + esc(p.scraper) + '</span>' + (p.chunks.length ? '' : '<span class="tag empty">empty</span>') +
+      '#' + p.id + ' ' + esc(p.title || p.url) + '</span>' +
+      '<span class="meta">' + k(p.raw_chars) + ' → ' + k(p.cleaned_chars) + ' chars · ' + pct + '% · ' + p.chunks.length + ' passages</span>' +
+      '<span class="bar"><i style="width:' + pct + '%"></i></span></summary>' +
+      (open.has(p.id) ? body(p) : '') + '</details>';
+  }).join('') || '<div class="empty-state">No pages.</div>';
+}
+
+function body(p) {
+  const all = p.showAll ? p.lines : p.lines.slice(0, RAW_LIMIT);
+  const raw = all.map((l) => '<div' + (l.keep ? '' : ' class="d" data-r="' + esc(l.reason) + '"') + '>' + (esc(l.line) || '&nbsp;') + '</div>').join('');
+  const more = p.lines.length > all.length ? '<button class="more" data-more="' + p.id + '">show all ' + p.lines.length + ' lines</button>' : '';
+  const chunks = p.chunks.map((c) => '<div class="chunk"><span class="h">#' + c.n + (c.start_s != null ? ' · ' + ts(c.start_s) : '') +
+    ' · ' + c.chars + ' chars</span>' + esc(c.text) + '</div>').join('') || '<div class="empty-state">No passages — nothing worth keeping.</div>';
+  return '<div class="cols"><div class="col"><h3>Saved page · <span style="color:var(--drop)">removed lines struck out</span> · <a href="' + esc(p.url) + '" target="_blank" rel="noopener">source</a></h3>' +
+    '<div class="raw">' + raw + '</div>' + more + '</div><div class="col"><h3>Passages that would be searched</h3><div class="chunks">' + chunks + '</div></div></div>';
+}
+
+document.addEventListener('click', (e) => {
+  const g = e.target.closest('[data-g]'); if (g) { filter = g.dataset.g; render(); return; }
+  const m = e.target.closest('[data-more]'); if (m) { const p = data.pages.find((x) => x.id == m.dataset.more); p.showAll = true; render(); }
+});
+document.addEventListener('toggle', (e) => {
+  const d = e.target; if (!d.matches || !d.matches('details.page')) return;
+  const id = Number(d.dataset.id);
+  if (d.open) {
+    open.add(id);
+    if (!d.querySelector('.cols')) d.insertAdjacentHTML('beforeend', body(data.pages.find((p) => p.id === id)));
+  } else open.delete(id);
+}, true);
+
+async function poll() {
+  try {
+    const r = await fetch('data/chunks.json?t=' + Date.now(), { cache: 'no-store' });
+    if (r.ok) {
+      const j = await r.json();
+      if (j.generated_at !== stamp) {
+        const first = !stamp; stamp = j.generated_at; data = j; render();
+        const live = document.getElementById('live');
+        live.innerHTML = '<b>●</b> live · data from ' + new Date(stamp).toLocaleTimeString() + ' · checking every 3 s';
+        if (!first) { document.getElementById('stats').classList.remove('flash'); void document.body.offsetWidth; document.getElementById('stats').classList.add('flash'); }
+      }
+    }
+  } catch (e) {}
+  setTimeout(poll, 3000);
+}
+poll();
+</script>
+</body>
+</html>
