@@ -31,7 +31,8 @@ for (const item of urls) {
   const c = obj.url ? canon(obj.url) : null;
   if (!c) continue;
   out.push({ json: { url: obj.url, title: obj.title || null, source: obj.source || null,
-    published_at: obj.published_at || null, canonical_url: c, run_id: runId } });
+    published_at: obj.published_at || null, canonical_url: c, run_id: runId,
+    slides: Boolean(obj.slides), transcribe: Boolean(obj.transcribe) } });
 }
 if (!out.length) return [{ json: { __no_new: true, run_id: runId, debug: lastErr } }];
 return out;
@@ -47,26 +48,37 @@ const query = 'select canonical_url from seen_urls where canonical_url in (' +
 return [{ json: { query } }];
 `.trim();
 
-const FILTER_NEW = `
+const FILTER_NEW_BODY = `
 const runId = $('Create run').first().json.run_id;
 const seen = new Set($input.all().map(i => i.json && i.json.canonical_url).filter(Boolean));
 let candidates = [];
 try { candidates = $('Canonicalize').all().map(i => i.json).filter(j => !j.__no_new); } catch (e) {}
 const byCanon = new Map();
-for (const c of candidates) if (!seen.has(c.canonical_url) && !byCanon.has(c.canonical_url)) byCanon.set(c.canonical_url, c);
+// A media link that asks for more (slides / transcribe) is processed again even
+// when already in the feed; Insert doc then replaces the old rows.
+const wantsMore = (c) => isMediaUrl(c.canonical_url) && (c.slides || c.transcribe);
+for (const c of candidates) if ((!seen.has(c.canonical_url) || wantsMore(c)) && !byCanon.has(c.canonical_url)) byCanon.set(c.canonical_url, c);
 const fresh = [...byCanon.values()];
 if (!fresh.length) return [{ json: { __no_new: true, run_id: runId } }];
-return fresh.map(j => ({ json: j }));
+return fresh.map(j => ({ json: { ...j, is_media: isMediaUrl(j.canonical_url), replace: seen.has(j.canonical_url) } }));
 `.trim();
 
 const LOG_FAILURE = `
 const orig = $('Filter new').item.json;
 let reason = 'both_scrapers_failed_or_short_markdown';
-if ($json.error) {
+let media_title = '';
+if (orig.is_media) {
+  const e = $json.error;
+  const msg = String((e && typeof e === 'object' ? (e.message || JSON.stringify(e)) : e) || '');
+  media_title = $json.title || '';
+  if ($json.no_captions) reason = 'media_no_captions';
+  else if (/bot check|"blocked"/i.test(msg)) reason = 'media_blocked: YouTube bot check';
+  else reason = 'media: ' + (msg || 'no transcript').slice(0, 150);
+} else if ($json.error) {
   const msg = (typeof $json.error === 'object' && $json.error.message) ? $json.error.message : String($json.error);
   reason = 'firecrawl_error: ' + String(msg).slice(0, 120);
 } else if ($json.data) reason = 'firecrawl_short_markdown';
-return { json: { failed: true, url: orig.url, canonical_url: orig.canonical_url, reason, run_id: orig.run_id } };
+return { json: { failed: true, url: orig.url, canonical_url: orig.canonical_url, reason, run_id: orig.run_id, media_title } };
 `.trim();
 
 const PREP_DOC = `
@@ -104,7 +116,7 @@ const user = 'TODAY: ' + dhaka + '\\n' + 'PUBLISHED: ' + pub + '\\n' +
   'TITLE: ' + title + '\\n' + 'URL: ' + orig.canonical_url +
   '\\n\\nCONTENT:\\n' + markdown.slice(0, prof.content_chars);
 const triage_body = JSON.stringify({ model: prof.model, temperature: 0.2, max_tokens: prof.max_tokens,
-  response_format: schema,
+  reasoning_effort: prof.reasoning_effort, response_format: schema,
   messages: [ { role: 'system', content: sys }, { role: 'user', content: user } ] });
 return { json: { canonical_url: orig.canonical_url, source: orig.source || '', title,
   markdown, scraper, run_id: orig.run_id, triage_body, triage_profile: prof.model + '/' + prof.content_chars,
@@ -128,9 +140,48 @@ const { TRIAGE_SYSTEM, TRIAGE_SCHEMA } = require('../shared/triage-config.js');
 // n8n expressions reject multi-statement code. Substitute the constants into PREP_DOC.
 const PREP_DOC_FINAL = inline('triage-config.js') + '\n' + inline('triage-validate.js') + '\n' + PREP_DOC;
 
-const VALIDATE_COMMON = inline('triage-validate.js') + `
+// ---- media links (YouTube, podcasts, audio) ----
+// Transcript from media/server.py on the Windows host (captions -> Parakeet),
+// then the normal insert -> triage -> embed path, with the media skill merged
+// in so the same triage call also returns timestamped key points.
+const FILTER_NEW = inline('media.js') + '\n' + FILTER_NEW_BODY;
+const PREP_MEDIA = inline('triage-config.js') + '\n' + inline('triage-validate.js') + '\n' + inline('media.js') + `
+const orig = $('Filter new').item.json;
+const t = $json;
+const markdown = mediaMarkdown(t);
+const title = t.title || orig.title || '';
+const run = $('Create run').first().json;
+let sys = TRIAGE_SYSTEM + '\\n\\nADDITIONAL EXTRACTION\\n' + MEDIA_SKILL_PROMPT;
+let schema = withSkill(TRIAGE_SCHEMA, MEDIA_SKILL_SCHEMA);
+if (run.skill_prompt) sys += '\\n' + run.skill_prompt;
+if (run.skill_schema) { try { schema = withSkill(schema, JSON.parse(run.skill_schema)); } catch (e) {} }
+const prof = TRIAGE_PROFILES.media;
+const dhaka = new Date(Date.now() + 6 * 3600 * 1000).toISOString().slice(0, 10);
+const published = orig.published_at || t.published_at || '';
+const user = 'TODAY: ' + dhaka + '\\n' + 'PUBLISHED: ' + (published ? String(published).slice(0, 10) : 'unknown') + '\\n' +
+  'TITLE: ' + title + '\\n' + 'URL: ' + orig.canonical_url + '\\n\\nCONTENT:\\n' + markdown.slice(0, prof.content_chars);
+const triage_body = JSON.stringify({ model: prof.model, temperature: 0.2, max_tokens: prof.max_tokens,
+  reasoning_effort: prof.reasoning_effort, response_format: schema,
+  messages: [ { role: 'system', content: sys }, { role: 'user', content: user } ] });
+return { json: { canonical_url: orig.canonical_url, source: orig.source || '', title, markdown,
+  scraper: 'media:' + (t.source || 'unknown'), run_id: orig.run_id, triage_body, replace: orig.replace ? 'replace' : '',
+  triage_profile: prof.model + '/' + prof.content_chars, published_at: published } };
+`.trim();
+
+// Media key points get their timestamps snapped to the transcript line they
+// match (shared/media.js snapKeyPoints) before they are stored. The transcript
+// is the user message of the triage request itself.
+const VALIDATE_COMMON = inline('triage-validate.js') + inline('media.js') + `
 const doc = $('WF Input').first().json;
 const rawDocId = doc.raw_doc_id;
+function structuredJson(o) {
+  const st = splitStructured(o).structured;
+  if (!st) return '';
+  if (Array.isArray(st.key_points)) {
+    try { st.key_points = snapKeyPoints(st.key_points, JSON.parse(doc.triage_body).messages[1].content); } catch (e) {}
+  }
+  return JSON.stringify(st);
+}
 `.trim();
 
 const VALIDATE_1 = VALIDATE_COMMON + `
@@ -139,7 +190,7 @@ if (!o) return { json: { __invalid: true } };
 return { json: { __invalid: false, raw_doc_id: rawDocId, canonical_url: doc.canonical_url, title: doc.title,
   summary: o.summary, angle: o.angle || '', relevance: o.relevance,
   specificity: o.specificity, angle_strength: o.angle_strength, tags_pg: tagsPg(o.tags),
-  structured_json: (splitStructured(o).structured ? JSON.stringify(splitStructured(o).structured) : ''),
+  structured_json: structuredJson(o),
   published_at: doc.published_at || '', run_id: doc.run_id } };
 `;
 
@@ -151,9 +202,34 @@ if (!o) return { json: { raw_doc_id: rawDocId, canonical_url: doc.canonical_url,
 return { json: { raw_doc_id: rawDocId, canonical_url: doc.canonical_url, title: doc.title,
   summary: o.summary, angle: o.angle || '', relevance: o.relevance,
   specificity: o.specificity, angle_strength: o.angle_strength, tags_pg: tagsPg(o.tags),
-  structured_json: (splitStructured(o).structured ? JSON.stringify(splitStructured(o).structured) : ''),
+  structured_json: structuredJson(o),
   published_at: doc.published_at || '', run_id: doc.run_id } };
 `;
+
+// Embedding runs after the feed row exists and can never fail the triage: the
+// HTTP and Postgres nodes continue on error and Build vector update falls back
+// to a no-op query. A missed embedding is picked up by
+// scripts/backfill-embeddings.js. TRIAGE_FAILED rows are skipped — the WF-30
+// drain re-triages them, and that pass embeds them.
+const EMBED = inline('embed.js');
+const BUILD_EMBED = EMBED + `
+const t = $('Merge triaged').first().json;
+const id = $('Insert feed').first().json.feed_item_id;
+const tags = String(t.tags_pg || '').replace(/[{}]/g, '').split(',').filter(Boolean);
+if (!id || t.summary === 'TRIAGE_FAILED') return [{ json: { __skip: true, embed_body: '{}' } }];
+return [{ json: { feed_item_id: id, embed_body: JSON.stringify({ model: EMBED_MODEL,
+  input: [docText({ title: t.title, summary: t.summary, angle: t.angle, tags })] }) } }];
+`.trim();
+const BUILD_VECTOR_UPDATE = EMBED + `
+const noop = [{ json: { query: 'select 1 as skipped' } }];
+const b = $('Build embed').first().json;
+if (b.__skip) return noop;
+try {
+  const vec = $input.first().json.data[0].embedding;
+  return [{ json: { query: "update feed_items set embedding = '" + vectorLiteral(vec) +
+    "'::vector where id = " + Number(b.feed_item_id) } }];
+} catch (e) { return noop; }
+`.trim();
 
 // Counts and status are computed in SQL (Finalize run) because nodes fed by two
 // branches (crawl4ai + firecrawl paths) execute once per input batch, and
@@ -237,6 +313,27 @@ const nodes = [
         leftValue: "={{ ($json.results?.[0]?.markdown?.fit_markdown || $json.results?.[0]?.markdown?.raw_markdown || '').length }}",
         rightValue: 400, operator: { type: 'number', operation: 'gte' } } ] } } },
 
+  { id: 'ismedia', name: 'Is media?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1250, -300],
+    parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' },
+      combinator: 'and', conditions: [ { id: 'c1', leftValue: '={{ Boolean($json.is_media) }}', rightValue: true,
+        operator: { type: 'boolean', operation: 'equals' } } ] } } },
+
+  // One at a time: transcription uses every CPU core. 15 min ceiling covers a
+  // 3-hour Parakeet fallback (~0.05x real time) plus the audio download.
+  { id: 'fetchmedia', name: 'Fetch media', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [1450, -400],
+    parameters: { method: 'POST', url: 'http://media:8765/transcript',
+      sendHeaders: true, headerParameters: { parameters: [ { name: 'Authorization', value: 'Bearer __MEDIA_TOKEN__' } ] },
+      sendBody: true, specifyBody: 'json', jsonBody: '={{ JSON.stringify({ url: $json.canonical_url, slides: Boolean($json.slides), transcribe: Boolean($json.transcribe) }) }}',
+      options: { timeout: 900000, batching: { batch: { batchSize: 1, batchInterval: 0 } } } },
+    retryOnFail: false, onError: 'continueRegularOutput' },
+
+  { id: 'mediaok', name: 'Media OK?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1650, -400],
+    parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' },
+      combinator: 'and', conditions: [ { id: 'c1', leftValue: '={{ ($json.paragraphs || []).length }}', rightValue: 3,
+        operator: { type: 'number', operation: 'gte' } } ] } } },
+
+  codeNode('Prep media', 'prepmedia', [1800, -400], 'runOnceForEachItem', PREP_MEDIA),
+
   // PDFs skip Crawl4AI (a headless browser can't markdown them) and go straight here
   { id: 'ispdf', name: 'Is PDF?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1300, -100],
     parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' },
@@ -267,8 +364,8 @@ const nodes = [
   codeNode('Prep doc', 'prepdoc', [1800, -200], 'runOnceForEachItem', PREP_DOC_FINAL),
 
   pgNode('Insert doc', 'insertdoc', [2000, -200],
-    "with s as (insert into seen_urls (canonical_url, source) values ($1, nullif($2,'')) on conflict (canonical_url) do nothing) insert into raw_docs (canonical_url, title, markdown, scraper, run_id, published_at) values ($1, nullif($3,''), $4, $6, $5::bigint, nullif($7,'')::timestamptz) returning id as raw_doc_id",
-    "={{ $json.canonical_url }},{{ $json.source }},{{ $json.title }},{{ $json.markdown }},{{ $json.run_id }},{{ $json.scraper }},{{ $json.published_at }}"),
+    "with s as (insert into seen_urls (canonical_url, source) values ($1, nullif($2,'')) on conflict (canonical_url) do nothing), xf as (delete from feed_items where canonical_url = $1 and $8 = 'replace'), xd as (delete from raw_docs where canonical_url = $1 and $8 = 'replace') insert into raw_docs (canonical_url, title, markdown, scraper, run_id, published_at) values ($1, nullif($3,''), $4, $6, $5::bigint, nullif($7,'')::timestamptz) returning id as raw_doc_id, scraper",
+    "={{ $json.canonical_url }},{{ $json.source }},{{ $json.title }},{{ $json.markdown }},{{ $json.run_id }},{{ $json.scraper }},{{ $json.published_at }},{{ $json.replace || '' }}"),
 
   // Per-item sequential sub-workflow call — serializes LM Studio traffic and is
   // correct no matter how many batches the scrape branches produce.
@@ -284,12 +381,12 @@ const nodes = [
       workflowInputs: {
         mappingMode: 'defineBelow',
         value: {
-          triage_body: "={{ $('Prep doc').item.json.triage_body }}",
+          triage_body: "={{ (String($json.scraper || '').startsWith('media:') ? $('Prep media') : $('Prep doc')).item.json.triage_body }}",
           raw_doc_id: '={{ $json.raw_doc_id }}',
-          canonical_url: "={{ $('Prep doc').item.json.canonical_url }}",
-          title: "={{ $('Prep doc').item.json.title }}",
-          published_at: "={{ $('Prep doc').item.json.published_at }}",
-          run_id: "={{ $('Prep doc').item.json.run_id }}"
+          canonical_url: "={{ (String($json.scraper || '').startsWith('media:') ? $('Prep media') : $('Prep doc')).item.json.canonical_url }}",
+          title: "={{ (String($json.scraper || '').startsWith('media:') ? $('Prep media') : $('Prep doc')).item.json.title }}",
+          published_at: "={{ (String($json.scraper || '').startsWith('media:') ? $('Prep media') : $('Prep doc')).item.json.published_at }}",
+          run_id: "={{ (String($json.scraper || '').startsWith('media:') ? $('Prep media') : $('Prep doc')).item.json.run_id }}"
         },
         matchingColumns: [],
         schema: [
@@ -311,14 +408,31 @@ const nodes = [
   codeNode('Collect stats', 'stats', [3800, 0], 'runOnceForAllItems', COLLECT_STATS),
 
   pgNode('Finalize run', 'finalize', [4000, 0],
-    "update runs set finished_at = now(), urls_new = $2::int, urls_scraped = (select count(*) from raw_docs where run_id = $1::bigint), items_created = (select count(*) from feed_items where run_id = $1::bigint), error = nullif($3,''), status = case when $2::int = 0 and $3 = '' then 'ok' when (select count(*) from raw_docs where run_id = $1::bigint) = 0 and $2::int > 0 then 'failed' when (select count(*) from raw_docs where run_id = $1::bigint) < $2::int then 'partial' when (select count(*) from feed_items where run_id = $1::bigint) < (select count(*) from raw_docs where run_id = $1::bigint) then 'partial' else 'ok' end where id = $1::bigint returning id as run_id, status, scope, urls_found, urls_new, urls_scraped, items_created, error, (select title from feed_items where run_id = $1::bigint order by score desc, relevance desc nulls last, id desc limit 1) as top_title",
+    "update runs set finished_at = now(), urls_new = $2::int, urls_scraped = (select count(*) from raw_docs where run_id = $1::bigint), items_created = (select count(*) from feed_items where run_id = $1::bigint), error = nullif($3,''), status = case when $2::int = 0 and $3 = '' then 'ok' when (select count(*) from raw_docs where run_id = $1::bigint) = 0 and $2::int > 0 then 'failed' when (select count(*) from raw_docs where run_id = $1::bigint) < $2::int then 'partial' when (select count(*) from feed_items where run_id = $1::bigint) < (select count(*) from raw_docs where run_id = $1::bigint) then 'partial' else 'ok' end where id = $1::bigint returning id as run_id, status, scope, urls_found, urls_new, urls_scraped, items_created, error, (select title from feed_items where run_id = $1::bigint order by score desc, relevance desc nulls last, id desc limit 1) as top_title, (select json_build_object('title', f.title, 'summary', f.summary, 'score', f.score, 'canonical_url', f.canonical_url, 'key_points', f.structured->'key_points', 'transcript_source', substr(d.scraper, 7))::text from feed_items f join raw_docs d on d.id = f.raw_doc_id where f.run_id = $1::bigint and d.scraper like 'media:%' order by f.id desc limit 1) as media",
     "={{ $json.run_id }},{{ $json.urls_new }},{{ $json.error }}",
     { executeOnce: true }),
 
   // Plain-language summary. No run numbers, no "items", no scope codes — those
   // are for run_status when something actually needs looking at.
-  codeNode('Compose summary', 'compose', [4180, 0], 'runOnceForAllItems', `
+  codeNode('Compose summary', 'compose', [4180, 0], 'runOnceForAllItems', inline('media.js') + `
 const r = $('Finalize run').first().json;
+// Media outcomes the bot must explain (pasted links only).
+let fails = [];
+try { fails = $('Log failure').all().map((i) => i.json); } catch (e) {}
+const escT = (x) => String(x || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+if (r.scope === 'url' && !(Number(r.items_created) > 0)) {
+  const blocked = fails.find((x) => /^media_blocked/.test(x.reason || ''));
+  if (blocked) return [{ json: { text: '\u26A0\uFE0F YouTube blocked me (bot check), so I could not read:\\n' + escT(blocked.url) +
+    '\\nIt usually lifts on its own within hours. Send the link again later.', remember: '' } }];
+  const noCap = fails.find((x) => x.reason === 'media_no_captions');
+  if (noCap) return [{ json: { text: '\u{1F3AC} <b>' + escT(noCap.media_title || noCap.url) + '</b> has no captions.\\n' +
+    'Reply "transcribe" and I will listen to it (about 1 minute per 20 minutes of video).', remember: noCap.canonical_url } }];
+}
+if (r.media && r.scope === 'url') {
+
+  let m = null; try { m = JSON.parse(r.media); } catch (e) {}
+  if (m) return [{ json: { text: mediaMessage(m) } }];
+}
 let brief = '';
 try { brief = $('Collect stats').first().json.error_brief || ''; } catch (e) {}
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -343,10 +457,16 @@ if (brief) {
 return [{ json: { text } }];
 `.trim()),
 
+  // A video with no captions is remembered, so a bare "transcribe" reply
+  // (WF-42) knows which link it means. Single user, so one settings row.
+  pgNode('Remember no-captions', 'remembernc', [4280, -120],
+    "insert into settings (key, value, updated_at) select 'last_no_captions_url', $1, now() where $1 <> '' on conflict (key) do update set value = excluded.value, updated_at = now()",
+    "={{ $json.remember || '' }}", { executeOnce: true, alwaysOutputData: true, onError: 'continueRegularOutput' }),
+
   { id: 'tgsummary', name: 'Telegram summary', type: 'n8n-nodes-base.telegram', typeVersion: 1.2, position: [4380, 0],
     parameters: {
       chatId: '__TG_CHAT__',
-      text: '={{ $json.text }}',
+      text: "={{ $('Compose summary').first().json.text }}",
       additionalFields: { appendAttribution: false, parse_mode: 'HTML' } },
     credentials: { telegramApi: I.credentials.telegram },
     onError: 'continueRegularOutput' },
@@ -363,9 +483,19 @@ const connections = {
   'Find seen': { main: [[{ node: 'Filter new', type: 'main', index: 0 }]] },
   'Filter new': { main: [[{ node: 'Any new?', type: 'main', index: 0 }]] },
   'Any new?': { main: [
-    [{ node: 'Is PDF?', type: 'main', index: 0 }],
+    [{ node: 'Is media?', type: 'main', index: 0 }],
     [{ node: 'Merge for stats', type: 'main', index: 2 }]
   ] },
+  'Is media?': { main: [
+    [{ node: 'Fetch media', type: 'main', index: 0 }],
+    [{ node: 'Is PDF?', type: 'main', index: 0 }]
+  ] },
+  'Fetch media': { main: [[{ node: 'Media OK?', type: 'main', index: 0 }]] },
+  'Media OK?': { main: [
+    [{ node: 'Prep media', type: 'main', index: 0 }],
+    [{ node: 'Log failure', type: 'main', index: 0 }]
+  ] },
+  'Prep media': { main: [[{ node: 'Insert doc', type: 'main', index: 0 }]] },
   'Is PDF?': { main: [
     [{ node: 'Firecrawl', type: 'main', index: 0 }],
     [{ node: 'Scrape', type: 'main', index: 0 }]
@@ -387,7 +517,8 @@ const connections = {
   'Merge for stats': { main: [[{ node: 'Collect stats', type: 'main', index: 0 }]] },
   'Collect stats': { main: [[{ node: 'Finalize run', type: 'main', index: 0 }]] },
   'Finalize run': { main: [[{ node: 'Compose summary', type: 'main', index: 0 }]] },
-  'Compose summary': { main: [[{ node: 'Telegram summary', type: 'main', index: 0 }]] },
+  'Compose summary': { main: [[{ node: 'Remember no-captions', type: 'main', index: 0 }]] },
+  'Remember no-captions': { main: [[{ node: 'Telegram summary', type: 'main', index: 0 }]] },
   'Telegram summary': { main: [[{ node: 'Return summary', type: 'main', index: 0 }]] }
 };
 
@@ -457,7 +588,22 @@ return $input.all();
     // idempotent, so the WF-30 drain never needs a separate delete step.
     pgNode('Insert feed', 'insertfeed', [1400, 0],
       "with del as (delete from feed_items where raw_doc_id = $1::bigint) insert into feed_items (raw_doc_id, canonical_url, title, summary, angle, relevance, tags, run_id, published_at, specificity, angle_strength, structured) values ($1::bigint, $2, nullif($3,''), $4, nullif($5,''), nullif($6::text,'')::int, $7::text[], $8::bigint, nullif($9,'')::timestamptz, nullif($10::text,'')::int, nullif($11::text,'')::int, nullif($12,'')::jsonb) returning id as feed_item_id",
-      "={{ $json.raw_doc_id }},{{ $json.canonical_url }},{{ $json.title }},{{ $json.summary }},{{ $json.angle }},{{ $json.relevance }},{{ $json.tags_pg }},{{ $json.run_id }},{{ $json.published_at }},{{ $json.specificity }},{{ $json.angle_strength }},{{ $json.structured_json }}")
+      "={{ $json.raw_doc_id }},{{ $json.canonical_url }},{{ $json.title }},{{ $json.summary }},{{ $json.angle }},{{ $json.relevance }},{{ $json.tags_pg }},{{ $json.run_id }},{{ $json.published_at }},{{ $json.specificity }},{{ $json.angle_strength }},{{ $json.structured_json }}"),
+
+    codeNode('Build embed', 'buildembed', [1600, 0], 'runOnceForAllItems', BUILD_EMBED),
+
+    { id: 'embed', name: 'Embed', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [1800, 0],
+      parameters: { method: 'POST', url: 'http://host.docker.internal:1234/v1/embeddings',
+        authentication: 'genericCredentialType', genericAuthType: 'httpBearerAuth',
+        sendBody: true, specifyBody: 'json', jsonBody: '={{ $json.embed_body }}',
+        options: { timeout: 60000 } },
+      credentials: { httpBearerAuth: CRED_LM },
+      retryOnFail: true, maxTries: 2, waitBetweenTries: 2000, onError: 'continueRegularOutput' },
+
+    codeNode('Build vector update', 'buildvec', [2000, 0], 'runOnceForAllItems', BUILD_VECTOR_UPDATE),
+
+    pgNode('Store embedding', 'storeembed', [2200, 0], '={{ $json.query }}', null,
+      { onError: 'continueRegularOutput' })
   ],
   connections: {
     'WF Input': { main: [[{ node: 'Guard single item', type: 'main', index: 0 }]] },
@@ -471,7 +617,11 @@ return $input.all();
     'Build retry': { main: [[{ node: 'Triage retry', type: 'main', index: 0 }]] },
     'Triage retry': { main: [[{ node: 'Validate retry', type: 'main', index: 0 }]] },
     'Validate retry': { main: [[{ node: 'Merge triaged', type: 'main', index: 1 }]] },
-    'Merge triaged': { main: [[{ node: 'Insert feed', type: 'main', index: 0 }]] }
+    'Merge triaged': { main: [[{ node: 'Insert feed', type: 'main', index: 0 }]] },
+    'Insert feed': { main: [[{ node: 'Build embed', type: 'main', index: 0 }]] },
+    'Build embed': { main: [[{ node: 'Embed', type: 'main', index: 0 }]] },
+    'Embed': { main: [[{ node: 'Build vector update', type: 'main', index: 0 }]] },
+    'Build vector update': { main: [[{ node: 'Store embedding', type: 'main', index: 0 }]] }
   },
   settings: { executionOrder: 'v1', errorWorkflow: 'PNJMA4NbQGmp1xKv' }
 };

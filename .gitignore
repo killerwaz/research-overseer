@@ -9,3 +9,12 @@ shared/triage-prompt-v2.md
 
 # Personal handoff doc — working notes, kept local
 CLAUDE.md
+
+# Search eval set — contains real Telegram messages, kept local
+eval/
+
+# media service cache and venv
+media/cache/
+media/.venv/
+media/cookies.txt
+*cookies*.txt
