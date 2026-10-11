@@ -47,14 +47,14 @@
 <script>
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const ts = (s) => { s = Math.round(s); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
-let stamp = '', top = 3;
+let stamp = "", topN = 3;
 const pill = (label, rank) => rank == null ? '<span class="pill bad">' + label + ': miss</span>' :
-  '<span class="pill ' + (rank <= top ? 'ok' : 'bad') + '">' + label + ': #' + rank + '</span>';
+  '<span class="pill ' + (rank <= topN ? 'ok' : 'bad') + '">' + label + ': #' + rank + '</span>';
 const hits = (list, doc, title) => '<div class="col"><h3>' + title + '</h3>' + (list || []).map((h) =>
   '<div class="hit' + (doc && h.doc === doc ? ' right' : '') + '"><b>' + h.sim + '</b> · #' + h.doc + (h.n ? ' passage ' + h.n : '') +
   (h.start_s != null ? ' @ ' + ts(h.start_s) : '') + ' · <span class="t">' + esc(h.title) + '</span><br>' + esc(h.text) + '</div>').join('') + '</div>';
 function render(d) {
-  top = d.top || 3;
+  topN = d.top || 3;
   const ran = d.status === 'run';
   document.getElementById('live').textContent = (ran ? 'results from ' : 'questions only, not run yet — ') + new Date(d.generated_at).toLocaleString();
   document.getElementById('stats').innerHTML = d.summary ? [['passage search', d.summary.passage_hits + ' / ' + d.summary.total],
