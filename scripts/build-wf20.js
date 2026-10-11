@@ -220,15 +220,40 @@ if (!id || t.summary === 'TRIAGE_FAILED') return [{ json: { __skip: true, embed_
 return [{ json: { feed_item_id: id, embed_body: JSON.stringify({ model: EMBED_MODEL,
   input: [docText({ title: t.title, summary: t.summary, angle: t.angle, tags })] }) } }];
 `.trim();
+// The twin lookup rides along: once the vector is stored, the closest other
+// item (by meaning) is the duplicate candidate — shared/dedupe.js decides.
+const TWIN_SQL = (id) => "select me.id as self, me.title as ta, left(me.summary, 400) as sa, me.canonical_url as ua, " +
+  "c.root, round(c.sim::numeric, 4) as sim, c.title as tb, left(c.summary, 400) as sb, c.canonical_url as ub from feed_items me " +
+  "cross join lateral (select coalesce(f.dup_of, f.id) as root, 1 - (f.embedding <=> me.embedding) as sim, f.title, f.summary, f.canonical_url " +
+  "from feed_items f where f.id <> me.id and coalesce(f.dup_of, f.id) <> me.id and f.embedding is not null and f.summary <> 'TRIAGE_FAILED' " +
+  "order by f.embedding <=> me.embedding limit 1) c where me.id = " + Number(id) + " and me.embedding is not null";
 const BUILD_VECTOR_UPDATE = EMBED + `
-const noop = [{ json: { query: 'select 1 as skipped' } }];
+const noop = [{ json: { query: 'select 1 as skipped', twin_query: 'select null::bigint as root' } }];
 const b = $('Build embed').first().json;
 if (b.__skip) return noop;
 try {
   const vec = $input.first().json.data[0].embedding;
-  return [{ json: { query: "update feed_items set embedding = '" + vectorLiteral(vec) +
-    "'::vector where id = " + Number(b.feed_item_id) } }];
+  const id = Number(b.feed_item_id);
+  return [{ json: { query: "update feed_items set embedding = '" + vectorLiteral(vec) + "'::vector where id = " + id,
+    twin_query: (${TWIN_SQL.toString()})(id) } }];
 } catch (e) { return noop; }
+`.trim();
+
+// merge / check / new. "check" asks the 9B (thinking off, ~0.4 s); anything
+// unusable counts as "not the same" — a visible duplicate beats a hidden story.
+const DEDUPE = inline('dedupe.js');
+const TWIN_PLAN = DEDUPE + `
+const t = $input.first().json || {};
+const action = t.root ? twinAction(t.sim) : 'new';
+return [{ json: { self: t.self, root: t.root, sim: t.sim, action,
+  same_body: action === 'check' ? JSON.stringify(sameStoryBody({ title: t.ta, url: t.ua, summary: t.sa }, { title: t.tb, url: t.ub, summary: t.sb })) : '' } }];
+`.trim();
+const MARK_QUERY = (fromModel) => DEDUPE + `
+const p = $('Twin plan').first().json;
+let merge = p.action === 'merge';
+${fromModel ? "if (p.action === 'check') { try { merge = parseSame($input.first().json.choices[0].message) === true; } catch (e) { merge = false; } }" : ''}
+const ok = merge && Number(p.self) > 0 && Number(p.root) > 0 && Number(p.root) !== Number(p.self);
+return [{ json: { query: ok ? 'update feed_items set dup_of = ' + Number(p.root) + ' where id = ' + Number(p.self) + ' returning id, dup_of' : 'select 1 as skipped' } }];
 `.trim();
 
 // Counts and status are computed in SQL (Finalize run) because nodes fed by two
@@ -603,7 +628,24 @@ return $input.all();
     codeNode('Build vector update', 'buildvec', [2000, 0], 'runOnceForAllItems', BUILD_VECTOR_UPDATE),
 
     pgNode('Store embedding', 'storeembed', [2200, 0], '={{ $json.query }}', null,
-      { onError: 'continueRegularOutput' })
+      { onError: 'continueRegularOutput' }),
+
+    // ---- story dedupe (sql/012, shared/dedupe.js) — never fails the triage ----
+    pgNode('Find twin', 'findtwin', [2400, 0], "={{ $('Build vector update').first().json.twin_query }}", null,
+      { onError: 'continueRegularOutput', alwaysOutputData: true }),
+    codeNode('Twin plan', 'twinplan', [2600, 0], 'runOnceForAllItems', TWIN_PLAN),
+    { id: 'askcheck', name: 'Ask the 9B?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [2800, 0],
+      parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' },
+        combinator: 'and', conditions: [ { id: 'c1', leftValue: '={{ $json.action }}', rightValue: 'check',
+          operator: { type: 'string', operation: 'equals' } } ] } } },
+    { id: 'samestory', name: 'Same story?', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [3000, -100],
+      parameters: { method: 'POST', url: 'http://host.docker.internal:1234/v1/chat/completions',
+        authentication: 'genericCredentialType', genericAuthType: 'httpBearerAuth',
+        sendBody: true, specifyBody: 'json', jsonBody: '={{ $json.same_body }}', options: { timeout: 60000 } },
+      credentials: { httpBearerAuth: CRED_LM }, retryOnFail: false, onError: 'continueRegularOutput' },
+    codeNode('Verdict', 'verdict', [3200, -100], 'runOnceForAllItems', MARK_QUERY(true)),
+    codeNode('Rule', 'rule', [3200, 100], 'runOnceForAllItems', MARK_QUERY(false)),
+    pgNode('Mark duplicate', 'markdup', [3400, 0], '={{ $json.query }}', null, { onError: 'continueRegularOutput' })
   ],
   connections: {
     'WF Input': { main: [[{ node: 'Guard single item', type: 'main', index: 0 }]] },
@@ -621,7 +663,14 @@ return $input.all();
     'Insert feed': { main: [[{ node: 'Build embed', type: 'main', index: 0 }]] },
     'Build embed': { main: [[{ node: 'Embed', type: 'main', index: 0 }]] },
     'Embed': { main: [[{ node: 'Build vector update', type: 'main', index: 0 }]] },
-    'Build vector update': { main: [[{ node: 'Store embedding', type: 'main', index: 0 }]] }
+    'Build vector update': { main: [[{ node: 'Store embedding', type: 'main', index: 0 }]] },
+    'Store embedding': { main: [[{ node: 'Find twin', type: 'main', index: 0 }]] },
+    'Find twin': { main: [[{ node: 'Twin plan', type: 'main', index: 0 }]] },
+    'Twin plan': { main: [[{ node: 'Ask the 9B?', type: 'main', index: 0 }]] },
+    'Ask the 9B?': { main: [[{ node: 'Same story?', type: 'main', index: 0 }], [{ node: 'Rule', type: 'main', index: 0 }]] },
+    'Same story?': { main: [[{ node: 'Verdict', type: 'main', index: 0 }]] },
+    'Verdict': { main: [[{ node: 'Mark duplicate', type: 'main', index: 0 }]] },
+    'Rule': { main: [[{ node: 'Mark duplicate', type: 'main', index: 0 }]] }
   },
   settings: { executionOrder: 'v1', errorWorkflow: 'PNJMA4NbQGmp1xKv' }
 };

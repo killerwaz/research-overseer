@@ -285,7 +285,7 @@
       ],
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "// Embedding helpers shared by WF-21 (embed each new feed item), WF-31 (embed\r\n// the search topic) and scripts/backfill-embeddings.js.\r\n//\r\n// Qwen3-Embedding-0.6B, picked over nomic-embed-text-v1.5 on 2026-10-10 by\r\n// measurement: nomic scored an absent topic (\"quantum computing\", 0.69) above\r\n// a real one (0.64), so no cutoff could say \"nothing found\"; Qwen3 put every\r\n// real topic >= 0.55 and every absent one <= 0.42. It is also multilingual —\r\n// the feed carries Bengali items.\r\n//\r\n// Qwen3 is asymmetric: queries carry a task instruction, documents carry none.\r\n\r\nconst EMBED_MODEL = 'text-embedding-qwen3-embedding-0.6b';\r\nconst EMBED_DIM = 1024;\r\nconst QUERY_INSTRUCT = 'Given a topic, retrieve news articles and reports about that topic';\r\n\r\n// What a feed item \"is about\" — the model's own summary, not the raw page.\r\n// Raw pages average ~28k chars of nav and boilerplate.\r\nfunction docText(item) {\r\n  const it = item || {};\r\n  const tags = Array.isArray(it.tags) ? it.tags.filter(Boolean).join(', ') : '';\r\n  const parts = [it.title, it.summary, it.angle, tags ? 'Tags: ' + tags : '']\r\n    .map((s) => (s == null ? '' : String(s).trim())).filter(Boolean);\r\n  return parts.join('\\n').slice(0, 6000);\r\n}\r\n\r\nfunction queryText(q) {\r\n  return 'Instruct: ' + QUERY_INSTRUCT + '\\nQuery: ' + String(q == null ? '' : q).trim();\r\n}\r\n\r\n// pgvector literal. Every value is checked to be a finite number, which is\r\n// also what makes it safe to splice into SQL text.\r\nfunction vectorLiteral(vec) {\r\n  if (!Array.isArray(vec) || vec.length !== EMBED_DIM) {\r\n    throw new Error('embedding must be an array of ' + EMBED_DIM + ' numbers, got ' +\r\n      (Array.isArray(vec) ? vec.length : typeof vec));\r\n  }\r\n  for (const v of vec) {\r\n    if (typeof v !== 'number' || !Number.isFinite(v)) throw new Error('embedding contains a non-finite value');\r\n  }\r\n  return '[' + vec.join(',') + ']';\r\n}\r\n\r\nconst noop = [{ json: { query: 'select 1 as skipped' } }];\nconst b = $('Build embed').first().json;\nif (b.__skip) return noop;\ntry {\n  const vec = $input.first().json.data[0].embedding;\n  return [{ json: { query: \"update feed_items set embedding = '\" + vectorLiteral(vec) +\n    \"'::vector where id = \" + Number(b.feed_item_id) } }];\n} catch (e) { return noop; }"
+        "jsCode": "// Embedding helpers shared by WF-21 (embed each new feed item), WF-31 (embed\r\n// the search topic) and scripts/backfill-embeddings.js.\r\n//\r\n// Qwen3-Embedding-0.6B, picked over nomic-embed-text-v1.5 on 2026-10-10 by\r\n// measurement: nomic scored an absent topic (\"quantum computing\", 0.69) above\r\n// a real one (0.64), so no cutoff could say \"nothing found\"; Qwen3 put every\r\n// real topic >= 0.55 and every absent one <= 0.42. It is also multilingual —\r\n// the feed carries Bengali items.\r\n//\r\n// Qwen3 is asymmetric: queries carry a task instruction, documents carry none.\r\n\r\nconst EMBED_MODEL = 'text-embedding-qwen3-embedding-0.6b';\r\nconst EMBED_DIM = 1024;\r\nconst QUERY_INSTRUCT = 'Given a topic, retrieve news articles and reports about that topic';\r\n\r\n// What a feed item \"is about\" — the model's own summary, not the raw page.\r\n// Raw pages average ~28k chars of nav and boilerplate.\r\nfunction docText(item) {\r\n  const it = item || {};\r\n  const tags = Array.isArray(it.tags) ? it.tags.filter(Boolean).join(', ') : '';\r\n  const parts = [it.title, it.summary, it.angle, tags ? 'Tags: ' + tags : '']\r\n    .map((s) => (s == null ? '' : String(s).trim())).filter(Boolean);\r\n  return parts.join('\\n').slice(0, 6000);\r\n}\r\n\r\nfunction queryText(q) {\r\n  return 'Instruct: ' + QUERY_INSTRUCT + '\\nQuery: ' + String(q == null ? '' : q).trim();\r\n}\r\n\r\n// pgvector literal. Every value is checked to be a finite number, which is\r\n// also what makes it safe to splice into SQL text.\r\nfunction vectorLiteral(vec) {\r\n  if (!Array.isArray(vec) || vec.length !== EMBED_DIM) {\r\n    throw new Error('embedding must be an array of ' + EMBED_DIM + ' numbers, got ' +\r\n      (Array.isArray(vec) ? vec.length : typeof vec));\r\n  }\r\n  for (const v of vec) {\r\n    if (typeof v !== 'number' || !Number.isFinite(v)) throw new Error('embedding contains a non-finite value');\r\n  }\r\n  return '[' + vec.join(',') + ']';\r\n}\r\n\r\nconst noop = [{ json: { query: 'select 1 as skipped', twin_query: 'select null::bigint as root' } }];\nconst b = $('Build embed').first().json;\nif (b.__skip) return noop;\ntry {\n  const vec = $input.first().json.data[0].embedding;\n  const id = Number(b.feed_item_id);\n  return [{ json: { query: \"update feed_items set embedding = '\" + vectorLiteral(vec) + \"'::vector where id = \" + id,\n    twin_query: ((id) => \"select me.id as self, me.title as ta, left(me.summary, 400) as sa, me.canonical_url as ua, \" +\n  \"c.root, round(c.sim::numeric, 4) as sim, c.title as tb, left(c.summary, 400) as sb, c.canonical_url as ub from feed_items me \" +\n  \"cross join lateral (select coalesce(f.dup_of, f.id) as root, 1 - (f.embedding <=> me.embedding) as sim, f.title, f.summary, f.canonical_url \" +\n  \"from feed_items f where f.id <> me.id and coalesce(f.dup_of, f.id) <> me.id and f.embedding is not null and f.summary <> 'TRIAGE_FAILED' \" +\n  \"order by f.embedding <=> me.embedding limit 1) c where me.id = \" + Number(id) + \" and me.embedding is not null\")(id) } }];\n} catch (e) { return noop; }"
       }
     },
     {
@@ -295,6 +295,155 @@
       "typeVersion": 2.4,
       "position": [
         2200,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.query }}",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "tzBuhu9KEXlaRRfW",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "findtwin",
+      "name": "Find twin",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        2400,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $('Build vector update').first().json.twin_query }}",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "tzBuhu9KEXlaRRfW",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "id": "twinplan",
+      "name": "Twin plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2600,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Story dedupe: is a new feed item the same story as one already in the feed?\n// Used by WF-21 (each new item, after its embedding is stored) and by\n// scripts/backfill-dedupe.js (the existing feed, oldest first).\n//\n// Measured 2026-10-11 on the live feed (352 items), embedding similarity of\n// title+summary+angle+tags (shared/embed.js):\n//   >= 0.87  every pair was the same story (Patronus x4, Natural x2, ...)\n//   0.80-0.87  mixed: same-story copies AND look-alikes (\"ttok 1.0\" vs\n//              \"ttok 0.4\", LangSmith vs Langfuse alternatives, two GPU price\n//              lists). The 9B with thinking OFF judged 57 such pairs: 33/34\n//              merges right, 1 miss, 0.4 s per pair.\n//   < 0.80   no same-story pair found.\n// So: merge outright above the band, ask the 9B inside it, keep below it.\n\nconst AUTO_MERGE = 0.87;\nconst CHECK_FLOOR = 0.80;\n\nfunction twinAction(sim) {\n  const s = Number(sim);\n  if (sim == null || sim === '' || !Number.isFinite(s)) return 'new';\n  if (s >= AUTO_MERGE) return 'merge';\n  if (s >= CHECK_FLOOR) return 'check';\n  return 'new';\n}\n\nconst SAME_SYSTEM = `Two items from a news feed. Decide whether they cover the SAME specific story: the same event, announcement, funding round, release, report or document, so that a reader needs only one of them.\nNOT the same: different versions or releases of a product, different products or companies, different list or comparison articles, a report versus commentary that merely cites it, or two pieces that only share a general topic.\nItems can be in different languages.`;\n\nconst SAME_SCHEMA = { type: 'json_schema', json_schema: { name: 'same_story', strict: true, schema: {\n  type: 'object', additionalProperties: false, required: ['same'], properties: { same: { type: 'boolean' } } } } };\n\n// Code nodes have no URL global, hence the regex.\nfunction hostOf(u) {\n  const m = String(u || '').match(/^https?:\\/\\/(?:www\\.)?([^/:?#]+)/i);\n  return m ? m[1].toLowerCase() : '';\n}\n\nfunction sameStoryBody(a, b, model) {\n  const side = (label, x) => label + ': ' + (x.title || '') + ' (' + hostOf(x.url) + ')\\n' + String(x.summary || '').slice(0, 400);\n  return { model: model || 'qwen/qwen3.5-9b', temperature: 0, max_tokens: 50, reasoning_effort: 'none',\n    response_format: SAME_SCHEMA,\n    messages: [{ role: 'system', content: SAME_SYSTEM }, { role: 'user', content: side('A', a) + '\\n\\n' + side('B', b) }] };\n}\n\n// true / false, or null when the reply is unusable (treated as \"not the same\":\n// a missed merge leaves a duplicate visible, a wrong one hides a story).\nfunction parseSame(message) {\n  const m = message || {};\n  const text = String(m.content || '').trim() || String(m.reasoning_content || '');\n  const i = text.lastIndexOf('{');\n  if (i < 0) return null;\n  try {\n    const o = JSON.parse(text.slice(i, text.indexOf('}', i) + 1));\n    return typeof o.same === 'boolean' ? o.same : null;\n  } catch (e) { return null; }\n}\n\nconst t = $input.first().json || {};\nconst action = t.root ? twinAction(t.sim) : 'new';\nreturn [{ json: { self: t.self, root: t.root, sim: t.sim, action,\n  same_body: action === 'check' ? JSON.stringify(sameStoryBody({ title: t.ta, url: t.ua, summary: t.sa }, { title: t.tb, url: t.ub, summary: t.sb })) : '' } }];"
+      }
+    },
+    {
+      "id": "askcheck",
+      "name": "Ask the 9B?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2800,
+        0
+      ],
+      "parameters": {
+        "options": {},
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "check",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "samestory",
+      "name": "Same story?",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3000,
+        -100
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:1234/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.same_body }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "JsTIc0R9trd31PsV",
+          "name": "lmstudio-bearer"
+        }
+      },
+      "retryOnFail": false,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "verdict",
+      "name": "Verdict",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3200,
+        -100
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Story dedupe: is a new feed item the same story as one already in the feed?\n// Used by WF-21 (each new item, after its embedding is stored) and by\n// scripts/backfill-dedupe.js (the existing feed, oldest first).\n//\n// Measured 2026-10-11 on the live feed (352 items), embedding similarity of\n// title+summary+angle+tags (shared/embed.js):\n//   >= 0.87  every pair was the same story (Patronus x4, Natural x2, ...)\n//   0.80-0.87  mixed: same-story copies AND look-alikes (\"ttok 1.0\" vs\n//              \"ttok 0.4\", LangSmith vs Langfuse alternatives, two GPU price\n//              lists). The 9B with thinking OFF judged 57 such pairs: 33/34\n//              merges right, 1 miss, 0.4 s per pair.\n//   < 0.80   no same-story pair found.\n// So: merge outright above the band, ask the 9B inside it, keep below it.\n\nconst AUTO_MERGE = 0.87;\nconst CHECK_FLOOR = 0.80;\n\nfunction twinAction(sim) {\n  const s = Number(sim);\n  if (sim == null || sim === '' || !Number.isFinite(s)) return 'new';\n  if (s >= AUTO_MERGE) return 'merge';\n  if (s >= CHECK_FLOOR) return 'check';\n  return 'new';\n}\n\nconst SAME_SYSTEM = `Two items from a news feed. Decide whether they cover the SAME specific story: the same event, announcement, funding round, release, report or document, so that a reader needs only one of them.\nNOT the same: different versions or releases of a product, different products or companies, different list or comparison articles, a report versus commentary that merely cites it, or two pieces that only share a general topic.\nItems can be in different languages.`;\n\nconst SAME_SCHEMA = { type: 'json_schema', json_schema: { name: 'same_story', strict: true, schema: {\n  type: 'object', additionalProperties: false, required: ['same'], properties: { same: { type: 'boolean' } } } } };\n\n// Code nodes have no URL global, hence the regex.\nfunction hostOf(u) {\n  const m = String(u || '').match(/^https?:\\/\\/(?:www\\.)?([^/:?#]+)/i);\n  return m ? m[1].toLowerCase() : '';\n}\n\nfunction sameStoryBody(a, b, model) {\n  const side = (label, x) => label + ': ' + (x.title || '') + ' (' + hostOf(x.url) + ')\\n' + String(x.summary || '').slice(0, 400);\n  return { model: model || 'qwen/qwen3.5-9b', temperature: 0, max_tokens: 50, reasoning_effort: 'none',\n    response_format: SAME_SCHEMA,\n    messages: [{ role: 'system', content: SAME_SYSTEM }, { role: 'user', content: side('A', a) + '\\n\\n' + side('B', b) }] };\n}\n\n// true / false, or null when the reply is unusable (treated as \"not the same\":\n// a missed merge leaves a duplicate visible, a wrong one hides a story).\nfunction parseSame(message) {\n  const m = message || {};\n  const text = String(m.content || '').trim() || String(m.reasoning_content || '');\n  const i = text.lastIndexOf('{');\n  if (i < 0) return null;\n  try {\n    const o = JSON.parse(text.slice(i, text.indexOf('}', i) + 1));\n    return typeof o.same === 'boolean' ? o.same : null;\n  } catch (e) { return null; }\n}\n\nconst p = $('Twin plan').first().json;\nlet merge = p.action === 'merge';\nif (p.action === 'check') { try { merge = parseSame($input.first().json.choices[0].message) === true; } catch (e) { merge = false; } }\nconst ok = merge && Number(p.self) > 0 && Number(p.root) > 0 && Number(p.root) !== Number(p.self);\nreturn [{ json: { query: ok ? 'update feed_items set dup_of = ' + Number(p.root) + ' where id = ' + Number(p.self) + ' returning id, dup_of' : 'select 1 as skipped' } }];"
+      }
+    },
+    {
+      "id": "rule",
+      "name": "Rule",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3200,
+        100
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Story dedupe: is a new feed item the same story as one already in the feed?\n// Used by WF-21 (each new item, after its embedding is stored) and by\n// scripts/backfill-dedupe.js (the existing feed, oldest first).\n//\n// Measured 2026-10-11 on the live feed (352 items), embedding similarity of\n// title+summary+angle+tags (shared/embed.js):\n//   >= 0.87  every pair was the same story (Patronus x4, Natural x2, ...)\n//   0.80-0.87  mixed: same-story copies AND look-alikes (\"ttok 1.0\" vs\n//              \"ttok 0.4\", LangSmith vs Langfuse alternatives, two GPU price\n//              lists). The 9B with thinking OFF judged 57 such pairs: 33/34\n//              merges right, 1 miss, 0.4 s per pair.\n//   < 0.80   no same-story pair found.\n// So: merge outright above the band, ask the 9B inside it, keep below it.\n\nconst AUTO_MERGE = 0.87;\nconst CHECK_FLOOR = 0.80;\n\nfunction twinAction(sim) {\n  const s = Number(sim);\n  if (sim == null || sim === '' || !Number.isFinite(s)) return 'new';\n  if (s >= AUTO_MERGE) return 'merge';\n  if (s >= CHECK_FLOOR) return 'check';\n  return 'new';\n}\n\nconst SAME_SYSTEM = `Two items from a news feed. Decide whether they cover the SAME specific story: the same event, announcement, funding round, release, report or document, so that a reader needs only one of them.\nNOT the same: different versions or releases of a product, different products or companies, different list or comparison articles, a report versus commentary that merely cites it, or two pieces that only share a general topic.\nItems can be in different languages.`;\n\nconst SAME_SCHEMA = { type: 'json_schema', json_schema: { name: 'same_story', strict: true, schema: {\n  type: 'object', additionalProperties: false, required: ['same'], properties: { same: { type: 'boolean' } } } } };\n\n// Code nodes have no URL global, hence the regex.\nfunction hostOf(u) {\n  const m = String(u || '').match(/^https?:\\/\\/(?:www\\.)?([^/:?#]+)/i);\n  return m ? m[1].toLowerCase() : '';\n}\n\nfunction sameStoryBody(a, b, model) {\n  const side = (label, x) => label + ': ' + (x.title || '') + ' (' + hostOf(x.url) + ')\\n' + String(x.summary || '').slice(0, 400);\n  return { model: model || 'qwen/qwen3.5-9b', temperature: 0, max_tokens: 50, reasoning_effort: 'none',\n    response_format: SAME_SCHEMA,\n    messages: [{ role: 'system', content: SAME_SYSTEM }, { role: 'user', content: side('A', a) + '\\n\\n' + side('B', b) }] };\n}\n\n// true / false, or null when the reply is unusable (treated as \"not the same\":\n// a missed merge leaves a duplicate visible, a wrong one hides a story).\nfunction parseSame(message) {\n  const m = message || {};\n  const text = String(m.content || '').trim() || String(m.reasoning_content || '');\n  const i = text.lastIndexOf('{');\n  if (i < 0) return null;\n  try {\n    const o = JSON.parse(text.slice(i, text.indexOf('}', i) + 1));\n    return typeof o.same === 'boolean' ? o.same : null;\n  } catch (e) { return null; }\n}\n\nconst p = $('Twin plan').first().json;\nlet merge = p.action === 'merge';\n\nconst ok = merge && Number(p.self) > 0 && Number(p.root) > 0 && Number(p.root) !== Number(p.self);\nreturn [{ json: { query: ok ? 'update feed_items set dup_of = ' + Number(p.root) + ' where id = ' + Number(p.self) + ' returning id, dup_of' : 'select 1 as skipped' } }];"
+      }
+    },
+    {
+      "id": "markdup",
+      "name": "Mark duplicate",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        3400,
         0
       ],
       "parameters": {
@@ -456,6 +605,90 @@
         [
           {
             "node": "Store embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store embedding": {
+      "main": [
+        [
+          {
+            "node": "Find twin",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find twin": {
+      "main": [
+        [
+          {
+            "node": "Twin plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Twin plan": {
+      "main": [
+        [
+          {
+            "node": "Ask the 9B?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask the 9B?": {
+      "main": [
+        [
+          {
+            "node": "Same story?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Rule",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Same story?": {
+      "main": [
+        [
+          {
+            "node": "Verdict",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verdict": {
+      "main": [
+        [
+          {
+            "node": "Mark duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rule": {
+      "main": [
+        [
+          {
+            "node": "Mark duplicate",
             "type": "main",
             "index": 0
           }
