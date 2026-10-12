@@ -46,6 +46,7 @@ const WF = {
   scrape_url: I.workflows['wf42-scrape-url'],
   query_feed: I.workflows['wf31-query-feed'],
   web_answer: I.workflows['wf44-web-answer'],
+  synth_answer: I.workflows['wf45-synth-answer'],
   run_status: I.workflows['wf32-run-status'],
   manage_sources: I.workflows['wf34-manage-sources']
 };
@@ -253,7 +254,9 @@ return [{ json: { chat_id, output: text } }];
       query: "select coalesce((select string_agg(coalesce(nullif(label, ''), url) || ' <' || url || '>', '; ' order by id) from sources where active and kind = 'rss'), 'none') as sources, " +
         "coalesce((select string_agg('run ' || id || ' ' || scope || ' ' || status || ' started ' || to_char(started_at at time zone 'Asia/Dhaka', 'YYYY-MM-DD HH24:MI') || ', ' || coalesce(items_created, 0) || ' items' || coalesce(' (error: ' || left(error, 80) || ')', ''), '; ' order by id desc) from (select * from runs order by id desc limit 3) r), 'no runs yet') as runs, " +
         "coalesce((select value from settings where key = 'fix_answer_check'), '') as fix_check, " +
-        "coalesce((select value from settings where key = 'fix_web'), '') as fix_web",
+        "coalesce((select value from settings where key = 'fix_web'), '') as fix_web, " +
+        "coalesce((select value from settings where key = 'fix_synth'), 'off') as fix_synth, " +
+        "coalesce((select value from settings where key = 'fix_verify'), 'false') as fix_verify",
       options: {} },
     credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true },
 
@@ -262,8 +265,8 @@ return [{ json: { chat_id, output: text } }];
   { id: 'ctxmerge', name: 'Agent input', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1060, 100],
     parameters: { mode: 'runOnceForAllItems', jsCode: `
 const ctx = $('Agent context').first().json;
-const sources = ctx.sources || 'none', runs = ctx.runs || 'unknown', fix_check = ctx.fix_check || '', fix_web = ctx.fix_web || '';
-return $('Feed switch?').all(1).map(i => ({ json: { ...i.json, sources, runs, fix_check, fix_web } }));`.trim() } },
+const sources = ctx.sources || 'none', runs = ctx.runs || 'unknown', fix_check = ctx.fix_check || '', fix_web = ctx.fix_web || '', fix_synth = ctx.fix_synth || 'off', fix_verify = ctx.fix_verify || 'false';
+return $('Feed switch?').all(1).map(i => ({ json: { ...i.json, sources, runs, fix_check, fix_web, fix_synth, fix_verify } }));`.trim() } },
 
   // Links are ingested deterministically, BEFORE the model runs (2026-10-11):
   // the 9B answered a two-link message with "I've ingested both YouTube links"
@@ -275,6 +278,40 @@ return $('Feed switch?').all(1).map(i => ({ json: { ...i.json, sources, runs, fi
       combinator: 'and', conditions: [ { id: 'c1', leftValue: "={{ /https?:\\/\\//i.test($json.text || '') || new RegExp(" +
         JSON.stringify(BARE_MEDIA_REPLY.source) + ", 'i').test($json.text || '') }}", rightValue: true,
         operator: { type: 'boolean', operation: 'equals' } } ] } } },
+  // ---- #13 big-picture questions (2026-10-12) ----
+  // "what's happening with X?" gets one cited answer from WF-45 instead of the
+  // agent's list. Decided in code (shared/synth.js bigPictureQ), switch fix_synth
+  // = off | fast | think. Lists, follow-ups, commands and bot questions stay on the agent.
+  { id: 'bigq', name: 'Big picture?', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1180, 160],
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('synth.js') + `
+return $input.all().map(i => ({ json: { ...i.json,
+  synth_go: String(['fast', 'think'].includes(i.json.fix_synth) && bigPictureQ(i.json.text || '')) } }));`.trim() } },
+  { id: 'synthif', name: 'Synth?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1240, 160],
+    parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, combinator: 'and',
+      conditions: [{ id: 's1', leftValue: '={{ $json.synth_go }}', rightValue: 'true', operator: { type: 'string', operation: 'equals' } }] } } },
+  { id: 'synthcall', name: 'Synth answer', type: 'n8n-nodes-base.executeWorkflow', typeVersion: 1.2, position: [1300, 240],
+    parameters: { workflowId: { __rl: true, value: WF.synth_answer, mode: 'id' },
+      workflowInputs: { mappingMode: 'defineBelow', value: {
+        question: "={{ $('Agent input').first().json.text }}", chat_id: "={{ String($('Agent input').first().json.chat_id) }}",
+        mode: "={{ $('Agent input').first().json.fix_synth }}", verify: "={{ $('Agent input').first().json.fix_verify }}" },
+        matchingColumns: [], schema: ['question', 'chat_id', 'mode', 'verify'].map((id) => ({ id, displayName: id, required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: 'string' })) },
+      options: { waitForSubWorkflow: true } },
+    onError: 'continueRegularOutput', alwaysOutputData: true },
+  // The agent did not run, so its memory node wrote nothing: record the exchange
+  // here (Fix memory later rewrites this ai row if the web answer replaces it).
+  { id: 'synthmem', name: 'Synth memory', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [1360, 240],
+    parameters: { operation: 'executeQuery',
+      query: "insert into n8n_chat_histories (session_id, message) values ($1::text, jsonb_build_object('type', 'human', 'content', convert_from(decode($2, 'base64'), 'UTF8'), 'additional_kwargs', '{}'::jsonb, 'response_metadata', '{}'::jsonb)), ($1::text, jsonb_build_object('type', 'ai', 'content', convert_from(decode($3, 'base64'), 'UTF8'), 'tool_calls', '[]'::jsonb, 'invalid_tool_calls', '[]'::jsonb, 'additional_kwargs', '{}'::jsonb, 'response_metadata', '{}'::jsonb)) returning id",
+      options: { queryReplacement: "={{ $('Agent input').first().json.chat_id }},{{ Buffer.from(String($('Agent input').first().json.text || ''), 'utf8').toString('base64') }},{{ Buffer.from(String($json.output || ''), 'utf8').toString('base64') }}" } },
+    credentials: { postgres: CRED_PG }, alwaysOutputData: true, onError: 'continueRegularOutput', executeOnce: true },
+  // items go out as a tool step, which is where Prep reply looks for 👍/👎 buttons
+  { id: 'synthres', name: 'Synth result', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1420, 240],
+    parameters: { mode: 'runOnceForAllItems', jsCode: `
+const r = $('Synth answer').first().json || {};
+const output = r.output || "I couldn't put that summary together just now. Try again, or ask 'anything on ...' for the list.";
+return [{ json: { output, synth: true, synth_status: r.status || 'failed', synth_secs: r.seconds,
+  intermediateSteps: [{ action: { tool: 'synth_answer' }, observation: { items: r.items || [] } }] } }];`.trim() } },
+
   { id: 'ingest', name: 'Ingest links', type: 'n8n-nodes-base.executeWorkflow', typeVersion: 1.2, position: [1100, 400],
     parameters: { workflowId: { __rl: true, value: WF.scrape_url, mode: 'id' },
       workflowInputs: { mappingMode: 'defineBelow', value: { url: '', trigger: 'agent', user_message: '={{ $json.text }}' },
@@ -401,7 +438,9 @@ return [{ json: { output: "I couldn't confirm an answer to that in your feed's a
     parameters: { mode: 'runOnceForAllItems', jsCode: inline('web-fallback.js') + `
 const a = $input.first().json;
 const ctx = $('Agent input').first().json;
-const n = ctx.fix_web === 'true' ? needsWeb({ question: ctx.text || '', reply: a.output || '' }) : { web: false, reason: 'switch fix_web off' };
+// #13: items a synthesis answer showed (none for "Your feed has nothing on this yet.")
+const feedItems = a.synth ? (((a.intermediateSteps || [])[0] || {}).observation || {}).items?.length || 0 : 0;
+const n = ctx.fix_web === 'true' ? needsWeb({ question: ctx.text || '', reply: a.output || '', feedItems }) : { web: false, reason: 'switch fix_web off' };
 return [{ json: { ...a, web_go: String(n.web), web_reason: n.reason } }];`.trim() } },
   { id: 'webif', name: 'Web?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [2180, 120],
     parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, combinator: 'and',
@@ -581,7 +620,12 @@ const connections = {
   'manage_sources': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }, { node: 'Guarded agent', type: 'ai_tool', index: 0 }]] },
   'Agent context': { main: [[{ node: 'Agent input', type: 'main', index: 0 }]] },
   'Agent input': { main: [[{ node: 'Has link?', type: 'main', index: 0 }]] },
-  'Has link?': { main: [[{ node: 'Ingest links', type: 'main', index: 0 }], [{ node: 'Overseer Agent', type: 'main', index: 0 }]] },
+  'Has link?': { main: [[{ node: 'Ingest links', type: 'main', index: 0 }], [{ node: 'Big picture?', type: 'main', index: 0 }]] },
+  'Big picture?': { main: [[{ node: 'Synth?', type: 'main', index: 0 }]] },
+  'Synth?': { main: [[{ node: 'Synth answer', type: 'main', index: 0 }], [{ node: 'Overseer Agent', type: 'main', index: 0 }]] },
+  'Synth answer': { main: [[{ node: 'Synth memory', type: 'main', index: 0 }]] },
+  'Synth memory': { main: [[{ node: 'Synth result', type: 'main', index: 0 }]] },
+  'Synth result': { main: [[{ node: 'Web needed?', type: 'main', index: 0 }]] },
   'Ingest links': { main: [[{ node: 'Link note', type: 'main', index: 0 }]] },
   'Link note': { main: [[{ node: 'Overseer Agent', type: 'main', index: 0 }]] },
   'Overseer Agent': { main: [[{ node: 'Guard check', type: 'main', index: 0 }]] },

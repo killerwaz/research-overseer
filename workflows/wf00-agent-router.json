@@ -380,7 +380,7 @@
       ],
       "parameters": {
         "operation": "executeQuery",
-        "query": "select coalesce((select string_agg(coalesce(nullif(label, ''), url) || ' <' || url || '>', '; ' order by id) from sources where active and kind = 'rss'), 'none') as sources, coalesce((select string_agg('run ' || id || ' ' || scope || ' ' || status || ' started ' || to_char(started_at at time zone 'Asia/Dhaka', 'YYYY-MM-DD HH24:MI') || ', ' || coalesce(items_created, 0) || ' items' || coalesce(' (error: ' || left(error, 80) || ')', ''), '; ' order by id desc) from (select * from runs order by id desc limit 3) r), 'no runs yet') as runs, coalesce((select value from settings where key = 'fix_answer_check'), '') as fix_check, coalesce((select value from settings where key = 'fix_web'), '') as fix_web",
+        "query": "select coalesce((select string_agg(coalesce(nullif(label, ''), url) || ' <' || url || '>', '; ' order by id) from sources where active and kind = 'rss'), 'none') as sources, coalesce((select string_agg('run ' || id || ' ' || scope || ' ' || status || ' started ' || to_char(started_at at time zone 'Asia/Dhaka', 'YYYY-MM-DD HH24:MI') || ', ' || coalesce(items_created, 0) || ' items' || coalesce(' (error: ' || left(error, 80) || ')', ''), '; ' order by id desc) from (select * from runs order by id desc limit 3) r), 'no runs yet') as runs, coalesce((select value from settings where key = 'fix_answer_check'), '') as fix_check, coalesce((select value from settings where key = 'fix_web'), '') as fix_web, coalesce((select value from settings where key = 'fix_synth'), 'off') as fix_synth, coalesce((select value from settings where key = 'fix_verify'), 'false') as fix_verify",
         "options": {}
       },
       "credentials": {
@@ -403,7 +403,7 @@
       ],
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const ctx = $('Agent context').first().json;\nconst sources = ctx.sources || 'none', runs = ctx.runs || 'unknown', fix_check = ctx.fix_check || '', fix_web = ctx.fix_web || '';\nreturn $('Feed switch?').all(1).map(i => ({ json: { ...i.json, sources, runs, fix_check, fix_web } }));"
+        "jsCode": "const ctx = $('Agent context').first().json;\nconst sources = ctx.sources || 'none', runs = ctx.runs || 'unknown', fix_check = ctx.fix_check || '', fix_web = ctx.fix_web || '', fix_synth = ctx.fix_synth || 'off', fix_verify = ctx.fix_verify || 'false';\nreturn $('Feed switch?').all(1).map(i => ({ json: { ...i.json, sources, runs, fix_check, fix_web, fix_synth, fix_verify } }));"
       }
     },
     {
@@ -436,6 +436,162 @@
             }
           ]
         }
+      }
+    },
+    {
+      "id": "bigq",
+      "name": "Big picture?",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1180,
+        160
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// #13 (2026-10-12): one cited answer across several feed items, instead of a list.\n// \"what's happening with AI policy in South Asia?\" -> 3-6 sentences, every claim\n// cited [n] against the numbered items WF-31 returned, then the numbered list\n// (with 👍/👎) underneath. Wasim's calls: thinking off vs on built behind the\n// switch fix_synth (off | fast | think) and measured; 1-2 items -> a short\n// answer that says the feed is thin, no web; the source list stays.\n//\n// The route is decided here, in code: the 9B picks tools unreliably with\n// thinking off (it answered 4/4 source-quality phrasings from context, #9).\n// Inlined into WF-00 (route) and WF-45 synth_answer (everything else).\n// Needs figures/norm/unsupportedFacts from answer-check.js inlined first.\n\n// ---- which questions get a written answer ----\n\nconst BIG_PICTURE = new RegExp([\n  \"\\\\bwhat('?s| is| are)\\\\s+(happening|going on|changing|new)\\\\s+(with|in|on|around|for|across)\\\\b\",\n  \"\\\\bwhat('?s| is) the (state|status|latest|story|picture|situation) (of|on|with|in)\\\\b\",\n  \"\\\\bhow (are|is|do|does|have|has)\\\\b[^?]{0,60}\\\\b(handling|dealing|approaching|responding|reacting|adapting|coping|managing|tackling|using|adopting|regulating|treating|thinking about)\\\\b\",\n  \"\\\\b(overview|summary|summari[sz]e|big picture|landscape|trends?|themes?|takeaways?|gist|state of play)\\\\b\",\n  \"\\\\b(compare|comparison|versus|vs\\\\.?)\\\\b\",\n  \"\\\\bwhat (do|does) (my|the) (feed|items|articles|sources) say about\\\\b\",\n  \"\\\\bwhat are the (main|key|latest|big|major) (developments|debates|arguments|issues|questions|risks|players|moves)\\\\b\",\n  \"\\\\b(explain|walk me through) (what|how|why)\\\\b\",\n].join('|'), 'i');\n\n// Lists, follow-ups, commands and questions about the bot itself stay on the agent.\nconst NOT_SYNTH = new RegExp([\n  'https?://',\n  '#\\\\s?\\\\d+\\\\b',\n  '\\\\b(first|second|third|fourth|fifth|last) (one|item|article|story|link)\\\\b',\n  '\\\\b(item|number|no\\\\.?)\\\\s?\\\\d+\\\\b',\n  '^\\\\s*(anything|any (news|updates?|items?))\\\\b',\n  '\\\\b(show me|list|give me (a list|the list))\\\\b',\n  '\\\\b(search|sweep|run|discover|find new|look up|scrape|add|remove|follow|unfollow|subscribe|schedule|transcribe)\\\\b',\n  '\\\\b(run|runs|status|broke|broken|failed)\\\\b',\n  '\\\\b(my|the|your) (sources?|feeds?)\\\\b(?! say)',\n].join('|'), 'i');\n\nfunction bigPictureQ(question) {\n  const q = String(question || '').trim();\n  if (!q || q.split(/\\s+/).length < 3) return false;\n  if (NOT_SYNTH.test(q)) return false;\n  return BIG_PICTURE.test(q);\n}\n\n// ---- the prompt ----\n\nconst SYNTH_MAX_ITEMS = 8;\nconst EV_FULL = 1500;   // the first 3 items carry whole passages\nconst EV_SHORT = 600;\n\nfunction evidenceText(ev) {\n  if (!ev) return '';\n  if (typeof ev === 'string') return ev;\n  if (Array.isArray(ev)) return ev.map(evidenceText).filter(Boolean).join(' … ');\n  if (typeof ev === 'object') return String(ev.text || ev.fragments || ev.headline || '');\n  return '';\n}\n\nfunction itemTitle(it) {\n  const t = String(it.title || '').trim();\n  if (t && t !== 'null') return t;\n  const m = String(it.canonical_url || '').match(/^https?:\\/\\/(?:www\\.)?([^/]+)/i);\n  return m ? m[1] : 'untitled';\n}\n\nfunction itemBlock(it, i) {\n  const date = it.published_at ? String(it.published_at).slice(0, 10) : 'undated';\n  const ev = evidenceText(it.evidence).replace(/\\s+/g, ' ').trim().slice(0, i < 3 ? EV_FULL : EV_SHORT);\n  return '[' + it.n + '] ' + itemTitle(it) + ' (published ' + date + ')\\n' +\n    'Summary: ' + String(it.summary || '').replace(/\\s+/g, ' ').trim() + (ev ? '\\nFrom the article: ' + ev : '');\n}\n\nconst SYNTH_SYSTEM = 'You answer a question from the user\\'s own research feed. Use ONLY the numbered items below. ' +\n  'Write 3 to 6 sentences that pull the items together: what is happening, who is doing it, the figures and dates. ' +\n  'End EVERY sentence with the number of each item it rests on, like [2] or [1][4]. Use only the numbers given. ' +\n  'Quote figures and names exactly as the items give them. If items disagree, say so. ' +\n  'Skip items that are off the question, and say what the items report, never what kind of page they are. ' +\n  'If the question compares several things and the items cover only some, say plainly which ones the feed has nothing on. ' +\n  'If none of the items answers the question, reply with exactly: ' + 'NOT IN FEED' + ' ' +\n  'Plain text for Telegram: no markdown, no headings, no bullet list, no list of sources at the end.';\n\n// The 9B's marker for \"the items do not answer this\" (measured 2026-10-12: asked\n// to \"say so\", it wrote three sentences about an unrelated item instead).\nconst NOT_IN_FEED = /^\\W*not in feed\\W*$/i;\nconst NOTHING_REPLY = 'Your feed has nothing on this yet.';\n\nfunction synthBody(model, question, items, mode, feedback) {\n  const list = (items || []).slice(0, SYNTH_MAX_ITEMS).map(itemBlock).join('\\n\\n');\n  const messages = [\n    { role: 'system', content: SYNTH_SYSTEM },\n    { role: 'user', content: 'Question: ' + question + '\\n\\nItems:\\n' + list }];\n  if (feedback) {\n    messages.push({ role: 'assistant', content: feedback.previous });\n    messages.push({ role: 'user', content: 'That answer broke the rules: ' + feedback.problems.join('; ') +\n      '. Rewrite it. Every sentence must end with item numbers from the list, and every figure must come from the items you cite.' });\n  }\n  const think = mode === 'think';\n  return { model, temperature: 0, messages,\n    reasoning_effort: think ? 'medium' : 'none',\n    max_tokens: think ? 6000 : 900 };\n}\n\n// ---- checking the answer ----\n\n// \"[1][4]\", \"[1, 4]\" and \"[1-3]\" all count.\nfunction citations(text) {\n  const out = [];\n  for (const m of String(text || '').matchAll(/\\[(\\d{1,2}(?:\\s*[,–-]\\s*\\d{1,2})*)\\]/g)) {\n    for (const part of m[1].split(/\\s*,\\s*/)) {\n      const r = part.match(/^(\\d+)\\s*[–-]\\s*(\\d+)$/);\n      if (r) { for (let k = Number(r[1]); k <= Number(r[2]) && k - Number(r[1]) < 20; k++) out.push(k); } else out.push(Number(part));\n    }\n  }\n  return out;\n}\n\nfunction sentences(text) {\n  return String(text || '').replace(/\\s+/g, ' ').trim()\n    .split(/(?<=[.!?](?:\\s*\\[[\\d,\\s–-]+\\])*)\\s+(?=[A-Z\"“'(])/)\n    .map((s) => s.trim()).filter((s) => s.length > 0);\n}\n\n// answer-check.js skips whole numbers up to 20 (too many false alarms in chat).\n// Here a small whole number written as money or a rate is checked too. Measured\n// 2026-10-12, Q2: \"over $12/hr on reserved AWS instances\" went through, but the\n// item gives $12.29/hr for Azure (AWS: $6.88). Larger and decimal figures are\n// already checked by unsupportedFacts.\nconst SMALL_MONEY = /(?:[$€£৳]|\\b(?:usd|bdt|tk|inr|eur)\\s?)(\\d{1,2})(?![\\d.,])(?!\\s*(?:million|billion|thousand|mn|bn|[mbk]\\b))|(?<![\\d.,])\\b(\\d{1,2})(?![\\d.,])\\s*(?:\\/\\s*(?:hr|hour|h|month|mo|year|yr|gpu|card)\\b|per (?:hour|month|year|gpu|card)\\b)/gi;\nfunction smallMoney(sentence, evidence, question) {\n  const ev = String(evidence || '').replace(/(\\d),(?=\\d{3}\\b)/g, '$1');\n  const q = String(question || '');\n  const missing = [];\n  for (const m of String(sentence || '').matchAll(SMALL_MONEY)) {\n    const n = m[1] || m[2];\n    if (Number(n) > 20) continue;   /* unsupportedFacts covers these */\n    // the number must appear in the same form: \"$12\" as money, \"12/hr\" as a rate.\n    // A bare \"12\" elsewhere in a long article (a table row, \"12 months\") let Q2's\n    // \"$12/hr\" through on the full text, 2026-10-13.\n    const num = '(?<![\\\\d.,])' + n + '(?![\\\\d]|[.,]\\\\d)';\n    const form = m[1]\n      ? new RegExp('(?:[$€£৳]|\\\\b(?:usd|bdt|tk|inr|eur)\\\\s?)\\\\s?' + num + '|' + num + '\\\\s?(?:dollars|usd|taka)\\\\b', 'i')\n      : new RegExp(num + '\\\\s*(?:\\\\/|per\\\\b)', 'i');\n    if (new RegExp(num).test(q) || form.test(ev)) continue;\n    missing.push(m[0].trim());\n  }\n  return missing;\n}\n\nconst SAYS_NOTHING =/\\b(do(es)? not|don.t|doesn.t|no item|none of the items|not (say|cover|mention|address)|(has|have) nothing (on|about)|no (items?|coverage|information|reporting) (on|about))\\b/i;\n\nfunction checkSynth(answer, items, question) {\n  const byN = new Map((items || []).map((it) => [Number(it.n), it]));\n  const a = String(answer || '').trim();\n  const problems = [];\n  if (!a) return { ok: false, problems: ['empty answer'], cited: [] };\n  if (NOT_IN_FEED.test(a)) return { ok: true, problems, uncited: [], cited: [], nothing: true };\n  const all = citations(a);\n  const bad = [...new Set(all.filter((n) => !byN.has(n)))];\n  if (bad.length) problems.push('cites items that do not exist: ' + bad.map((n) => '[' + n + ']').join(' '));\n  if (!all.length && !SAYS_NOTHING.test(a)) problems.push('no citations at all');\n  const uncited = [];\n  for (const s of sentences(a)) {\n    const cs = citations(s).filter((n) => byN.has(n));\n    if (!cs.length) {\n      if (!SAYS_NOTHING.test(s) && s.length >= 25) uncited.push(s);\n      continue;\n    }\n    const ev = cs.map((n) => { const it = byN.get(n); return itemTitle(it) + ' ' + (it.summary || '') + ' ' + evidenceText(it.evidence); }).join(' ');\n    const plain = s.replace(/\\[[\\d,\\s–-]+\\]/g, '');\n    const miss = unsupportedFacts(plain, ev, question).concat(smallMoney(plain, ev, question));\n    if (miss.length) problems.push('figures not in the cited items: ' + miss.join(', ') + ' (in: \"' + s.slice(0, 80) + '\")');\n  }\n  if (uncited.length) problems.push(uncited.length + ' sentence(s) without an item number: \"' + uncited[0].slice(0, 80) + '\"');\n  return { ok: problems.length === 0, problems, uncited, cited: [...new Set(all.filter((n) => byN.has(n)))] };\n}\n\n// Second failure, but the only fault is a sentence or two without a number:\n// drop those sentences rather than throw the whole answer away.\nfunction salvage(answer, check) {\n  if (!check || check.ok) return answer;\n  if (check.problems.some((p) => !/without an item number/.test(p))) return '';\n  const kept = sentences(answer).filter((s) => !check.uncited.includes(s));\n  return kept.length >= 2 ? kept.join(' ') : '';\n}\n\n// ---- the second reading: is each sentence supported by the items it cites? ----\n// The checks above catch wrong numbers and missing citations, not a true fact\n// pinned to the wrong thing. Measured 2026-10-13, Q7 (twice): the item says the\n// EU AI Act sets documentation duties for general-purpose models and, separately,\n// that Article 13 covers high-risk systems; the answer said \"Article 13 mandates\n// that developers disclose training methodologies ... for these [general-purpose]\n// models\". Every word was in the item. A second call (thinking off) reads each\n// sentence against only the items it cites.\n\nconst VERIFY_EV = 1500;\nconst VERIFY_SYSTEM = 'You check an answer against its sources. For each numbered sentence, read ONLY the source items it cites. ' +\n  'supported = true only if every fact in the sentence is stated in those items: names, numbers, dates, who did what, and what applies to what. ' +\n  'supported = false if the sentence attaches a fact to the wrong person, company, country, law, article, product or year; ' +\n  'if it joins two facts the items keep separate into a claim they do not make; if it reverses or overstates what the items say; ' +\n  'or if it adds a fact the items do not contain. Wording may differ; meaning may not. ' +\n  'In why, name the exact fact that is wrong or missing, or write \"ok\".';\n\nconst VERIFY_SCHEMA = { type: 'json_schema', json_schema: { name: 'verdicts', strict: true, schema: {\n  type: 'object', additionalProperties: false, required: ['verdicts'],\n  properties: { verdicts: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['n', 'why', 'supported'],\n    properties: { n: { type: 'integer' }, why: { type: 'string' }, supported: { type: 'boolean' } } } } } } } };\n\n// The sentences worth checking: those that cite an item. Honest \"the feed has\n// nothing on X\" sentences carry no claim to check.\nfunction claimSentences(answer, items) {\n  const have = new Set((items || []).map((it) => Number(it.n)));\n  return sentences(answer).map((s) => ({ s, cites: [...new Set(citations(s))].filter((n) => have.has(n)) }))\n    .filter((x) => x.cites.length);\n}\n\nfunction verifyBody(model, answer, items) {\n  const claims = claimSentences(answer, items);\n  const byN = new Map((items || []).map((it) => [Number(it.n), it]));\n  const used = [...new Set(claims.flatMap((c) => c.cites))].sort((a, b) => a - b);\n  const sources = used.map((n) => { const it = byN.get(n);\n    return '[' + n + '] ' + itemTitle(it) + '\\nSummary: ' + String(it.summary || '').replace(/\\s+/g, ' ').trim() +\n      '\\nText: ' + evidenceText(it.evidence).replace(/\\s+/g, ' ').trim().slice(0, VERIFY_EV); }).join('\\n\\n');\n  const list = claims.map((c, i) => (i + 1) + '. ' + c.s).join('\\n');\n  return { model, temperature: 0, reasoning_effort: 'none', max_tokens: 200 + 120 * claims.length, response_format: VERIFY_SCHEMA,\n    messages: [{ role: 'system', content: VERIFY_SYSTEM },\n      { role: 'user', content: 'Source items:\\n' + sources + '\\n\\nSentences to check:\\n' + list }] };\n}\n\n// -> { unsupported: [{ s, why }], checked: n, parsed: bool }. A reply that cannot\n// be read flags nothing (the answer has already passed the code checks).\nfunction parseVerify(content, answer, items) {\n  const claims = claimSentences(answer, items);\n  let v = null;\n  try { v = JSON.parse(String(content || '').replace(/^```(json)?|```$/g, '').trim()).verdicts; } catch (e) {}\n  if (!Array.isArray(v)) return { unsupported: [], checked: claims.length, parsed: false };\n  const unsupported = v.filter((x) => x && x.supported === false && claims[x.n - 1])\n    .map((x) => ({ s: claims[x.n - 1].s, why: String(x.why || '').slice(0, 200) }));\n  return { unsupported, checked: claims.length, parsed: true };\n}\n\n// Problems in the form the rewrite prompt takes.\nfunction verifyProblems(result) {\n  return (result.unsupported || []).map((u) => 'not supported by its items: \"' + u.s.slice(0, 90) + '\" (' + u.why + ')');\n}\n\n// ---- what happens to a flagged sentence (Wasim's chain, 2026-10-13) ----\n// fix it with the checker's reason -> check the fix -> else quote the source\n// line it rests on -> else drop it and say so. Nothing unchecked reaches him.\n\nconst FIX_SYSTEM = 'Rewrite ONE sentence so it says only what the cited source items state. ' +\n  'A checker found this problem with it: the reason is given. Fix exactly that problem, keep everything else that is supported, ' +\n  'and end the sentence with the same item numbers in brackets. Reply with the one sentence only. ' +\n  'If no version of the sentence is supported by the items, reply exactly: DROP';\n\nfunction fixBody(model, sentence, why, items) {\n  const cites = [...new Set(citations(sentence))];\n  const byN = new Map((items || []).map((it) => [Number(it.n), it]));\n  const sources = cites.filter((n) => byN.has(n)).map((n) => { const it = byN.get(n);\n    return '[' + n + '] ' + itemTitle(it) + '\\nSummary: ' + String(it.summary || '').replace(/\\s+/g, ' ').trim() +\n      '\\nText: ' + evidenceText(it.evidence).replace(/\\s+/g, ' ').trim().slice(0, VERIFY_EV); }).join('\\n\\n');\n  return { model, temperature: 0, reasoning_effort: 'none', max_tokens: 300,\n    messages: [{ role: 'system', content: FIX_SYSTEM },\n      { role: 'user', content: 'Source items:\\n' + sources + '\\n\\nSentence: ' + sentence + '\\n\\nProblem: ' + why }] };\n}\n\n// the model's fix, or '' (DROP, empty, or it lost its item numbers)\nfunction readFix(content, sentence) {\n  const t = String(content || '').trim().replace(/^[\"“]|[\"”]$/g, '').split(/\\n/)[0].trim();\n  if (!t || /^drop\\b/i.test(t)) return '';\n  return citations(t).length ? t : '';\n}\n\nconst STOP = new Set('about after again their there these those which while where would could should other being between through during before under above below every within without across along among around because against toward towards since until still also just more most much many such some than that this with from have were been into over only very what when your will them then they each both same well like'.split(' '));\nfunction contentWords(t) {\n  return new Set((String(t || '').toLowerCase().match(/[a-z][a-z0-9-]{3,}/g) || []).filter((w) => !STOP.has(w)));\n}\n\n// The source sentence the flagged one most likely rests on, verbatim, as\n// '[6] says: \"...\"'. Markdown tables and link lists are skipped; at least 3\n// shared content words, or nothing.\nfunction bestQuote(sentence, items) {\n  const want = contentWords(sentence.replace(/\\[[\\d,\\s–-]+\\]/g, ''));\n  const byN = new Map((items || []).map((it) => [Number(it.n), it]));\n  let best = null;\n  for (const n of new Set(citations(sentence))) {\n    const it = byN.get(n);\n    if (!it) continue;\n    const text = String(it.summary || '') + ' ' + evidenceText(it.evidence);\n    for (const raw of text.split(/(?<=[.!?])\\s+|\\n+|\\s…\\s/)) {\n      const s = raw.replace(/[#*_`|>]+/g, ' ').replace(/\\[([^\\]]*)\\]\\([^)]*\\)/g, '$1').replace(/\\s+/g, ' ').trim();\n      if (s.length < 30 || s.length > 300 || /https?:\\/\\//.test(s)) continue;\n      const hit = [...contentWords(s)].filter((w) => want.has(w)).length;\n      if (hit >= 3 && (!best || hit > best.hit)) best = { n, s, hit };\n    }\n  }\n  return best ? '[' + best.n + '] says: \"' + best.s + '\"' : '';\n}\n\nfunction replaceSentence(answer, oldS, newS) {\n  const ss = sentences(answer);\n  const k = ss.indexOf(oldS);\n  if (k < 0) return answer;\n  if (newS) ss[k] = newS; else ss.splice(k, 1);\n  return ss.join(' ');\n}\n\nconst DROP_NOTE = (k) => '(' + k + ' sentence' + (k === 1 ? '' : 's') + ' removed: I could not confirm ' + (k === 1 ? 'it' : 'them') + ' against the sources.)';\n\n// One flagged sentence's fate. fixes: [{ s, fix, fixOk }] — fix = the model's\n// rewrite ('' if it said DROP), fixOk = the rewrite passed its own check.\n// -> { answer, fixed, quoted, dropped }. Measured 2026-10-13 on 23 flagged\n// sentences: 19 fixed, 4 quoted, 0 dropped; every real error came out right.\nfunction applyFixes(answer, fixes, items) {\n  let a = String(answer || '');\n  let fixed = 0, quoted = 0, dropped = 0;\n  for (const f of fixes || []) {\n    if (f.fix && f.fixOk) { a = replaceSentence(a, f.s, f.fix); fixed++; continue; }\n    const q = bestQuote(f.s, items);\n    if (q) { a = replaceSentence(a, f.s, q); quoted++; } else { a = replaceSentence(a, f.s, ''); dropped++; }\n  }\n  if (dropped) a += ' ' + DROP_NOTE(dropped);\n  return { answer: a, fixed, quoted, dropped };\n}\n\n// Second failure: drop the unsupported sentences if at least two cited ones remain.\nfunction dropUnsupported(answer, result) {\n  const bad = new Set((result.unsupported || []).map((u) => u.s));\n  const kept = sentences(answer).filter((s) => !bad.has(s));\n  return kept.filter((s) => citations(s).length).length >= 2 ? kept.join(' ') : '';\n}\n\n// ---- the reply ----\n\nfunction sourceList(items) {\n  return (items || []).slice(0, SYNTH_MAX_ITEMS).map((it) => it.n + '. ' + itemTitle(it) +\n    (it.published_at ? ' (' + String(it.published_at).slice(0, 10) + ')' : '')).join('\\n');\n}\n\nfunction thinNote(count) {\n  return count <= 2 ? 'Your feed has only ' + count + ' item' + (count === 1 ? '' : 's') + ' on this:\\n' : '';\n}\n\nfunction formatSynth(answer, items) {\n  const shown = (items || []).slice(0, SYNTH_MAX_ITEMS);\n  return thinNote(shown.length) + String(answer || '').trim() + '\\n\\nSources:\\n' + sourceList(shown);\n}\n\n// The reply and the items it shows (whose 👍/👎 buttons go with it). \"Nothing\"\n// shows no items: the closest ones were judged off the question. That wording\n// is also what lets Fix 2 answer from the web, as it does for the agent.\n// The 9B rarely uses the marker; it hedges instead (\"The item notes a dataset\n// includes quantum firms [1]. The items do not cover the Kenyan context.\"). An\n// answer that says the items miss the question and has at most one real cited\n// sentence is treated as nothing (measured 2026-10-12, Q12 twice).\nconst MISSES = /\\b(do(es)? not (cover|answer|address|discuss|mention|include)|cannot answer|can.t answer|nothing (on|about|to say)|no (information|data|details|reporting|items?|coverage) (on|about|regarding|for))\\b/i;\nfunction answersNothing(answer) {\n  const a = String(answer || '').trim();\n  if (NOT_IN_FEED.test(a)) return true;\n  const ss = sentences(a);\n  const real = ss.filter((s) => citations(s).length && !MISSES.test(s) && !SAYS_NOTHING.test(s)).length;\n  return ss.some((s) => MISSES.test(s)) && real <= 1;\n}\n\nfunction finalReply(answer, items) {\n  if (answersNothing(answer)) return { output: NOTHING_REPLY, items: [] };\n  const shown = (items || []).slice(0, SYNTH_MAX_ITEMS);\n  return { output: formatSynth(answer, shown), items: shown };\n}\n\n// No usable answer: the items as a plain numbered list, as the agent would give.\nfunction formatFallback(items) {\n  const shown = (items || []).slice(0, SYNTH_MAX_ITEMS);\n  if (!shown.length) return 'Your feed has nothing on this yet.';\n  return thinNote(shown.length) + 'I could not write a checked summary, so here are the items:\\n' +\n    shown.map((it) => it.n + '. ' + itemTitle(it) + ' — ' + String(it.summary || '').split(/(?<=\\.)\\s/)[0]).join('\\n');\n}\n\n// what the router passes WF-31 as the topic: the question minus its lead-in\nfunction synthTopic(question) {\n  // A comparison searches each side separately (WF-31 gives every \"|\" topic a\n  // fair share). Measured 2026-10-12: \"compare Bangladesh and Nigeria on AI\n  // regulation\" as one topic came back all Bangladesh, and the answer never said\n  // the feed had nothing on Nigeria.\n  const q0 = String(question || '').trim().replace(/[?!.]+\\s*$/, '');\n  const cmp = q0.match(/^(?:please\\s+)?(?:compare|comparing|contrast)\\s+(.+?)\\s+(?:and|with|vs\\.?|versus|to|against)\\s+(.+?)(?:\\s+(?:on|in|for|over|regarding|when it comes to)\\s+(.+))?$/i) ||\n    q0.match(/^(.+?)\\s+(?:vs\\.?|versus)\\s+(.+?)(?:\\s+(?:on|in|for|over)\\s+(.+))?$/i);\n  if (cmp) return cmp[3] ? cmp[1] + ' ' + cmp[3] + ' | ' + cmp[2] + ' ' + cmp[3] : cmp[1] + ' | ' + cmp[2];\n  return String(question || '').trim()\n    .replace(/^\\s*(hey|hi|so|ok(ay)?|and|also)[,!\\s]+/i, '')\n    .replace(/^(can you |could you |please )?(give me |tell me )?(an? )?(quick |short |brief )?(overview|summary|rundown|gist|big picture)( of| on| about)?\\s*/i, '')\n    .replace(/^what('?s| is| are)\\s+(happening|going on|changing|new)\\s+(with|in|on|around|for|across)\\s+/i, '')\n    .replace(/^what('?s| is) the (state|status|latest|story|picture|situation) (of|on|with|in)\\s+/i, '')\n    .replace(/^summari[sz]e\\s+(what (my|the) feed (says|has) (on|about)\\s+)?/i, '')\n    .replace(/^what (do|does) (my|the) (feed|items|articles|sources) (say|have) (about|on)\\s+/i, '')\n    .replace(/^what are the (main|key|latest|big|major) (developments|debates|arguments|issues|questions|risks|players|moves) (in|on|around|about|with)\\s+/i, '')\n    .replace(/[?!.]+\\s*$/, '')\n    .trim();\n}\n\nreturn $input.all().map(i => ({ json: { ...i.json,\n  synth_go: String(['fast', 'think'].includes(i.json.fix_synth) && bigPictureQ(i.json.text || '')) } }));"
+      }
+    },
+    {
+      "id": "synthif",
+      "name": "Synth?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1240,
+        160
+      ],
+      "parameters": {
+        "options": {},
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "s1",
+              "leftValue": "={{ $json.synth_go }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "synthcall",
+      "name": "Synth answer",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1300,
+        240
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "H2MNGYXdulcWju1n",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "question": "={{ $('Agent input').first().json.text }}",
+            "chat_id": "={{ String($('Agent input').first().json.chat_id) }}",
+            "mode": "={{ $('Agent input').first().json.fix_synth }}",
+            "verify": "={{ $('Agent input').first().json.fix_verify }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "question",
+              "displayName": "question",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "chat_id",
+              "displayName": "chat_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "mode",
+              "displayName": "mode",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "verify",
+              "displayName": "verify",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ]
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "id": "synthmem",
+      "name": "Synth memory",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        1360,
+        240
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "insert into n8n_chat_histories (session_id, message) values ($1::text, jsonb_build_object('type', 'human', 'content', convert_from(decode($2, 'base64'), 'UTF8'), 'additional_kwargs', '{}'::jsonb, 'response_metadata', '{}'::jsonb)), ($1::text, jsonb_build_object('type', 'ai', 'content', convert_from(decode($3, 'base64'), 'UTF8'), 'tool_calls', '[]'::jsonb, 'invalid_tool_calls', '[]'::jsonb, 'additional_kwargs', '{}'::jsonb, 'response_metadata', '{}'::jsonb)) returning id",
+        "options": {
+          "queryReplacement": "={{ $('Agent input').first().json.chat_id }},{{ Buffer.from(String($('Agent input').first().json.text || ''), 'utf8').toString('base64') }},{{ Buffer.from(String($json.output || ''), 'utf8').toString('base64') }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "tzBuhu9KEXlaRRfW",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput",
+      "executeOnce": true
+    },
+    {
+      "id": "synthres",
+      "name": "Synth result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1420,
+        240
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const r = $('Synth answer').first().json || {};\nconst output = r.output || \"I couldn't put that summary together just now. Try again, or ask 'anything on ...' for the list.\";\nreturn [{ json: { output, synth: true, synth_status: r.status || 'failed', synth_secs: r.seconds,\n  intermediateSteps: [{ action: { tool: 'synth_answer' }, observation: { items: r.items || [] } }] } }];"
       }
     },
     {
@@ -903,7 +1059,7 @@
       ],
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "// Fix 2 (2026-10-12): when the feed has no answer, answer from the web.\n// Wasim's call: automatically, no cap, Tavily basic search (1 credit), answer\n// only — nothing is saved to the feed. At most one web search per message.\n// Inlined into WF-00 (\"Web needed?\") and WF-44 web_answer.\n\n// The router's ways of saying the feed has nothing (seen in the end-to-end\n// runs) plus Final check's safe reply.\nconst NO_ANSWER = /\\b(the feed|your feed|feed's articles)\\b[^.?!]{0,80}\\b(doesn.t|does not|don.t|has no|have no|isn.t|is not|lacks?|no (recent |specific |direct )?(articles?|items?|stories|news|coverage|mention|details?|information|data))\\b|\\bnothing (in|on|about)\\b[^.?!]{0,60}|\\bno (recent |specific )?(articles?|items?|stories|news|coverage|results)\\b[^.?!]{0,40}\\b(on|about|in the feed|for)\\b|couldn.t confirm an answer|not covered (by|in) (the|your) feed|feed doesn.t (say|specify|mention|cover|include|have)|\\bfeed\\b[^]{0,220}?\\b(doesn.t|does not|didn.t|did not|don.t|do not) (specify|say|mention|include|give|state|list|cover|contain|have|answer)\\b/i;\nconst SMALL_TALK = /^\\s*(hi|hey|hello|thanks?|thank you|ok(ay)?|cool|nice|great|bye|good (morning|night|evening))\\b/i;\nconst ABOUT_BOT = /\\b(sources?|feeds? (are|you)|runs?|status|watching|subscri\\w*|schedul\\w*|scrape|transcribe|remember|forget)\\b/i;\n\nfunction needsWeb({ question, reply, alreadyWeb }) {\n  const q = String(question || '').trim(), r = String(reply || '');\n  if (alreadyWeb) return { web: false, reason: 'already answered from the web' };\n  if (!q || SMALL_TALK.test(q)) return { web: false, reason: 'small talk' };\n  if (ABOUT_BOT.test(q)) return { web: false, reason: 'about the bot itself' };\n  if (/https?:\\/\\//i.test(q)) return { web: false, reason: 'a link, handled by scrape_url' };\n  if (!NO_ANSWER.test(r)) return { web: false, reason: 'the feed answered' };\n  return { web: true, reason: 'the feed has no answer' };\n}\n\nfunction tavilyBody(question) {\n  return { query: String(question || '').slice(0, 380), search_depth: 'basic', max_results: 5, include_answer: false, include_raw_content: false };\n}\n\nconst WEB_CHARS = 1500;\nfunction webAnswerBody(model, question, results) {\n  const list = (results || []).map((r, i) => '[' + (i + 1) + '] ' + (r.title || '') + ' (' + (r.url || '') + ')\\n' +\n    String(r.content || '').replace(/\\s+/g, ' ').slice(0, WEB_CHARS)).join('\\n\\n');\n  return { model, temperature: 0, max_tokens: 700, reasoning_effort: 'none',\n    messages: [\n      { role: 'system', content: 'Answer the question using ONLY the numbered web results. Cite each fact with its number, like [2]. ' +\n        'Quote figures and names exactly as the results give them, and give the date or year of each event when the results state it. If the results do not answer the question, say so in one sentence. ' +\n        'Plain text for Telegram: no markdown, no headings, at most 6 short sentences or bullet lines.' },\n      { role: 'user', content: 'Question: ' + question + '\\n\\nWeb results:\\n' + list }] };\n}\n\n// Final text: label, answer, and only the sources it cited (all of them when\n// it cited none). checkMissing = figures/names the answer check could not find\n// in the results; any = say the results were unclear instead of guessing.\nfunction formatWebReply(answer, results, checkMissing) {\n  const res = results || [];\n  const a = String(answer || '').trim();\n  if (!res.length) return 'Not in your feed, and the web search came back empty.';\n  if (!a || (checkMissing && checkMissing.length)) {\n    return 'Not in your feed. The web results did not give a clear answer — the closest pages:\\n' +\n      res.slice(0, 3).map((r, i) => '[' + (i + 1) + '] ' + r.title + ' ' + r.url).join('\\n');\n  }\n  const cited = [...new Set((a.match(/\\[(\\d)\\]/g) || []).map((m) => Number(m[1])))].filter((n) => n >= 1 && n <= res.length);\n  const show = (cited.length ? cited : res.slice(0, 3).map((_, i) => i + 1)).sort((x, y) => x - y);\n  return 'From the web (not your feed):\\n' + a + '\\n\\nSources:\\n' + show.map((n) => '[' + n + '] ' + res[n - 1].title + ' ' + res[n - 1].url).join('\\n');\n}\n\nconst a = $input.first().json;\nconst ctx = $('Agent input').first().json;\nconst n = ctx.fix_web === 'true' ? needsWeb({ question: ctx.text || '', reply: a.output || '' }) : { web: false, reason: 'switch fix_web off' };\nreturn [{ json: { ...a, web_go: String(n.web), web_reason: n.reason } }];"
+        "jsCode": "// Fix 2 (2026-10-12): when the feed has no answer, answer from the web.\n// Wasim's call: automatically, no cap, Tavily basic search (1 credit), answer\n// only — nothing is saved to the feed. At most one web search per message.\n// Inlined into WF-00 (\"Web needed?\") and WF-44 web_answer.\n\n// The router's ways of saying the feed has nothing (seen in the end-to-end\n// runs) plus Final check's safe reply.\nconst NO_ANSWER = /\\b(the feed|your feed|feed's articles)\\b[^.?!]{0,80}\\b(doesn.t|does not|don.t|has no|have no|isn.t|is not|lacks?|no (recent |specific |direct )?(articles?|items?|stories|news|coverage|mention|details?|information|data))\\b|\\bnothing (in|on|about)\\b[^.?!]{0,60}|\\bno (recent |specific )?(articles?|items?|stories|news|coverage|results)\\b[^.?!]{0,40}\\b(on|about|in the feed|for)\\b|couldn.t confirm an answer|not covered (by|in) (the|your) feed|feed doesn.t (say|specify|mention|cover|include|have)|\\bfeed\\b[^]{0,220}?\\b(doesn.t|does not|didn.t|did not|don.t|do not) (specify|say|mention|include|give|state|list|cover|contain|have|answer)\\b/i;\nconst SMALL_TALK = /^\\s*(hi|hey|hello|thanks?|thank you|ok(ay)?|cool|nice|great|bye|good (morning|night|evening))\\b/i;\nconst ABOUT_BOT = /\\b(sources?|feeds? (are|you)|runs?|status|watching|subscri\\w*|schedul\\w*|scrape|transcribe|remember|forget)\\b/i;\n\nfunction needsWeb({ question, reply, alreadyWeb, feedItems }) {\n  const q = String(question || '').trim(), r = String(reply || '');\n  if (alreadyWeb) return { web: false, reason: 'already answered from the web' };\n  // #13: a cited answer built from feed items is an answer, even when it ends\n  // \"the feed does not contain ... launch dates\" (2026-10-13: that sentence sent a\n  // good bKash answer to the web, which then replaced it with \"Not in your feed\").\n  if (feedItems > 0) return { web: false, reason: 'answered from feed items' };\n  if (!q || SMALL_TALK.test(q)) return { web: false, reason: 'small talk' };\n  if (ABOUT_BOT.test(q)) return { web: false, reason: 'about the bot itself' };\n  if (/https?:\\/\\//i.test(q)) return { web: false, reason: 'a link, handled by scrape_url' };\n  if (!NO_ANSWER.test(r)) return { web: false, reason: 'the feed answered' };\n  return { web: true, reason: 'the feed has no answer' };\n}\n\nfunction tavilyBody(question) {\n  return { query: String(question || '').slice(0, 380), search_depth: 'basic', max_results: 5, include_answer: false, include_raw_content: false };\n}\n\nconst WEB_CHARS = 1500;\nfunction webAnswerBody(model, question, results) {\n  const list = (results || []).map((r, i) => '[' + (i + 1) + '] ' + (r.title || '') + ' (' + (r.url || '') + ')\\n' +\n    String(r.content || '').replace(/\\s+/g, ' ').slice(0, WEB_CHARS)).join('\\n\\n');\n  return { model, temperature: 0, max_tokens: 700, reasoning_effort: 'none',\n    messages: [\n      { role: 'system', content: 'Answer the question using ONLY the numbered web results. Cite each fact with its number, like [2]. ' +\n        'Quote figures and names exactly as the results give them, and give the date or year of each event when the results state it. If the results do not answer the question, say so in one sentence. ' +\n        'Plain text for Telegram: no markdown, no headings, at most 6 short sentences or bullet lines.' },\n      { role: 'user', content: 'Question: ' + question + '\\n\\nWeb results:\\n' + list }] };\n}\n\n// Final text: label, answer, and only the sources it cited (all of them when\n// it cited none). checkMissing = figures/names the answer check could not find\n// in the results; any = say the results were unclear instead of guessing.\nfunction formatWebReply(answer, results, checkMissing) {\n  const res = results || [];\n  const a = String(answer || '').trim();\n  if (!res.length) return 'Not in your feed, and the web search came back empty.';\n  if (!a || (checkMissing && checkMissing.length)) {\n    return 'Not in your feed. The web results did not give a clear answer — the closest pages:\\n' +\n      res.slice(0, 3).map((r, i) => '[' + (i + 1) + '] ' + r.title + ' ' + r.url).join('\\n');\n  }\n  const cited = [...new Set((a.match(/\\[(\\d)\\]/g) || []).map((m) => Number(m[1])))].filter((n) => n >= 1 && n <= res.length);\n  const show = (cited.length ? cited : res.slice(0, 3).map((_, i) => i + 1)).sort((x, y) => x - y);\n  return 'From the web (not your feed):\\n' + a + '\\n\\nSources:\\n' + show.map((n) => '[' + n + '] ' + res[n - 1].title + ' ' + res[n - 1].url).join('\\n');\n}\n\nconst a = $input.first().json;\nconst ctx = $('Agent input').first().json;\n// #13: items a synthesis answer showed (none for \"Your feed has nothing on this yet.\")\nconst feedItems = a.synth ? (((a.intermediateSteps || [])[0] || {}).observation || {}).items?.length || 0 : 0;\nconst n = ctx.fix_web === 'true' ? needsWeb({ question: ctx.text || '', reply: a.output || '', feedItems }) : { web: false, reason: 'switch fix_web off' };\nreturn [{ json: { ...a, web_go: String(n.web), web_reason: n.reason } }];"
       }
     },
     {
@@ -2011,7 +2167,69 @@
         ],
         [
           {
+            "node": "Big picture?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Big picture?": {
+      "main": [
+        [
+          {
+            "node": "Synth?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Synth?": {
+      "main": [
+        [
+          {
+            "node": "Synth answer",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
             "node": "Overseer Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Synth answer": {
+      "main": [
+        [
+          {
+            "node": "Synth memory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Synth memory": {
+      "main": [
+        [
+          {
+            "node": "Synth result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Synth result": {
+      "main": [
+        [
+          {
+            "node": "Web needed?",
             "type": "main",
             "index": 0
           }
