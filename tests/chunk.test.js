@@ -110,3 +110,19 @@ test('chunkStoreSql replaces the doc and never puts web text in the SQL', () => 
   assert.throws(() => chunkStoreSql(7, [{ n: 1, text: 'a' }], [], vectorLiteral));
   assert.throws(() => chunkStoreSql(7, [{ n: 1, text: 'a' }], [[1, 2]], vectorLiteral));
 });
+
+test('video chapters and on-screen readings become passages too; the header does not', () => {
+  const md = '# Claude AI Basics\nChannel: DIY | Length: 16:55\nScreen: screen read: software tutorial\n\n## Chapters\n' +
+    '[0:00] Intro\n[1:48] Claude Free vs Pro vs Max: One Shared Usage Limit and /usage\n\n' +
+    '## On screen (slides, charts, code; machine-read from video frames, may contain misreads)\n[2:05] Settings > Usage: 42% used\n\n' +
+    '## Transcript\n[0:04] hello and welcome\n[0:10] today we look at claude';
+  const c = chunkTranscript(md);
+  assert.strictEqual(c.length, 3);
+  assert.ok(c[0].text.startsWith('Chapters:') && c[0].text.includes('[1:48] Claude Free vs Pro vs Max: One Shared Usage Limit and /usage'));
+  assert.strictEqual(c[0].start_s, 0);
+  assert.ok(c[1].text.startsWith('On screen:') && c[1].text.includes('42% used'));
+  assert.strictEqual(c[1].start_s, 125);
+  assert.strictEqual(c[2].text, 'hello and welcome today we look at claude');
+  assert.strictEqual(c[2].start_s, 4);
+  assert.ok(!c.some((x) => /Channel:|Screen: screen read/.test(x.text)));
+});

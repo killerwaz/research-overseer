@@ -45,6 +45,7 @@ const WF = {
   full_sweep: I.workflows['wf40-full-sweep'],
   scrape_url: I.workflows['wf42-scrape-url'],
   query_feed: I.workflows['wf31-query-feed'],
+  web_answer: I.workflows['wf44-web-answer'],
   run_status: I.workflows['wf32-run-status'],
   manage_sources: I.workflows['wf34-manage-sources']
 };
@@ -250,7 +251,9 @@ return [{ json: { chat_id, output: text } }];
   { id: 'ctx', name: 'Agent context', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [1000, -100],
     parameters: { operation: 'executeQuery',
       query: "select coalesce((select string_agg(coalesce(nullif(label, ''), url) || ' <' || url || '>', '; ' order by id) from sources where active and kind = 'rss'), 'none') as sources, " +
-        "coalesce((select string_agg('run ' || id || ' ' || scope || ' ' || status || ' started ' || to_char(started_at at time zone 'Asia/Dhaka', 'YYYY-MM-DD HH24:MI') || ', ' || coalesce(items_created, 0) || ' items' || coalesce(' (error: ' || left(error, 80) || ')', ''), '; ' order by id desc) from (select * from runs order by id desc limit 3) r), 'no runs yet') as runs",
+        "coalesce((select string_agg('run ' || id || ' ' || scope || ' ' || status || ' started ' || to_char(started_at at time zone 'Asia/Dhaka', 'YYYY-MM-DD HH24:MI') || ', ' || coalesce(items_created, 0) || ' items' || coalesce(' (error: ' || left(error, 80) || ')', ''), '; ' order by id desc) from (select * from runs order by id desc limit 3) r), 'no runs yet') as runs, " +
+        "coalesce((select value from settings where key = 'fix_answer_check'), '') as fix_check, " +
+        "coalesce((select value from settings where key = 'fix_web'), '') as fix_web",
       options: {} },
     credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true },
 
@@ -259,8 +262,8 @@ return [{ json: { chat_id, output: text } }];
   { id: 'ctxmerge', name: 'Agent input', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1060, 100],
     parameters: { mode: 'runOnceForAllItems', jsCode: `
 const ctx = $('Agent context').first().json;
-const sources = ctx.sources || 'none', runs = ctx.runs || 'unknown';
-return $('Feed switch?').all(1).map(i => ({ json: { ...i.json, sources, runs } }));`.trim() } },
+const sources = ctx.sources || 'none', runs = ctx.runs || 'unknown', fix_check = ctx.fix_check || '', fix_web = ctx.fix_web || '';
+return $('Feed switch?').all(1).map(i => ({ json: { ...i.json, sources, runs, fix_check, fix_web } }));`.trim() } },
 
   // Links are ingested deterministically, BEFORE the model runs (2026-10-11):
   // the 9B answered a two-link message with "I've ingested both YouTube links"
@@ -298,11 +301,18 @@ return [{ json: { ...base, ingest_note: note } }];`.trim() } },
   // redone by a memoryless agent that is told to look it up. The decision is
   // shared/answer-guard.js (tested); the model cannot argue its way past it.
   { id: 'guard', name: 'Guard check', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1300, 100],
-    parameters: { mode: 'runOnceForAllItems', jsCode: inline('answer-guard.js') + `
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('answer-guard.js') + inline('answer-check.js') + `
 const a = $input.first().json;
-const question = $('Agent input').first().json.text || '';
+const ctx = $('Agent input').first().json;
+const question = ctx.text || '';
 const toolsUsed = (a.intermediateSteps || []).map(s => (s.action && s.action.tool) || '').filter(Boolean);
-const g = needsFreshLookup({ question, reply: a.output, toolsUsed });
+let g = needsFreshLookup({ question, reply: a.output, toolsUsed });
+// Fix 1a (switch fix_answer_check): figures and names must be in what the tools returned.
+if (!g.retry && ctx.fix_check === 'true' && toolsUsed.length) {
+  const evidence = (a.intermediateSteps || []).map(s => typeof s.observation === 'string' ? s.observation : JSON.stringify(s.observation || '')).join(' ') + ' ' + ctx.sources + ' ' + ctx.runs;
+  const miss = unsupportedFacts(a.output || '', evidence, question);
+  if (miss.length) g = { retry: true, reason: 'unsupported: ' + miss.slice(0, 6).join(', ') };
+}
 const pf = prefetchFor(question);
 return [{ json: { output: a.output || '', retry: String(g.retry), guard_reason: g.reason, tools_used: toolsUsed.join(','), prefetch_item: pf.item, prefetch_tag: pf.tag } }];`.trim() } },
 
@@ -334,8 +344,24 @@ return [{ json: { output: a.output || '', retry: String(g.retry), guard_reason: 
 
   { id: 'agent2', name: 'Guarded agent', type: '@n8n/n8n-nodes-langchain.agent', typeVersion: 3.1, position: [1780, 0],
     parameters: { promptType: 'define',
-      text: "={{ $('Agent input').first().json.text }}\n\n[previous exchange, for reference: {{ $json.previous }}]\n[live data, fetched just now: latest runs: {{ $('Agent input').first().json.runs }}]\n[live data, feed lookup run just now for this message: {{ JSON.stringify($('Prefetch').first().json).slice(0, 7000) }}]\n[Your first answer to this was rejected because it described the feed without checking it. Answer ONLY from the feed lookup above (list items with their n); call a tool only if the lookup clearly does not answer the question.]",
-      options: { systemMessage: SYSTEM.replace(/\{\{ \$json\.(sources|runs) \}\}/g, "{{ $('Agent input').first().json.$1 }}"), maxIterations: 6 } } },
+      text: "={{ $('Agent input').first().json.text }}\n\n[previous exchange, for reference: {{ $json.previous }}]\n[live data, fetched just now: latest runs: {{ $('Agent input').first().json.runs }}]\n[live data, feed lookup run just now for this message: {{ JSON.stringify($('Prefetch').first().json).slice(0, 20000) }}]\n{{ String($('Guard check').first().json.guard_reason || '').startsWith('unsupported') ? '[Your first answer was rejected because it stated facts that are not in the feed: ' + String($('Guard check').first().json.guard_reason).slice(13) + '. Answer ONLY from the feed lookup above: quote its figures and names exactly; if it does not contain the answer, say the feed does not say.]' : '[Your first answer to this was rejected because it described the feed without checking it. Answer ONLY from the feed lookup above (list items with their n); call a tool only if the lookup clearly does not answer the question.]' }}",
+      options: { systemMessage: SYSTEM.replace(/\{\{ \$json\.(sources|runs) \}\}/g, "{{ $('Agent input').first().json.$1 }}"), maxIterations: 6, returnIntermediateSteps: true } } },
+
+  // Fix 1a, second line: the redo's answer is checked too. Still unsupported =
+  // say so and show the closest items, rather than send a figure nobody wrote.
+  { id: 'finalcheck', name: 'Final check', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1860, -40],
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('answer-check.js') + `
+const a = $input.first().json;
+const ctx = $('Agent input').first().json;
+const steps = a.intermediateSteps;   /* Prep reply builds the 👍/👎 buttons from these */
+if (ctx.fix_check !== 'true') return [{ json: { output: a.output || '', intermediateSteps: steps } }];
+let pf = {};
+try { pf = $('Prefetch').first().json || {}; } catch (e) {}
+const evidence = JSON.stringify(pf) + ' ' + (a.intermediateSteps || []).map(s => typeof s.observation === 'string' ? s.observation : JSON.stringify(s.observation || '')).join(' ') + ' ' + ctx.sources + ' ' + ctx.runs;
+const miss = unsupportedFacts(a.output || '', evidence, ctx.text || '');
+if (!miss.length) return [{ json: { output: a.output || '', intermediateSteps: steps } }];
+const items = (pf.items || []).slice(0, 3).map(i => i.n + '. ' + i.title).join('\\n');
+return [{ json: { output: "I couldn't confirm an answer to that in your feed's articles." + (items ? ' Closest items:\\n' + items + '\\nSay \\"tell me about 1\\" to open one.' : ''), checked_out: miss.join(', '), intermediateSteps: steps } }];`.trim() } },
 
   // put the corrected answer into memory in place of the rejected one (base64
   // keeps free text out of the comma-split queryReplacement)
@@ -344,6 +370,33 @@ return [{ json: { output: a.output || '', retry: String(g.retry), guard_reason: 
       query: "update n8n_chat_histories set message = jsonb_set(message, '{content}', to_jsonb(convert_from(decode($2, 'base64'), 'UTF8'))) where id = (select max(id) from n8n_chat_histories where session_id = $1::text and message->>'type' = 'ai') returning id",
       options: { queryReplacement: "={{ $('Agent input').first().json.chat_id }},{{ Buffer.from(String($json.output || ''), 'utf8').toString('base64') }}" } },
     credentials: { postgres: CRED_PG }, alwaysOutputData: true, onError: 'continueRegularOutput' },
+
+  // ---- Fix 2: answers from the web when the feed has none (2026-10-12) ----
+  // Wasim's call: automatic, no cap, Tavily, answer only. Decided in code from
+  // the final reply (shared/web-fallback.js), never by the model; at most one
+  // web search per message. WF-44 does the search and the cited answer.
+  { id: 'webneed', name: 'Web needed?', type: 'n8n-nodes-base.code', typeVersion: 2, position: [2020, 120],
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('web-fallback.js') + `
+const a = $input.first().json;
+const ctx = $('Agent input').first().json;
+const n = ctx.fix_web === 'true' ? needsWeb({ question: ctx.text || '', reply: a.output || '' }) : { web: false, reason: 'switch fix_web off' };
+return [{ json: { ...a, web_go: String(n.web), web_reason: n.reason } }];`.trim() } },
+  { id: 'webif', name: 'Web?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [2180, 120],
+    parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, combinator: 'and',
+      conditions: [{ id: 'w1', leftValue: '={{ $json.web_go }}', rightValue: 'true', operator: { type: 'string', operation: 'equals' } }] } } },
+  { id: 'webcall', name: 'Web answer', type: 'n8n-nodes-base.executeWorkflow', typeVersion: 1.2, position: [2340, 40],
+    parameters: { workflowId: { __rl: true, value: WF.web_answer, mode: 'id' },
+      workflowInputs: { mappingMode: 'defineBelow', value: { question: "={{ $('Agent input').first().json.text }}" },
+        matchingColumns: [], schema: [{ id: 'question', displayName: 'question', required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: 'string' }] },
+      options: { waitForSubWorkflow: true } },
+    onError: 'continueRegularOutput', alwaysOutputData: true },
+  // WF-44 failed or came back empty = keep the feed's "nothing here" reply.
+  { id: 'webuse', name: 'Use web answer', type: 'n8n-nodes-base.code', typeVersion: 2, position: [2500, 40],
+    parameters: { mode: 'runOnceForAllItems', jsCode: `
+const w = $input.first().json || {};
+const before = $('Web needed?').first().json;
+if (!w.output) return [{ json: before }];
+return [{ json: { output: w.output, web: true, web_sources: w.sources || [] } }];`.trim() } },
 
   // memory keeps the conversation, not the bulk: drop tool calls + raw tool
   // output (n8n saves full results — 10 feed items — and offers no switch to
@@ -455,7 +508,7 @@ const sources = [];
 if ($json.intermediateSteps) sources.push($json.intermediateSteps);
 try { sources.push($('Prefetch').all().map((i) => i.json)); } catch (e) {}
 if (!sources.length) { try { sources.push($('Overseer Agent').first().json.intermediateSteps); } catch (e) {} }
-const reply_markup = listKeyboard(shownItems(sources));
+const reply_markup = $json.web === true ? undefined : listKeyboard(shownItems(sources));   /* web answers: no feed buttons */
 return { json: { chat_id, output: forTelegram($json.output) || '(empty reply)', reply_markup } };`.trim() } },
 
   // HTTP, not the Telegram node: the node's inline keyboard is fixed at build
@@ -510,10 +563,15 @@ const connections = {
   'Link note': { main: [[{ node: 'Overseer Agent', type: 'main', index: 0 }]] },
   'Overseer Agent': { main: [[{ node: 'Guard check', type: 'main', index: 0 }]] },
   'Guard check': { main: [[{ node: 'Redo?', type: 'main', index: 0 }]] },
-  'Redo?': { main: [[{ node: 'Prefetch', type: 'main', index: 0 }], [{ node: 'Prep reply', type: 'main', index: 0 }]] },
+  'Redo?': { main: [[{ node: 'Prefetch', type: 'main', index: 0 }], [{ node: 'Web needed?', type: 'main', index: 0 }]] },
   'Prefetch': { main: [[{ node: 'Redo context', type: 'main', index: 0 }]] },
   'Redo context': { main: [[{ node: 'Guarded agent', type: 'main', index: 0 }]] },
-  'Guarded agent': { main: [[{ node: 'Prep reply', type: 'main', index: 0 }, { node: 'Fix memory', type: 'main', index: 0 }]] },
+  'Guarded agent': { main: [[{ node: 'Final check', type: 'main', index: 0 }]] },
+  'Final check': { main: [[{ node: 'Web needed?', type: 'main', index: 0 }]] },
+  'Web needed?': { main: [[{ node: 'Web?', type: 'main', index: 0 }]] },
+  'Web?': { main: [[{ node: 'Web answer', type: 'main', index: 0 }], [{ node: 'Prep reply', type: 'main', index: 0 }, { node: 'Fix memory', type: 'main', index: 0 }]] },
+  'Web answer': { main: [[{ node: 'Use web answer', type: 'main', index: 0 }]] },
+  'Use web answer': { main: [[{ node: 'Prep reply', type: 'main', index: 0 }, { node: 'Fix memory', type: 'main', index: 0 }]] },
   'Prep reply': { main: [[{ node: 'Send reply', type: 'main', index: 0 }, { node: 'Tidy memory', type: 'main', index: 0 }]] }
 };
 

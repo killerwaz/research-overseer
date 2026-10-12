@@ -147,21 +147,41 @@ function parseTs(s) {
 
 // "[m:ss] text" lines under "## Transcript"; anything before that heading is
 // the header block (title, Channel:, Screen:) and is dropped.
+// A media doc is a header (title, Channel:, Screen:) and "## " sections:
+// Chapters, On screen (the 9B's reading of slides and code), Transcript.
+// Every section becomes passages of its own; the header does not. Fixed
+// 2026-10-12: the first version kept only the Transcript, which dropped every
+// chapter list and every screen reading — "/usage" lived only in a chapter
+// title, so "which command shows my usage?" failed 3 runs out of 3.
+// Transcript lines lose their [m:ss] (it becomes start_s); chapter and
+// on-screen lines keep it inline, so the answer can cite the time.
 function chunkTranscript(md, opts) {
   const size = (opts && opts.size) || CHUNK_SIZE, max = (opts && opts.max) || CHUNK_MAX;
   const src = String(md || '');
-  const at = src.indexOf('## Transcript');
-  const lines = (at >= 0 ? src.slice(at + '## Transcript'.length) : src).split('\n');
+  const sectioned = /^## /m.test(src);
   const chunks = [];
+  let section = sectioned ? null : 'Transcript';   // null = the header, skipped
   let cur = '', start = null;
-  const flush = () => { if (cur.trim()) chunks.push({ text: cur.trim(), start_s: start }); cur = ''; start = null; };
-  for (const raw of lines) {
+  const flush = () => { if (cur.trim() && cur.trim() !== section + ':') chunks.push({ text: cur.trim(), start_s: start }); cur = ''; start = null; };
+  for (const raw of src.split('\n')) {
+    const h = raw.match(/^##\s+(.+?)\s*$/);
+    if (h) {
+      flush();
+      section = /^transcript/i.test(h[1]) ? 'Transcript' : h[1].replace(/\s*\(.*\)\s*$/, '');
+      if (section !== 'Transcript') cur = section + ':';
+      continue;
+    }
+    if (section === null) continue;
     const m = raw.match(/^\s*\[(\d+(?::\d{2}){1,2})\]\s*(.*)$/);
-    const text = (m ? m[2] : raw).trim();
+    const keepTs = section !== 'Transcript';
+    const text = (m && !keepTs ? m[2] : raw).trim();
     if (!text) continue;
-    if (cur && cur.length + 1 + text.length > size) flush();
+    if (cur && cur.length + 1 + text.length > size) {
+      flush();
+      if (keepTs) cur = section + ':';
+    }
     if (start === null && m) start = parseTs(m[1]);
-    cur = cur ? cur + ' ' + text : text;
+    cur = cur ? cur + (keepTs ? '\n' : ' ') + text : text;
   }
   flush();
   return chunks.slice(0, max).map((c, i) => ({ n: i + 1, text: c.text, start_s: c.start_s }));

@@ -6,7 +6,7 @@
 // quietly, onError continue) and his chat memory is untouched; the reply is
 // read back from that fake chat's memory. Fails a case outright if a run
 // (a paid search) started — these are all questions about the existing feed.
-// Results go to workbench/data/answers.json.
+// Results go to workbench/data/answers.json (answers-$EVAL_LABEL.json when EVAL_LABEL is set).
 const fs = require('fs');
 const path = require('path');
 
@@ -48,7 +48,10 @@ async function sentReply(q, since) {
 (async () => {
   // A fresh conversation per run: earlier test answers must not leak into this one.
   await sql("delete from n8n_chat_histories where session_id = '" + FAKE_CHAT + "'");
-  const cases = [...SET.questions, ...SET.absent.filter((a) => !a.near)].filter((c) => !only.length || only.includes(c.id));
+  // WEB=1: Fix 2 is on — absent topics must come back from the web, feed
+// questions must NOT go to the web, and the general questions run too.
+const WEB = process.env.WEB === '1';
+const cases = [...SET.questions, ...SET.absent.filter((a) => !a.near), ...(WEB ? SET.general || [] : [])].filter((c) => !only.length || only.includes(c.id));
   const results = [];
   for (const c of cases) {
     const runBefore = await maxRun();
@@ -62,18 +65,20 @@ async function sentReply(q, since) {
     const reply = sent.reply;
     const searched = (await maxRun()) > runBefore;
     let pass;
-    if (c.expect) pass = new RegExp(c.expect, 'i').test(reply);
-    else pass = /nothing|\bno\b[^.]{0,30}\b(items?|results?|matches|coverage|articles?|news|stor(y|ies))\b|doesn.t (have|mention|cover|say)|not (find|found|in the feed|covered)|couldn.t find/i.test(reply);
+    const fromWeb = /^(From the web|Not in your feed)/.test(reply.trim());
+    if (c.expect) pass = new RegExp(c.expect, 'i').test(reply) && (!WEB || (c.id >= 200) === fromWeb);
+    else if (WEB) pass = fromWeb;
+    else pass = /nothing|\bno\b[^.]{0,30}\b(items?|results?|matches|coverage|articles?|news|stor(y|ies)|information|info|details|data)\b|doesn.t (have|mention|cover|say)|not (find|found|in the feed|covered)|couldn.t find/i.test(reply);
     if (searched) pass = false;
-    results.push({ id: c.id, q: c.q, expect: c.expect || '(nothing found)', pass, searched, secs, reply, tools: sent.tools, redo: sent.redo, exec: sent.exec });
+    results.push({ id: c.id, q: c.q, expect: c.expect || '(nothing found)', pass, searched, secs, reply, tools: sent.tools, redo: sent.redo, exec: sent.exec, web: fromWeb });
     console.log((pass ? 'ok ' : 'XX ') + String(c.id).padStart(3) + ' ' + String(secs).padStart(3) + 's ' + (searched ? 'STARTED A RUN ' : '') +
       (sent.tools.length ? '' : '[no tool] ') + (sent.redo ? '[guard redo] ' : '') + c.q);
     if (!pass) console.log('      tools: ' + (sent.tools.join(' ; ') || 'none') + '\n      ' + reply.replace(/\s+/g, ' ').slice(0, 400));
   }
-  const q = results.filter((r) => r.expect !== '(nothing found)'), a = results.filter((r) => r.expect === '(nothing found)');
+  const q = results.filter((r) => r.expect !== '(nothing found)' && r.id < 200), a = results.filter((r) => r.expect === '(nothing found)'), g = results.filter((r) => r.id >= 200);
   const summary = { answered: q.filter((r) => r.pass).length + '/' + q.length, absent_ok: a.filter((r) => r.pass).length + '/' + a.length,
-    runs_started: results.filter((r) => r.searched).length };
+    runs_started: results.filter((r) => r.searched).length, ...(WEB ? { general_ok: g.filter((r) => r.pass).length + '/' + g.length, web_answers: results.filter((r) => r.web).length } : {}) };
   console.log(JSON.stringify(summary));
   fs.mkdirSync(path.join(ROOT, 'workbench', 'data'), { recursive: true });
-  fs.writeFileSync(path.join(ROOT, 'workbench', 'data', 'answers.json'), JSON.stringify({ generated_at: new Date().toISOString(), summary, results }));
+  fs.writeFileSync(path.join(ROOT, 'workbench', 'data', 'answers' + (process.env.EVAL_LABEL ? '-' + process.env.EVAL_LABEL : '') + '.json'), JSON.stringify({ generated_at: new Date().toISOString(), summary, results }));
 })().catch((e) => { console.error(e.message); process.exit(1); });
