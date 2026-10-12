@@ -4,7 +4,7 @@
 //      node scripts/fix-switches.js two=true rerank=llm mentions=true check=true
 //      node scripts/fix-switches.js off                 all off (Fix 1 switches; web is separate)
 //      node scripts/fix-switches.js web=true            Fix 2: web answers when the feed has none
-// rerank: off | model (Qwen3-Reranker on CPU, rerank/server.py) | llm (the 9B)
+// rerank: off | llm (the 9B scores the candidates)
 const fs = require('fs');
 const path = require('path');
 
@@ -12,7 +12,7 @@ const env = Object.fromEntries(fs.readFileSync(path.join(__dirname, '..', '.env'
   .filter((l) => /^[A-Z0-9_]+=/.test(l)).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1).trim()]));
 const SQL = 'http://localhost:5678/webhook/overseer-sql-runner-' + env.ZZ_WEBHOOK_SECRET;
 const KEYS = { two: 'fix_two_passages', rerank: 'fix_rerank', mentions: 'fix_mentions', check: 'fix_answer_check', web: 'fix_web' };
-const ALLOWED = { two: ['true', 'false'], rerank: ['off', 'model', 'llm'], mentions: ['true', 'false'], check: ['true', 'false'], web: ['true', 'false'] };
+const ALLOWED = { two: ['true', 'false'], rerank: ['off', 'llm'], mentions: ['true', 'false'], check: ['true', 'false'], web: ['true', 'false'] };
 
 async function sql(query) {
   const r = await fetch(SQL, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query }) });

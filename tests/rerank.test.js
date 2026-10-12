@@ -9,15 +9,16 @@ test('switchesFrom reads the settings, unknown = off', () => {
   assert.deepStrictEqual(switchesFrom({ fix_two_passages: 'true', fix_rerank: 'llm', fix_mentions: 'true', fix_answer_check: 'true' }),
     { two: true, rerank: 'llm', mentions: true, check: true });
   assert.strictEqual(switchesFrom({ fix_rerank: 'yes' }).rerank, 'off');
+  assert.strictEqual(switchesFrom({ fix_rerank: 'model' }).rerank, 'off');   // the CPU reranker was removed
 });
 
 test('rerankCandidates takes listed rows only, up to the mode limit, 2 passages when asked', () => {
   const rows = [row(1, { ptext: 'a', ptext2: 'a2' }), row(2, { outside: true, ptext: 'x' }), row(3, {}), ...Array.from({ length: 10 }, (_, k) => row(10 + k, { ptext: 'p' }))];
-  const one = rerankCandidates(rows, 'model', false);
-  assert.strictEqual(new Set(one.map.map((m) => m.row)).size, RERANK_TOP.model);
+  const one = rerankCandidates(rows, 'llm', false);
+  assert.strictEqual(new Set(one.map.map((m) => m.row)).size, Math.min(RERANK_TOP.llm, rows.length - 1));
   assert.ok(!one.map.some((m) => m.row === 1)); // outside row skipped
   assert.strictEqual(one.docs[1], 'T3\nS3');     // summary-only row offers title + summary
-  const two = rerankCandidates(rows, 'model', true);
+  const two = rerankCandidates(rows, 'llm', true);
   assert.deepStrictEqual(two.map.slice(0, 2), [{ row: 0, which: 1 }, { row: 0, which: 2 }]);
   assert.deepStrictEqual(rerankCandidates(rows, 'off', true), { docs: [], map: [] });
 });

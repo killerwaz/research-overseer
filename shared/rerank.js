@@ -4,22 +4,21 @@
 //
 // Switches live in the settings table (key -> value), read once per call:
 //   fix_two_passages  'true'  the first results carry their 2 best passages
-//   fix_rerank        'model' Qwen3-Reranker-0.6B on CPU (rerank/server.py)
-//                     'llm'   the 9B scores the candidates (thinking off)
-//                     anything else = off
+//   fix_rerank        'llm'   the 9B scores the candidates (thinking off); anything else = off
 //   fix_mentions      'true'  text-only weak matches are labelled "mentioned in passing"
 //   fix_answer_check  'true'  (WF-00, shared/answer-check.js)
 
-// Measured 2026-10-12: the CPU reranker takes ~1.5 s per passage at 512
-// tokens (int8 is faster but scored the right passage 0.35 instead of 0.98).
-const RERANK_TOP = { model: 6, llm: 12 };
+// A dedicated reranker (Qwen3-Reranker-0.6B) was tried and removed 2026-10-12:
+// the GPU is full, and on CPU it took ~1.5 s per passage (8-25 s per search,
+// one timeout) for the same end-to-end score as the 9B (12/13 both).
+const RERANK_TOP = { llm: 12 };
 const LLM_DOC_CHARS = 1200;
 const MENTION_RR = 0.2;     // reranker score below this = does not answer
 const MENTION_SIM = 0.40;   // without a reranker: meaning score below this
 
 function switchesFrom(row) {
   const r = row || {};
-  return { two: r.fix_two_passages === 'true', rerank: ['model', 'llm'].includes(r.fix_rerank) ? r.fix_rerank : 'off',
+  return { two: r.fix_two_passages === 'true', rerank: r.fix_rerank === 'llm' ? 'llm' : 'off',
     mentions: r.fix_mentions === 'true', check: r.fix_answer_check === 'true' };
 }
 
