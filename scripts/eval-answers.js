@@ -48,6 +48,8 @@ async function sentReply(q, since) {
 (async () => {
   // A fresh conversation per run: earlier test answers must not leak into this one.
   await sql("delete from n8n_chat_histories where session_id = '" + FAKE_CHAT + "'");
+  // and its long-term memory (#14): an old run's answers must not be recalled
+  await sql('delete from chat_memory where chat_id = ' + FAKE_CHAT);
   // WEB=1: Fix 2 is on — absent topics must come back from the web, feed
 // questions must NOT go to the web, and the general questions run too.
 const WEB = process.env.WEB === '1';

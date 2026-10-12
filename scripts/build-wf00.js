@@ -54,7 +54,7 @@ const WF = {
 const SYSTEM = `=You are Research Overseer's dispatcher on Telegram. Route requests to tools; never do research yourself; never fabricate results or data — if a tool returns nothing, say so.
 
 Rules:
-0. You know NOTHING about runs or findings except what a tool returns for the CURRENT message. Earlier tool results in this chat are stale — runs start and finish, items arrive. Every question about runs or findings MUST call the matching tool again, even if you answered the same question a minute ago. Never answer from chat history or general knowledge. (The feed list below is fresh every message.)
+0. You know NOTHING about runs or findings except what a tool returns for the CURRENT message. Earlier tool results in this chat are stale — runs start and finish, items arrive. Every question about runs or findings MUST call the matching tool again, even if you answered the same question a minute ago. Never answer from chat history or general knowledge. (The feed list below is fresh every message.) One exception: a message may carry [earlier chats with this user ...] — what was said in older chats. Use one only if it is about what this message asks, and always say when ("On 13 Oct I told you ..."); it tells what was said then, not what the feed holds now.
 1. Free and instant actions run immediately, no confirmation: a pasted URL -> scrape_url; status questions -> run_status; 'what feeds/sources are you watching' -> manage_sources with action list; 'how are my sources/feeds doing', 'which feeds are worth it', 'where do good items come from' -> manage_sources with action scorecard (run status is NOT source quality); reading existing findings -> query_feed; 'anything new today' -> run_discovery with source rss. These touch nothing that costs money.
 2. Anything that starts a web search costs money and about six minutes, so it needs the user's word first. Run it immediately ONLY if they used an explicit search verb (search, find me, look up, go get, dig into). If they merely asked a question — 'what's happening with X', 'anything on X', 'how is X going' — answer it from query_feed (free). If the feed does not answer it, say so in one plain sentence and stop: the system answers from the web by itself, automatically. NEVER offer a search, never ask 'would you like me to search', never mention exa, tavily or brave in an answer. Discovery runs (which add items to the feed) happen only when the user asks to search, find or track something. full_sweep always needs confirmation.
 3. Retrospective questions are ALWAYS query_feed or run_status, and this OVERRIDES everything else even when a topic is named. Retrospective phrasing includes: catch me up, what did you find, what's new, anything good, show me, what did I miss, brief me, recap. "Catch me up on funding this week" is query_feed with max_age_days 7 — NOT a search, and NOT a confirmation prompt either; just read the feed and answer.
@@ -256,7 +256,8 @@ return [{ json: { chat_id, output: text } }];
         "coalesce((select value from settings where key = 'fix_answer_check'), '') as fix_check, " +
         "coalesce((select value from settings where key = 'fix_web'), '') as fix_web, " +
         "coalesce((select value from settings where key = 'fix_synth'), 'off') as fix_synth, " +
-        "coalesce((select value from settings where key = 'fix_verify'), 'false') as fix_verify",
+        "coalesce((select value from settings where key = 'fix_verify'), 'false') as fix_verify, " +
+        "coalesce((select value from settings where key = 'fix_recall'), 'true') as fix_recall",
       options: {} },
     credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true },
 
@@ -265,8 +266,8 @@ return [{ json: { chat_id, output: text } }];
   { id: 'ctxmerge', name: 'Agent input', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1060, 100],
     parameters: { mode: 'runOnceForAllItems', jsCode: `
 const ctx = $('Agent context').first().json;
-const sources = ctx.sources || 'none', runs = ctx.runs || 'unknown', fix_check = ctx.fix_check || '', fix_web = ctx.fix_web || '', fix_synth = ctx.fix_synth || 'off', fix_verify = ctx.fix_verify || 'false';
-return $('Feed switch?').all(1).map(i => ({ json: { ...i.json, sources, runs, fix_check, fix_web, fix_synth, fix_verify } }));`.trim() } },
+const sources = ctx.sources || 'none', runs = ctx.runs || 'unknown', fix_check = ctx.fix_check || '', fix_web = ctx.fix_web || '', fix_synth = ctx.fix_synth || 'off', fix_verify = ctx.fix_verify || 'false', fix_recall = ctx.fix_recall || 'true';
+return $('Feed switch?').all(1).map(i => ({ json: { ...i.json, sources, runs, fix_check, fix_web, fix_synth, fix_verify, fix_recall } }));`.trim() } },
 
   // Links are ingested deterministically, BEFORE the model runs (2026-10-11):
   // the 9B answered a two-link message with "I've ingested both YouTube links"
@@ -338,7 +339,7 @@ return [{ json: { ...base, ingest_note: note } }];`.trim() } },
     // Live run data rides in the USER turn, not just the system prompt: with it
     // only in the system prompt the 9B still copied a stale run_status answer
     // from chat history (it saw run 58, answered "run 57"). The latest turn wins.
-    parameters: { promptType: 'define', text: '={{ $json.text }}\n\n[live data, fetched just now: latest runs: {{ $json.runs }}]{{ $json.ingest_note ? "\\n[ALREADY DONE for this message, by the system: " + $json.ingest_note + " Do NOT call scrape_url. Reply in one short line.]" : "" }}',
+    parameters: { promptType: 'define', text: '={{ $json.text }}\n\n[live data, fetched just now: latest runs: {{ $json.runs }}]{{ $json.ingest_note ? "\\n[ALREADY DONE for this message, by the system: " + $json.ingest_note + " Do NOT call scrape_url. Reply in one short line.]" : "" }}{{ $json.recall_note ? "\\n" + $json.recall_note : "" }}',
       options: { systemMessage: SYSTEM, maxIterations: 6, returnIntermediateSteps: true } } },
 
   // ---- answer guard (2026-10-09) ----
@@ -346,22 +347,28 @@ return [{ json: { ...base, ingest_note: note } }];`.trim() } },
   // redone by a memoryless agent that is told to look it up. The decision is
   // shared/answer-guard.js (tested); the model cannot argue its way past it.
   { id: 'guard', name: 'Guard check', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1300, 100],
-    parameters: { mode: 'runOnceForAllItems', jsCode: inline('answer-guard.js') + inline('answer-check.js') + `
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('answer-guard.js') + inline('answer-check.js') + inline('recall.js') + `
 const a = $input.first().json;
 const ctx = $('Agent input').first().json;
 const question = ctx.text || '';
+// #14: an answer built on a recalled exchange says so ("On 13 Oct I told you"),
+// and only then does the recall count as the lookup (shared/recall.js usesRecall).
+let rc = {};
+try { rc = $('Recall note').first().json || {}; } catch (e) {}
+const recall_note = rc.recall_note || '';
 const toolsUsed = (a.intermediateSteps || []).map(s => (s.action && s.action.tool) || '').filter(Boolean);
+if (usesRecall(a.output, rc.recall_n)) toolsUsed.push('recall');
 let g = needsFreshLookup({ question, reply: a.output, toolsUsed });
 // Fix 1a (switch fix_answer_check): figures and names must be in what the tools returned.
 if (!g.retry && ctx.fix_check === 'true' && toolsUsed.length) {
-  const evidence = (a.intermediateSteps || []).map(s => typeof s.observation === 'string' ? s.observation : JSON.stringify(s.observation || '')).join(' ') + ' ' + ctx.sources + ' ' + ctx.runs;
+  const evidence = (a.intermediateSteps || []).map(s => typeof s.observation === 'string' ? s.observation : JSON.stringify(s.observation || '')).join(' ') + ' ' + ctx.sources + ' ' + ctx.runs + ' ' + recall_note;
   const miss = unsupportedFacts(a.output || '', evidence, question);
   if (miss.length) g = { retry: true, reason: 'unsupported: ' + miss.slice(0, 6).join(', ') };
 }
 const pf = prefetchFor(question);
 const sq = String(g.reason || '').startsWith('source quality');
 return [{ json: { output: a.output || '', retry: String(g.retry), guard_reason: g.reason, tools_used: toolsUsed.join(','), prefetch_item: pf.item, prefetch_tag: pf.tag,
-  source_q: String(sq), scorecard_days: scorecardDays(question) } }];`.trim() } },
+  source_q: String(sq), scorecard_days: scorecardDays(question), recall_note } }];`.trim() } },
 
   { id: 'retryif', name: 'Redo?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1460, 100],
     parameters: { options: {}, conditions: {
@@ -409,7 +416,7 @@ return [{ json: { output: a.output || '', retry: String(g.retry), guard_reason: 
 
   { id: 'agent2', name: 'Guarded agent', type: '@n8n/n8n-nodes-langchain.agent', typeVersion: 3.1, position: [1780, 0],
     parameters: { promptType: 'define',
-      text: "={{ $('Agent input').first().json.text }}\n\n[previous exchange, for reference: {{ $json.previous }}]\n[live data, fetched just now: latest runs: {{ $('Agent input').first().json.runs }}]\n{{ String($('Guard check').first().json.guard_reason || '').startsWith('source quality') ? '[live data, source scorecard run just now: ' + JSON.stringify($('Scorecard prefetch').first().json).slice(0, 12000) + ']\\n[Your first answer was rejected because it answered a question about how the sources are doing without the scorecard. Answer ONLY from the scorecard above: per source and per RSS feed, good items (score 7+) out of scored, good rate, average score; name the silent feeds (0 items). Do not call any tool and do not switch anything off.]' : '[live data, feed lookup run just now for this message: ' + JSON.stringify($('Prefetch').first().json).slice(0, 20000) + ']\\n' + (String($('Guard check').first().json.guard_reason || '').startsWith('unsupported') ? '[Your first answer was rejected because it stated facts that are not in the feed: ' + String($('Guard check').first().json.guard_reason).slice(13) + '. Answer ONLY from the feed lookup above: quote its figures and names exactly; if it does not contain the answer, say the feed does not say.]' : '[Your first answer to this was rejected because it described the feed without checking it. Answer ONLY from the feed lookup above (list items with their n); call a tool only if the lookup clearly does not answer the question.]') }}",
+      text: "={{ $('Agent input').first().json.text }}\n\n[previous exchange, for reference: {{ $json.previous }}]\n[live data, fetched just now: latest runs: {{ $('Agent input').first().json.runs }}]\n{{ $('Guard check').first().json.recall_note ? $('Guard check').first().json.recall_note + '\\n' : '' }}{{ String($('Guard check').first().json.guard_reason || '').startsWith('source quality') ? '[live data, source scorecard run just now: ' + JSON.stringify($('Scorecard prefetch').first().json).slice(0, 12000) + ']\\n[Your first answer was rejected because it answered a question about how the sources are doing without the scorecard. Answer ONLY from the scorecard above: per source and per RSS feed, good items (score 7+) out of scored, good rate, average score; name the silent feeds (0 items). Do not call any tool and do not switch anything off.]' : '[live data, feed lookup run just now for this message: ' + JSON.stringify($('Prefetch').first().json).slice(0, 20000) + ']\\n' + (String($('Guard check').first().json.guard_reason || '').startsWith('unsupported') ? '[Your first answer was rejected because it stated facts that are not in the feed: ' + String($('Guard check').first().json.guard_reason).slice(13) + '. Answer ONLY from the feed lookup above: quote its figures and names exactly; if it does not contain the answer, say the feed does not say.]' : '[Your first answer to this was rejected because it described the feed without checking it. Answer ONLY from the feed lookup above (list items with their n); call a tool only if the lookup clearly does not answer the question.]') }}",
       options: { systemMessage: SYSTEM.replace(/\{\{ \$json\.(sources|runs) \}\}/g, "{{ $('Agent input').first().json.$1 }}"), maxIterations: 6, returnIntermediateSteps: true } } },
 
   // Fix 1a, second line: the redo's answer is checked too. Still unsupported =
@@ -424,7 +431,9 @@ let pf = {};
 try { pf = $('Prefetch').first().json || {}; } catch (e) {}
 let sc = {};
 try { sc = $('Scorecard prefetch').first().json || {}; } catch (e) {}
-const evidence = JSON.stringify(pf) + ' ' + JSON.stringify(sc) + ' ' + (a.intermediateSteps || []).map(s => typeof s.observation === 'string' ? s.observation : JSON.stringify(s.observation || '')).join(' ') + ' ' + ctx.sources + ' ' + ctx.runs;
+let rnote = '';
+try { rnote = $('Guard check').first().json.recall_note || ''; } catch (e) {}
+const evidence = rnote + ' ' + JSON.stringify(pf) + ' ' + JSON.stringify(sc) + ' ' + (a.intermediateSteps || []).map(s => typeof s.observation === 'string' ? s.observation : JSON.stringify(s.observation || '')).join(' ') + ' ' + ctx.sources + ' ' + ctx.runs;
 const miss = unsupportedFacts(a.output || '', evidence, ctx.text || '');
 if (!miss.length) return [{ json: { output: a.output || '', intermediateSteps: steps } }];
 const items = (pf.items || []).slice(0, 3).map(i => i.n + '. ' + i.title).join('\\n');
@@ -439,7 +448,7 @@ return [{ json: { output: "I couldn't confirm an answer to that in your feed's a
   { id: 'fixmemtext', name: 'Memory text', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1900, -100],
     parameters: { mode: 'runOnceForAllItems', jsCode: `
 const o = $input.first().json || {};
-return [{ json: { chat_id: String($('Agent input').first().json.chat_id), out_b64: Buffer.from(String(o.output || ''), 'utf8').toString('base64') } }];`.trim() } },
+return [{ json: { chat_id: String($('Agent input').first().json.chat_id), output: String(o.output || ''), out_b64: Buffer.from(String(o.output || ''), 'utf8').toString('base64') } }];`.trim() } },
   { id: 'fixmem', name: 'Fix memory', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [1940, -100],
     parameters: { operation: 'executeQuery',
       query: "update n8n_chat_histories set message = jsonb_set(message, '{content}', to_jsonb(convert_from(decode($2, 'base64'), 'UTF8'))) where id = (select max(id) from n8n_chat_histories where session_id = $1::text and message->>'type' = 'ai') returning id",
@@ -451,16 +460,23 @@ return [{ json: { chat_id: String($('Agent input').first().json.chat_id), out_b6
   // the final reply (shared/web-fallback.js), never by the model; at most one
   // web search per message. WF-44 does the search and the cited answer.
   { id: 'webneed', name: 'Web needed?', type: 'n8n-nodes-base.code', typeVersion: 2, position: [2020, 120],
-    parameters: { mode: 'runOnceForAllItems', jsCode: inline('web-fallback.js') + `
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('web-fallback.js') + inline('recall.js') + `
 const a = $input.first().json;
 const ctx = $('Agent input').first().json;
 // #13: items a synthesis answer showed (none for "Your feed has nothing on this yet.")
 const feedItems = a.synth ? (((a.intermediateSteps || [])[0] || {}).observation || {}).items?.length || 0 : 0;
-const n = ctx.fix_web === 'true' ? needsWeb({ question: ctx.text || '', reply: a.output || '', feedItems }) : { web: false, reason: 'switch fix_web off' };
+let n = ctx.fix_web === 'true' ? needsWeb({ question: ctx.text || '', reply: a.output || '', feedItems }) : { web: false, reason: 'switch fix_web off' };
 // the wording let it through, but it offers a search or says something is missing: ask the 9B
-const judge = ctx.fix_web === 'true' && !n.web && n.reason === 'the feed answered' && !a.synth && judgeNeeded(a.output || '');
+let judge = ctx.fix_web === 'true' && !n.web && n.reason === 'the feed answered' && !a.synth && judgeNeeded(a.output || '');
+// #14: the reply is built on an earlier chat that answered, yet says the feed has
+// nothing — the 9B judges whether it answered (Pathao: yes; "still nothing": no).
+let rc = {};
+try { rc = $('Recall note').first().json || {}; } catch (e) {}
+if (n.web && !a.synth && answeredFromRecall(a.output || '', rc.recall_rows, (r) => needsWeb({ question: r.question, reply: r.answer }).web)) {
+  n = { web: false, reason: 'earlier chat: the judge decides' }; judge = true;
+}
 return [{ json: { ...a, web_go: String(n.web), web_reason: n.reason, judge_go: String(judge),
-  llm_body: judge ? JSON.stringify(judgeBody('qwen/qwen3.5-9b', ctx.text || '', a.output || '')) : '' } }];`.trim() } },
+  llm_body: judge ? JSON.stringify(judgeBody('qwen/qwen3.5-9b', ctx.text || '', a.output || '', n.reason === 'earlier chat: the judge decides')) : '' } }];`.trim() } },
   { id: 'judgeif', name: 'Judge?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [2060, 220],
     parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, combinator: 'and',
       conditions: [{ id: 'j1', leftValue: '={{ $json.judge_go }}', rightValue: 'true', operator: { type: 'string', operation: 'equals' } }] } } },
@@ -539,6 +555,59 @@ return [{ json: { output: w.output, web: true, web_sources: w.sources || [], web
       options: { queryReplacement: "={{ $('Agent input').first().json.chat_id }}" } },
     credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true, onError: 'continueRegularOutput' },
 
+  // ---- #14 long-term memory (2026-10-13, sql/016, shared/recall.js) ----
+  // Before the agent: the message is embedded and his earlier exchanges are
+  // searched by meaning (cutoff 0.50); hits ride into the agent's turn after the
+  // live data, dated, so Tidy memory strips them from the stored message. Every
+  // finished exchange is stored after Memory text (the reply he actually saw).
+  // Switch fix_recall (default on). A failed embedding = no recall, never a failed reply.
+  { id: 'recallprep', name: 'Recall prep', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1120, 200],
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('embed.js') + `
+const a = $('Agent input').first().json;
+return [{ json: { embed_body: JSON.stringify({ model: EMBED_MODEL, input: [queryText(a.text || '-')] }) } }];`.trim() } },
+  { id: 'recallembed', name: 'Recall embed', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [1140, 200],
+    parameters: { method: 'POST', url: 'http://host.docker.internal:1234/v1/embeddings',
+      authentication: 'genericCredentialType', genericAuthType: 'httpBearerAuth',
+      sendBody: true, specifyBody: 'json', jsonBody: '={{ $json.embed_body }}', options: { timeout: 20000 } },
+    credentials: { httpBearerAuth: I.credentials.lmstudio }, retryOnFail: false, onError: 'continueRegularOutput' },
+  { id: 'recallsql', name: 'Recall sql', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1150, 200],
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('embed.js') + inline('recall.js') + `
+const a = $('Agent input').first().json;
+let vec = null;
+try { vec = vectorLiteral($input.first().json.data[0].embedding); } catch (e) {}
+return [{ json: { sql: a.fix_recall === 'false' ? 'select null::text as rows' : recallSql(a.chat_id, vec) } }];`.trim() } },
+  { id: 'recallsearch', name: 'Recall search', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [1160, 200],
+    parameters: { operation: 'executeQuery', query: '={{ $json.sql }}', options: {} },
+    credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true, onError: 'continueRegularOutput' },
+  { id: 'recallnote', name: 'Recall note', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1170, 200],
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('recall.js') + `
+const rows = parseRows(($input.first().json || {}).rows);
+const recall_note = recallNote(rows, $('Agent input').first().json.text);
+return $('Agent input').all().map((i) => ({ json: { ...i.json, recall_note, recall_n: rows.length, recall_rows: rows } }));`.trim() } },
+
+  { id: 'rememberprep', name: 'Remember prep', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1960, -180],
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('embed.js') + inline('recall.js') + `
+const a = $('Agent input').first().json;
+const m = $('Memory text').first().json;
+if (!shouldRemember(a.text, m.output)) return [];
+return [{ json: { embed_body: JSON.stringify({ model: EMBED_MODEL, input: [memoryDoc(a.text, m.output)] }) } }];`.trim() } },
+  { id: 'rememberembed', name: 'Remember embed', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [1980, -180],
+    parameters: { method: 'POST', url: 'http://host.docker.internal:1234/v1/embeddings',
+      authentication: 'genericCredentialType', genericAuthType: 'httpBearerAuth',
+      sendBody: true, specifyBody: 'json', jsonBody: '={{ $json.embed_body }}', options: { timeout: 20000 } },
+    credentials: { httpBearerAuth: I.credentials.lmstudio }, retryOnFail: false, onError: 'continueRegularOutput' },
+  // embedding failed = stored without a vector (kept, but not searchable)
+  { id: 'remembersql', name: 'Remember sql', type: 'n8n-nodes-base.code', typeVersion: 2, position: [2000, -180],
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('embed.js') + inline('recall.js') + `
+const a = $('Agent input').first().json;
+const m = $('Memory text').first().json;
+let vec = null;
+try { vec = vectorLiteral($input.first().json.data[0].embedding); } catch (e) {}
+return [{ json: { sql: rememberSql(a.chat_id, a.text, m.output, vec) } }];`.trim() } },
+  { id: 'remember', name: 'Remember', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [2020, -180],
+    parameters: { operation: 'executeQuery', query: '={{ $json.sql }}', options: {} },
+    credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true, onError: 'continueRegularOutput' },
+
   MODEL_NODE,
 
   { id: 'memory', name: 'Chat memory', type: '@n8n/n8n-nodes-langchain.memoryPostgresChat', typeVersion: 1.3, position: [1160, 320],
@@ -585,7 +654,7 @@ return [{ json: { output: w.output, web: true, web_sources: w.sources || [], web
     "Quality and recency are separate knobs and combine freely: min_score filters how good, max_age_days filters how fresh. 'anything good this week' = min_score 7 + max_age_days 7. Results always come back best-first. " +
     "Results are one row per story by default: several outlets covering the same event come back as one row with an articles count. Set group_stories to 'false' only when the user explicitly asks for every article or every source. " +
     "Put the question's topic in tag ('nvidia export control'). It searches titles, summaries AND the full text of every saved article and video transcript, by keyword AND by meaning, so plain wording works ('AI that can buy things' finds agent-payment items). " +
-    "SPECIFIC QUESTIONS — who, how much, when, which, what did X say ('who bought Langfuse?', 'how much has Harvey raised?', 'what does the video say about shapes?') — are query_feed too: put the names and key nouns in tag ('Langfuse acquisition', 'Harvey funding') and answer from the items' evidence field, which is the matching passage of the article itself. Quote its figures and names, say which item number it came from, and give evidence.link when there is one (a video at that moment). If no evidence answers the question, say the feed does not say — never fill the gap from memory. For several topics at once — comparisons, 'X and Y' — separate them with | ('nigeria ai | bangladesh bank'), up to 3; each topic gets its own share of the results and every item says which topic it matched. With a topic, results come back most-relevant-first. If a topic search comes back empty, the feed really has nothing on it: say so and offer a search. Time words and quality belong in max_age_days and min_score, never in tag. " +
+    "SPECIFIC QUESTIONS — who, how much, when, which, what did X say ('who bought Langfuse?', 'how much has Harvey raised?', 'what does the video say about shapes?') — are query_feed too: put the names and key nouns in tag ('Langfuse acquisition', 'Harvey funding') and answer from the items' evidence field, which is the matching passage of the article itself. Quote its figures and names, say which item number it came from, and give evidence.link when there is one (a video at that moment). If no evidence answers the question, say the feed does not say — never fill the gap from memory. For several topics at once — comparisons, 'X and Y' — separate them with | ('nigeria ai | bangladesh bank'), up to 3; each topic gets its own share of the results and every item says which topic it matched. With a topic, results come back most-relevant-first. If a topic search comes back empty, the feed really has nothing on it: say so in one sentence and stop (the web answer follows by itself; never offer a search). Time words and quality belong in max_age_days and min_score, never in tag. " +
     "Every item has a number n. Show it when you list items; follow-ups like 'the first one' go to get_item, not here. " +
     "Params: max_age_days (days since publication), min_score (2-10), since (ISO timestamp, for an exact cutoff), tag, limit (default 20), group_stories, min_relevance (legacy, leave empty).",
     WF.query_feed,
@@ -690,7 +759,12 @@ const connections = {
   'manage_sources': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }, { node: 'Guarded agent', type: 'ai_tool', index: 0 }]] },
   'Agent context': { main: [[{ node: 'Agent input', type: 'main', index: 0 }]] },
   'Agent input': { main: [[{ node: 'Has link?', type: 'main', index: 0 }]] },
-  'Has link?': { main: [[{ node: 'Ingest links', type: 'main', index: 0 }], [{ node: 'Big picture?', type: 'main', index: 0 }]] },
+  'Has link?': { main: [[{ node: 'Ingest links', type: 'main', index: 0 }], [{ node: 'Recall prep', type: 'main', index: 0 }]] },
+  'Recall prep': { main: [[{ node: 'Recall embed', type: 'main', index: 0 }]] },
+  'Recall embed': { main: [[{ node: 'Recall sql', type: 'main', index: 0 }]] },
+  'Recall sql': { main: [[{ node: 'Recall search', type: 'main', index: 0 }]] },
+  'Recall search': { main: [[{ node: 'Recall note', type: 'main', index: 0 }]] },
+  'Recall note': { main: [[{ node: 'Big picture?', type: 'main', index: 0 }]] },
   'Big picture?': { main: [[{ node: 'Synth?', type: 'main', index: 0 }]] },
   'Synth?': { main: [[{ node: 'Synth answer', type: 'main', index: 0 }], [{ node: 'Overseer Agent', type: 'main', index: 0 }]] },
   'Synth answer': { main: [[{ node: 'Synth memory text', type: 'main', index: 0 }]] },
@@ -720,7 +794,10 @@ const connections = {
   'Searching status': { main: [[{ node: 'Web answer', type: 'main', index: 0 }]] },
   'Web answer': { main: [[{ node: 'Use web answer', type: 'main', index: 0 }]] },
   'Use web answer': { main: [[{ node: 'Prep reply', type: 'main', index: 0 }, { node: 'Memory text', type: 'main', index: 0 }]] },
-  'Memory text': { main: [[{ node: 'Fix memory', type: 'main', index: 0 }]] },
+  'Memory text': { main: [[{ node: 'Fix memory', type: 'main', index: 0 }, { node: 'Remember prep', type: 'main', index: 0 }]] },
+  'Remember prep': { main: [[{ node: 'Remember embed', type: 'main', index: 0 }]] },
+  'Remember embed': { main: [[{ node: 'Remember sql', type: 'main', index: 0 }]] },
+  'Remember sql': { main: [[{ node: 'Remember', type: 'main', index: 0 }]] },
   'Prep reply': { main: [[{ node: 'Send reply', type: 'main', index: 0 }, { node: 'Tidy memory', type: 'main', index: 0 }]] }
 };
 

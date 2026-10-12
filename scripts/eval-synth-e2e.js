@@ -52,6 +52,9 @@ async function sentReply(q, since) {
 (async () => {
   await fetch(SQL, { method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ query: "delete from n8n_chat_histories where session_id = '" + FAKE_CHAT + "'" }) });
+  // and its long-term memory (#14): an old run's answers must not be recalled
+  await fetch(SQL, { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ query: 'delete from chat_memory where chat_id = ' + FAKE_CHAT }) });
   let ok = 0;
   const saved = [];
   for (const [q, want] of CASES) {

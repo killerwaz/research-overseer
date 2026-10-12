@@ -36,6 +36,41 @@ const { EMBED_DIM } = require('../shared/embed.js');
 const { passageCtes, KW_WEIGHT } = require('../shared/passage-search.js');
 // Fix 1 switches (settings table) and the 9B reranker: shared/rerank.js.
 
+// Spelling fixer (#14, shared/spelling.js): a topic word that is in no article,
+// title, summary or chat (vocab_words, sql/016) is checked against its one-edit
+// neighbours that are; the 9B says which one he meant, or none. One extra query
+// per topic read; the 9B (~0.2 s) only when a word is unknown and has neighbours.
+const SPELL_PREP = inline('spelling.js') + `
+const raw = $('WF Input').first().json;
+const words = String(raw.item || '').trim() ? [] : spellWords(raw.tag);
+return [{ json: { sql: spellLookupSql(words), words } }];
+`.trim();
+const SPELL_ASK = inline('spelling.js') + `
+const raw = $('WF Input').first().json;
+const p = $('Spell prep').first().json;
+const r = $input.first().json || {};
+const qs = spellQuestions(p.words, r.known, r.cands);
+if (!qs.length) return [{ json: { go: 'off' } }];
+const msg = String(raw.user_text || raw.tag || '');
+return qs.map((q) => ({ json: { go: 'on', typed: q.typed, cands: q.cands, llm_body: JSON.stringify(spellJudgeBody('qwen/qwen3.5-9b', msg, q.typed, q.cands)) } }));
+`.trim();
+const SPELL_APPLY = inline('spelling.js') + `
+const raw = $('WF Input').first().json;
+const asks = $('Spell ask').all().map((i) => i.json);
+let verdicts = [];
+try { verdicts = $('Spell judge').all().map((i) => i.json); } catch (e) {}
+const fixes = [];
+asks.forEach((a, i) => {
+  if (a.go !== 'on') return;
+  let content = '';
+  try { content = verdicts[i].choices[0].message.content; } catch (e) {}
+  const meant = readSpell(content, a.cands);
+  if (meant) fixes.push({ typed: a.typed, meant });
+});
+return [{ json: { fixes, tag: applySpelling(raw.tag, fixes),
+  note: fixes.map((f) => 'searched for "' + f.meant + '" (the message said "' + f.typed + '")').join('; ') } }];
+`.trim();
+
 const PREP = inline('embed.js') + inline('feed-search.js') + `
 // Every input leaves as a string: queryReplacement inlines numbers UNQUOTED, and
 // nullif(-75, '') then makes Postgres cast '' to integer and fail. The router
@@ -45,6 +80,10 @@ const j = {};
 for (const k of ${JSON.stringify(['since', 'min_relevance', 'tag', 'limit', 'min_score', 'max_age_days', 'group_stories', 'item', 'chat_id', 'user_text'])}) {
   j[k] = raw[k] == null ? '' : String(raw[k]).trim();
 }
+// the spelling fixer's corrected topic (unchanged when nothing was fixed)
+let spell = {};
+try { spell = $('Spell apply').first().json || {}; } catch (e) {}
+if (spell.fixes && spell.fixes.length) { j.tag = String(spell.tag).trim(); j.spelling = spell.note; }
 // Filters the user's message never asked for are dropped (shared/feed-search.js).
 const uf = userFilters(j.user_text, j);
 j.min_score = uf.min_score; j.max_age_days = uf.max_age_days; j.since = uf.since;
@@ -273,6 +312,7 @@ const remember = /^-?\\d+$/.test(chat) && ids.length === items.length && ids.len
 const out = { count: items.length, items };
 if (p.filters_dropped) out.filters_ignored = p.filters_dropped + ' (the user did not ask for them; never add filters they did not ask for)';
 if (p.topics.length) { out.topics = p.topics; out.semantic = p.semantic; }
+if (p.spelling) out.spelling = p.spelling + ' — mention it in one short clause';
 if (outsideRows.length) {
   // Evidence travels with these too: with only a title, the 9B filled the gap
   // from memory (end-to-end test 2026-10-12: "Langfuse was acquired by
@@ -305,6 +345,19 @@ const wf = {
       parameters: { workflowInputs: { values: INPUTS.map((name) => ({ name, type: 'string' })) } } },
     pg('Switches', 'switches', [100, -150], "select coalesce(max(value) filter (where key = 'fix_two_passages'), '') as fix_two_passages, coalesce(max(value) filter (where key = 'fix_rerank'), '') as fix_rerank, coalesce(max(value) filter (where key = 'fix_mentions'), '') as fix_mentions, coalesce(max(value) filter (where key = 'fix_answer_check'), '') as fix_answer_check from settings", null,
       { executeOnce: true, alwaysOutputData: true, onError: 'continueRegularOutput' }),
+    code('Spell prep', 'spellprep', [100, 150], SPELL_PREP),
+    pg('Spell lookup', 'spelllookup', [150, 150], '={{ $json.sql }}', null,
+      { executeOnce: true, alwaysOutputData: true, onError: 'continueRegularOutput' }),
+    code('Spell ask', 'spellask', [200, 150], SPELL_ASK),
+    { id: 'spellif', name: 'Spell?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [250, 150],
+      parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, combinator: 'and',
+        conditions: [{ id: 'sp1', leftValue: '={{ $json.go }}', rightValue: 'on', operator: { type: 'string', operation: 'equals' } }] } } },
+    { id: 'spelljudge', name: 'Spell judge', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [300, 250],
+      parameters: { method: 'POST', url: 'http://host.docker.internal:1234/v1/chat/completions',
+        authentication: 'genericCredentialType', genericAuthType: 'httpBearerAuth',
+        sendBody: true, specifyBody: 'json', jsonBody: '={{ $json.llm_body }}', options: { timeout: 30000 } },
+      credentials: { httpBearerAuth: CRED_LM }, retryOnFail: false, onError: 'continueRegularOutput' },
+    code('Spell apply', 'spellapply', [350, 150], SPELL_APPLY),
     code('Prep', 'prep', [200, 0], PREP),
     { id: 'embed', name: 'Embed topics', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [400, 0],
       parameters: { method: 'POST', url: 'http://host.docker.internal:1234/v1/embeddings',
@@ -331,7 +384,13 @@ const wf = {
   ],
   connections: {
     'WF Input': { main: [[{ node: 'Switches', type: 'main', index: 0 }]] },
-    'Switches': { main: [[{ node: 'Prep', type: 'main', index: 0 }]] },
+    'Switches': { main: [[{ node: 'Spell prep', type: 'main', index: 0 }]] },
+    'Spell prep': { main: [[{ node: 'Spell lookup', type: 'main', index: 0 }]] },
+    'Spell lookup': { main: [[{ node: 'Spell ask', type: 'main', index: 0 }]] },
+    'Spell ask': { main: [[{ node: 'Spell?', type: 'main', index: 0 }]] },
+    'Spell?': { main: [[{ node: 'Spell judge', type: 'main', index: 0 }], [{ node: 'Spell apply', type: 'main', index: 0 }]] },
+    'Spell judge': { main: [[{ node: 'Spell apply', type: 'main', index: 0 }]] },
+    'Spell apply': { main: [[{ node: 'Prep', type: 'main', index: 0 }]] },
     'Prep': { main: [[{ node: 'Embed topics', type: 'main', index: 0 }]] },
     'Embed topics': { main: [[{ node: 'Params', type: 'main', index: 0 }]] },
     'Params': { main: [[{ node: 'Select feed', type: 'main', index: 0 }]] },
