@@ -42,3 +42,30 @@ test('formatWebReply labels the source, lists only cited links, refuses when unc
   assert.ok(formatWebReply('It has 512 tokens [1].', res, ['512']).startsWith('Not in your feed. The web results did not give a clear answer'));
   assert.strictEqual(formatWebReply('x', [], []), 'Not in your feed, and the web search came back empty.');
 });
+
+// 2026-10-13, the Dhaka weather follow-up: the wording rule let a non-answer through
+test('judgeNeeded: offers and "lacks" phrasing reach the judge; plain answers do not', () => {
+  const { judgeNeeded, readJudge, judgeBody } = require('../shared/web-fallback.js');
+  assert.ok(judgeNeeded("The feed has one item on your topic: a national AI strategy that mentions weather reports, but it doesn't give specific advice for current weather conditions in Dhaka."));
+  assert.ok(judgeNeeded('I checked the feed. Would you like me to search for recent advisories?'));
+  assert.ok(!judgeNeeded('Baseten raised $1.5B in Series F (not $2B), led by Altimeter Capital, Conviction and Spark Capital.'));
+  assert.ok(!judgeNeeded('ClickHouse bought Langfuse in January 2026.'));
+  assert.strictEqual(readJudge('{"answered":false}'), false);
+  assert.strictEqual(readJudge('garbage'), null);
+  assert.strictEqual(judgeBody('m', 'q', 'r').reasoning_effort, 'none');
+});
+
+test('readStandalone keeps the original when the rewrite is empty or runs away', () => {
+  const { readStandalone, standaloneBody } = require('../shared/web-fallback.js');
+  assert.strictEqual(readStandalone('"Advice for smoky haze weather in Dhaka today"\n', 'q'), 'Advice for smoky haze weather in Dhaka today');
+  assert.strictEqual(readStandalone('', "what's your advice during this weather?"), "what's your advice during this weather?");
+  assert.strictEqual(readStandalone('x'.repeat(400), 'orig'), 'orig');
+  assert.match(standaloneBody('m', 'advice?', 'weather in dhaka?', 'Smoky haze, 26.8°C').messages[1].content, /User: weather in dhaka\?\nBot: Smoky haze/);
+});
+
+test('an answer from the bot\'s own memory goes to the web (World Cup, 2026-10-13)', () => {
+  const { needsWeb } = require('../shared/web-fallback.js');
+  assert.strictEqual(needsWeb({ question: 'Who won the 2022 FIFA World Cup?', reply: 'The 2022 FIFA World Cup winner is Argentina, who defeated France in the final. This information is general knowledge and not found in your current RSS feed.' }).web, true);
+  assert.strictEqual(needsWeb({ question: 'Who bought Langfuse?', reply: 'ClickHouse bought Langfuse in January 2026.' }).web, false);
+  assert.strictEqual(needsWeb({ question: 'what feeds are you watching?', reply: 'These are not in your feed list yet.' }).web, false);   // about the bot
+});
