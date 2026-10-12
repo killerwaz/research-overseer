@@ -33,13 +33,15 @@ const { EMBED_DIM } = require('../shared/embed.js');
 // keywords — and that passage comes back as the item's evidence. Measured
 // 2026-10-12 (scripts/eval-passages.js): answers found 25/26 vs 7/13 from
 // summaries alone, absent topics 4/4 clean.
-const { passageCtes } = require('../shared/passage-search.js');
+const { passageCtes, KW_WEIGHT } = require('../shared/passage-search.js');
+// Fix 1 trial switches (settings table) and the reranker: shared/rerank.js.
+const RERANK_URL = 'http://host.docker.internal:8766/rerank';
 
 const PREP = inline('embed.js') + inline('feed-search.js') + `
 // Every input leaves as a string: queryReplacement inlines numbers UNQUOTED, and
 // nullif(-75, '') then makes Postgres cast '' to integer and fail. The router
 // passes chat_id as a number, so this is the live path, not an edge case.
-const raw = $input.first().json;
+const raw = $('WF Input').first().json;
 const j = {};
 for (const k of ${JSON.stringify(['since', 'min_relevance', 'tag', 'limit', 'min_score', 'max_age_days', 'group_stories', 'item', 'chat_id', 'user_text'])}) {
   j[k] = raw[k] == null ? '' : String(raw[k]).trim();
@@ -48,6 +50,7 @@ for (const k of ${JSON.stringify(['since', 'min_relevance', 'tag', 'limit', 'min
 const uf = userFilters(j.user_text, j);
 j.min_score = uf.min_score; j.max_age_days = uf.max_age_days; j.since = uf.since;
 j.filters_dropped = uf.dropped.join(',');
+j.question = j.user_text;   /* the reranker judges passages against the real question */
 delete j.user_text;
 const item = parseItemRef(j.item);
 const topics = item ? [] : parseTopics(j.tag);
@@ -79,8 +82,8 @@ const kw = (k) => `(exists (select 1 from unnest(c.tags) tg where tg like '%' ||
 // $8 vectors ('|', space-separated)
 // $9 item n  $10 chat_id
 /* get_item reads the cleaned passages (no menus/footers), falling back to the raw page. */
-const PCOLS = 'pn, pstart, psim, pcover, ptext, phl';
-const PNULLS = 'null::int as pn, null::int as pstart, null::float8 as psim, null::float8 as pcover, null::text as ptext, null::text as phl';
+const PCOLS = 'pn, pstart, psim, pcover, ptext, phl, pn2, ptext2';
+const PNULLS = 'null::int as pn, null::int as pstart, null::float8 as psim, null::float8 as pcover, null::text as ptext, null::text as phl, null::int as pn2, null::text as ptext2';
 const COLS = 'id, canonical_url, title, summary, angle, relevance, specificity, angle_strength, score, tags, created_at, published_at, structured, articles';
 const SQL = `
 with t as (
@@ -94,8 +97,11 @@ with t as (
 ${passageCtes()},
 pmap as materialized (
   select p.ord, p.n as pn, p.start_s as pstart, p.sim as psim, p.cover as pcover, p.pscore, p.text as ptext, p.headline as phl,
+    s2.pn2, s2.ptext2,
     'it:' || f.id as it_key, 'st:' || coalesce(f.dup_of, f.id) as st_key
   from pdoc p join feed_items f on f.raw_doc_id = p.raw_doc_id
+  left join lateral (select x.n as pn2, x.text as ptext2 from ph x where x.ord = p.ord and x.raw_doc_id = p.raw_doc_id and x.n <> p.n
+    order by coalesce(x.sim, 0) + ${KW_WEIGHT} * coalesce(x.cover, 0) desc limit 1) s2 on true
 ),
 nt as (select count(*)::int as n from t),
 lim as (select coalesce(nullif($4, '')::int, 20) as n),
@@ -127,7 +133,7 @@ m as (
   select c.*, t.ord, t.kw as topic,
     case when t.qv is null or c.embedding is null then null else 1 - (c.embedding <=> t.qv) end as sim,
     ${kw('t.kw')} as kw_hit,
-    pm.pn, pm.pstart, pm.psim, pm.pcover, pm.pscore, pm.ptext, pm.phl
+    pm.pn, pm.pstart, pm.psim, pm.pcover, pm.pscore, pm.ptext, pm.phl, pm.pn2, pm.ptext2
   from call c cross join t
   left join lateral (select * from pmap where pmap.ord = t.ord and c.match_key in (pmap.it_key, pmap.st_key)
     order by pmap.pscore desc limit 1) pm on true
@@ -185,7 +191,20 @@ select *, case when published_at is null then null else greatest(0, extract(day 
 from item
 `.replace(/\s+/g, ' ').trim();
 
-const SHAPE = inline('passage-search.js') + `
+const RERANK_PREP = inline('rerank.js') + `
+const sw = switchesFrom($('Switches').first().json);
+const p = $('Params').first().json;
+const rows = $('Select feed').all().map((i) => i.json).filter((j) => j && (j.canonical_url || j.id));
+const off = [{ json: { go: 'off', map: [] } }];
+if (sw.rerank === 'off' || p.item_n || !p.topics.length) return off;
+const c = rerankCandidates(rows, sw.rerank, sw.two);
+if (!c.docs.length) return off;
+const q = p.question || p.topics.join(' / ');
+return [{ json: { go: sw.rerank, map: c.map, model_body: JSON.stringify({ query: q, documents: c.docs }),
+  llm_body: JSON.stringify(rerankLlmBody('qwen/qwen3.5-9b', q, c.docs)) } }];
+`.trim();
+
+const SHAPE = inline('passage-search.js') + inline('rerank.js') + `
 const p = $('Params').first().json;
 const words = (p.topics || []).join(' ').split(/\\s+/).filter((w) => w.length > 2);
 // The best matching passage; videos get a link to the moment (YouTube t=).
@@ -195,11 +214,16 @@ const words = (p.topics || []).join(' ').split(/\\s+/).filter((w) => w.length > 
 // topic's words.
 const FULL_EVIDENCE = 3;
 let fullLeft = FULL_EVIDENCE;
+const sw = switchesFrom($('Switches').first().json);
 function evidence(r) {
   if (!r.ptext) return undefined;
   const hl = String(r.phl || '').replace(/\\s+/g, ' ').trim();
   let text;
-  if (fullLeft > 0 && r.outside !== true) { fullLeft--; text = String(r.ptext).replace(/[ \\t]+/g, ' ').replace(/\\n{2,}/g, '\\n').trim().slice(0, 2600); }
+  const tidy = (t) => String(t).replace(/[ \\t]+/g, ' ').replace(/\\n{2,}/g, '\\n').trim().slice(0, 2600);
+  if (fullLeft > 0 && r.outside !== true) {
+    fullLeft--; text = tidy(r.ptext);
+    if (sw.two && r.ptext2) text += '\\n[another passage of the same article]\\n' + tidy(r.ptext2);
+  }
   else text = hl ? (hl.length > 900 ? hl.slice(0, 900) + '…' : hl) : evidenceSnippet(r.ptext, words, 450);
   const ev = { text, passage: Number(r.pn) };
   if (r.pstart != null) {
@@ -209,14 +233,26 @@ function evidence(r) {
   }
   return ev;
 }
-const rows = $input.all().map((i) => i.json).filter((j) => j && (j.canonical_url || j.id));
+let rows = $('Select feed').all().map((i) => i.json).filter((j) => j && (j.canonical_url || j.id));
+// 1d: reranker scores (either service), applied to the listed rows.
+let rrScores = null, rrMap = [];
+try { rrMap = $('Rerank prep').first().json.map || []; } catch (e) {}
+try { rrScores = $('Rerank (model)').first().json.scores || null; } catch (e) {}
+if (!rrScores) { try { rrScores = parseLlmScores($('Rerank (9B)').first().json.choices[0].message, rrMap.length); } catch (e) {} }
+if (rrScores && rrMap.length) rows = applyRerank(rows, rrMap, rrScores);
+// 1e: weak text-only matches go last, labelled.
+if (sw.mentions) {
+  rows = rows.map((r) => ({ ...r, mention: r.outside !== true && isPassingMention({ ...r, sim_cutoff: ${SIM_CUTOFF} }) }));
+  rows = [...rows.filter((r) => !r.mention), ...rows.filter((r) => r.mention)];
+}
 const round = (x) => (x == null ? undefined : Math.round(Number(x) * 1000) / 1000);
 const clean = (r, n) => ({ n, id: r.id, title: r.title, canonical_url: r.canonical_url, summary: r.summary, angle: r.angle,
   score: r.score, specificity: r.specificity, angle_strength: r.angle_strength, tags: r.tags,
   published_at: r.published_at, age_days: r.age_days, structured: r.structured,
   articles: Number(r.articles) > 1 ? Number(r.articles) : undefined,
   topic: r.topic || undefined,
-  match: r.topic ? [r.kw_hit ? 'keyword' : '', r.sim >= ${SIM_CUTOFF} ? 'meaning' : '', r.ptext ? 'passage' : ''].filter(Boolean).join('+') || undefined : undefined,
+  match: r.mention ? 'mentioned in passing' : r.topic ? [r.kw_hit ? 'keyword' : '', r.sim >= ${SIM_CUTOFF} ? 'meaning' : '', r.ptext ? 'passage' : ''].filter(Boolean).join('+') || undefined : undefined,
+  rerank: r.rr != null ? round(r.rr) : undefined,
   similarity: round(r.sim), evidence: evidence(r) });
 
 if (p.item_n) {
@@ -250,6 +286,7 @@ const outsideNote = outsideRows.length ? ' ' + outsideTotal + ' more items match
 if (!items.length) out.note = (p.topics.length ? 'nothing in the feed matches (titles, summaries or article text) ' + p.topics.join(' / ') + ' within these filters.' : 'no feed items matched the filters.') + outsideNote;
 else out.note = 'Each item has n. Show n with each item you list; the user can say "#3" or "the first one" and get_item will fetch it.' +
   (items.some((i) => i.articles) ? ' articles > 1 means several outlets covered the same story: write "(N sources)" after that title.' : '') +
+  (items.some((i) => i.match === 'mentioned in passing') ? ' Items with match "mentioned in passing" only mention the words somewhere in the article; they are not about the topic. List them after the others under "also mentioned in", or leave them out.' : '') +
   (items.some((i) => i.evidence) ? ' evidence = the passage of that article that matched the topic: answer specific questions (who, how much, when) from it, quoting its numbers and names; it is the article text, the summary may not contain it. evidence.link opens a video at that moment.' : '') + outsideNote;
 return [{ json: { remember, out } }];
 `.trim();
@@ -268,6 +305,8 @@ const wf = {
   nodes: [
     { id: 'trigger', name: 'WF Input', type: 'n8n-nodes-base.executeWorkflowTrigger', typeVersion: 1.1, position: [0, 0],
       parameters: { workflowInputs: { values: INPUTS.map((name) => ({ name, type: 'string' })) } } },
+    pg('Switches', 'switches', [100, -150], "select coalesce(max(value) filter (where key = 'fix_two_passages'), '') as fix_two_passages, coalesce(max(value) filter (where key = 'fix_rerank'), '') as fix_rerank, coalesce(max(value) filter (where key = 'fix_mentions'), '') as fix_mentions, coalesce(max(value) filter (where key = 'fix_answer_check'), '') as fix_answer_check from settings", null,
+      { executeOnce: true, alwaysOutputData: true, onError: 'continueRegularOutput' }),
     code('Prep', 'prep', [200, 0], PREP),
     { id: 'embed', name: 'Embed topics', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [400, 0],
       parameters: { method: 'POST', url: 'http://host.docker.internal:1234/v1/embeddings',
@@ -278,17 +317,40 @@ const wf = {
     pg('Select feed', 'select', [800, 0], SQL,
       "={{ $json.since || '' }},{{ $json.min_relevance || '' }},{{ $json.topics_param }},{{ $json.limit || '' }},{{ $json.min_score || '' }},{{ $json.max_age_days || '' }},{{ $json.group_stories || '' }},{{ $json.vectors_param }},{{ $json.item_n }},{{ $json.chat_id || '' }}",
       { executeOnce: true, alwaysOutputData: true }),
-    code('Shape result', 'shape', [1000, 0], SHAPE),
+    code('Rerank prep', 'rrprep', [900, -150], RERANK_PREP),
+    { id: 'rron', name: 'Rerank?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1000, -150],
+      parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, combinator: 'and',
+        conditions: [{ id: 'r1', leftValue: '={{ $json.go }}', rightValue: 'off', operator: { type: 'string', operation: 'notEquals' } }] } } },
+    { id: 'rrmodel', name: 'Model reranker?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1100, -250],
+      parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, combinator: 'and',
+        conditions: [{ id: 'r2', leftValue: '={{ $json.go }}', rightValue: 'model', operator: { type: 'string', operation: 'equals' } }] } } },
+    { id: 'rrhttp', name: 'Rerank (model)', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [1200, -350],
+      parameters: { method: 'POST', url: RERANK_URL, sendHeaders: true,
+        headerParameters: { parameters: [{ name: 'Authorization', value: 'Bearer __MEDIA_TOKEN__' }] },
+        sendBody: true, specifyBody: 'json', jsonBody: '={{ $json.model_body }}', options: { timeout: 60000 } },
+      retryOnFail: false, onError: 'continueRegularOutput' },
+    { id: 'rrllm', name: 'Rerank (9B)', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [1200, -150],
+      parameters: { method: 'POST', url: 'http://host.docker.internal:1234/v1/chat/completions',
+        authentication: 'genericCredentialType', genericAuthType: 'httpBearerAuth',
+        sendBody: true, specifyBody: 'json', jsonBody: '={{ $json.llm_body }}', options: { timeout: 60000 } },
+      credentials: { httpBearerAuth: CRED_LM }, retryOnFail: false, onError: 'continueRegularOutput' },
+    code('Shape result', 'shape', [1300, 0], SHAPE),
     pg('Remember list', 'remember', [1200, 0], '={{ $json.remember }}', null,
       { executeOnce: true, alwaysOutputData: true, onError: 'continueRegularOutput' }),
     code('Return', 'ret', [1400, 0], "return [{ json: $('Shape result').first().json.out }];")
   ],
   connections: {
-    'WF Input': { main: [[{ node: 'Prep', type: 'main', index: 0 }]] },
+    'WF Input': { main: [[{ node: 'Switches', type: 'main', index: 0 }]] },
+    'Switches': { main: [[{ node: 'Prep', type: 'main', index: 0 }]] },
     'Prep': { main: [[{ node: 'Embed topics', type: 'main', index: 0 }]] },
     'Embed topics': { main: [[{ node: 'Params', type: 'main', index: 0 }]] },
     'Params': { main: [[{ node: 'Select feed', type: 'main', index: 0 }]] },
-    'Select feed': { main: [[{ node: 'Shape result', type: 'main', index: 0 }]] },
+    'Select feed': { main: [[{ node: 'Rerank prep', type: 'main', index: 0 }]] },
+    'Rerank prep': { main: [[{ node: 'Rerank?', type: 'main', index: 0 }]] },
+    'Rerank?': { main: [[{ node: 'Model reranker?', type: 'main', index: 0 }], [{ node: 'Shape result', type: 'main', index: 0 }]] },
+    'Model reranker?': { main: [[{ node: 'Rerank (model)', type: 'main', index: 0 }], [{ node: 'Rerank (9B)', type: 'main', index: 0 }]] },
+    'Rerank (model)': { main: [[{ node: 'Shape result', type: 'main', index: 0 }]] },
+    'Rerank (9B)': { main: [[{ node: 'Shape result', type: 'main', index: 0 }]] },
     'Shape result': { main: [[{ node: 'Remember list', type: 'main', index: 0 }]] },
     'Remember list': { main: [[{ node: 'Return', type: 'main', index: 0 }]] }
   },
