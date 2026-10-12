@@ -13,10 +13,8 @@ const CONFIGS = {
   check:       'two=false rerank=off mentions=false check=true',
   two:         'two=true rerank=off mentions=false check=false',
   'rr-llm':    'two=false rerank=llm mentions=false check=false',
-  'rr-model':  'two=false rerank=model mentions=false check=false',
   mentions:    'two=false rerank=off mentions=true check=false',
   'all-llm':   'two=true rerank=llm mentions=true check=true',
-  'all-model': 'two=true rerank=model mentions=true check=true',
   // after the answer check was reworked (figures only, JSON line breaks, K/M/B as numbers)
   'check-v2':  'two=false rerank=off mentions=false check=true',
   'all-llm-v2': 'two=true rerank=llm mentions=true check=true'

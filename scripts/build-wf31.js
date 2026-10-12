@@ -34,8 +34,7 @@ const { EMBED_DIM } = require('../shared/embed.js');
 // 2026-10-12 (scripts/eval-passages.js): answers found 25/26 vs 7/13 from
 // summaries alone, absent topics 4/4 clean.
 const { passageCtes, KW_WEIGHT } = require('../shared/passage-search.js');
-// Fix 1 trial switches (settings table) and the reranker: shared/rerank.js.
-const RERANK_URL = 'http://host.docker.internal:8766/rerank';
+// Fix 1 switches (settings table) and the 9B reranker: shared/rerank.js.
 
 const PREP = inline('embed.js') + inline('feed-search.js') + `
 // Every input leaves as a string: queryReplacement inlines numbers UNQUOTED, and
@@ -200,7 +199,7 @@ if (sw.rerank === 'off' || p.item_n || !p.topics.length) return off;
 const c = rerankCandidates(rows, sw.rerank, sw.two);
 if (!c.docs.length) return off;
 const q = p.question || p.topics.join(' / ');
-return [{ json: { go: sw.rerank, map: c.map, model_body: JSON.stringify({ query: q, documents: c.docs }),
+return [{ json: { go: sw.rerank, map: c.map,
   llm_body: JSON.stringify(rerankLlmBody('qwen/qwen3.5-9b', q, c.docs)) } }];
 `.trim();
 
@@ -237,8 +236,7 @@ let rows = $('Select feed').all().map((i) => i.json).filter((j) => j && (j.canon
 // 1d: reranker scores (either service), applied to the listed rows.
 let rrScores = null, rrMap = [];
 try { rrMap = $('Rerank prep').first().json.map || []; } catch (e) {}
-try { rrScores = $('Rerank (model)').first().json.scores || null; } catch (e) {}
-if (!rrScores) { try { rrScores = parseLlmScores($('Rerank (9B)').first().json.choices[0].message, rrMap.length); } catch (e) {} }
+try { rrScores = parseLlmScores($('Rerank (9B)').first().json.choices[0].message, rrMap.length); } catch (e) {}
 if (rrScores && rrMap.length) rows = applyRerank(rows, rrMap, rrScores);
 // 1e: weak text-only matches go last, labelled.
 if (sw.mentions) {
@@ -321,14 +319,6 @@ const wf = {
     { id: 'rron', name: 'Rerank?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1000, -150],
       parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, combinator: 'and',
         conditions: [{ id: 'r1', leftValue: '={{ $json.go }}', rightValue: 'off', operator: { type: 'string', operation: 'notEquals' } }] } } },
-    { id: 'rrmodel', name: 'Model reranker?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1100, -250],
-      parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, combinator: 'and',
-        conditions: [{ id: 'r2', leftValue: '={{ $json.go }}', rightValue: 'model', operator: { type: 'string', operation: 'equals' } }] } } },
-    { id: 'rrhttp', name: 'Rerank (model)', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [1200, -350],
-      parameters: { method: 'POST', url: RERANK_URL, sendHeaders: true,
-        headerParameters: { parameters: [{ name: 'Authorization', value: 'Bearer __MEDIA_TOKEN__' }] },
-        sendBody: true, specifyBody: 'json', jsonBody: '={{ $json.model_body }}', options: { timeout: 60000 } },
-      retryOnFail: false, onError: 'continueRegularOutput' },
     { id: 'rrllm', name: 'Rerank (9B)', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [1200, -150],
       parameters: { method: 'POST', url: 'http://host.docker.internal:1234/v1/chat/completions',
         authentication: 'genericCredentialType', genericAuthType: 'httpBearerAuth',
@@ -347,9 +337,7 @@ const wf = {
     'Params': { main: [[{ node: 'Select feed', type: 'main', index: 0 }]] },
     'Select feed': { main: [[{ node: 'Rerank prep', type: 'main', index: 0 }]] },
     'Rerank prep': { main: [[{ node: 'Rerank?', type: 'main', index: 0 }]] },
-    'Rerank?': { main: [[{ node: 'Model reranker?', type: 'main', index: 0 }], [{ node: 'Shape result', type: 'main', index: 0 }]] },
-    'Model reranker?': { main: [[{ node: 'Rerank (model)', type: 'main', index: 0 }], [{ node: 'Rerank (9B)', type: 'main', index: 0 }]] },
-    'Rerank (model)': { main: [[{ node: 'Shape result', type: 'main', index: 0 }]] },
+    'Rerank?': { main: [[{ node: 'Rerank (9B)', type: 'main', index: 0 }], [{ node: 'Shape result', type: 'main', index: 0 }]] },
     'Rerank (9B)': { main: [[{ node: 'Shape result', type: 'main', index: 0 }]] },
     'Shape result': { main: [[{ node: 'Remember list', type: 'main', index: 0 }]] },
     'Remember list': { main: [[{ node: 'Return', type: 'main', index: 0 }]] }
