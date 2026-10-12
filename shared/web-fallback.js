@@ -41,9 +41,18 @@ const JUDGE_SYSTEM = 'You judge whether a reply answers the user\'s question. ' 
 const JUDGE_SCHEMA = { type: 'json_schema', json_schema: { name: 'judge', strict: true, schema: {
   type: 'object', additionalProperties: false, required: ['answered'], properties: { answered: { type: 'boolean' } } } } };
 
-function judgeBody(model, question, reply) {
+// #14: a reply built on an earlier chat often ALSO says the feed has nothing,
+// which the prompt above counts as unanswered — it sent a right Anchorless answer
+// to the web, which found a different Anchorless (2026-10-13). Measured on 6 real
+// replies x2: every clear case right; it also counts "nothing came of it" as an
+// answer to "what came of my search?", which it literally is.
+const JUDGE_SYSTEM_EARLIER = 'You judge whether a reply answers the user\'s question. The reply may answer from an earlier conversation with the user ("On 13 Oct I told you ...") — that counts as answering, even if it also says the feed has nothing. ' +
+  'answered = true if the reply gives the user what they asked for (the facts, name, list, explanation). ' +
+  'answered = false if it only says nothing was found, talks about a different subject than the one asked, or mainly offers to search.';
+
+function judgeBody(model, question, reply, earlier) {
   return { model, temperature: 0, reasoning_effort: 'none', max_tokens: 30, response_format: JUDGE_SCHEMA,
-    messages: [{ role: 'system', content: JUDGE_SYSTEM },
+    messages: [{ role: 'system', content: earlier ? JUDGE_SYSTEM_EARLIER : JUDGE_SYSTEM },
       { role: 'user', content: 'Question: ' + String(question || '').slice(0, 500) + '\n\nReply: ' + String(reply || '').slice(0, 2500) }] };
 }
 
