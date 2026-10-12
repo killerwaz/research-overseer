@@ -9,6 +9,8 @@ const NO_ANSWER = /\b(the feed|your feed|feed's articles)\b[^.?!]{0,80}\b(doesn.
 const SMALL_TALK = /^\s*(hi|hey|hello|thanks?|thank you|ok(ay)?|cool|nice|great|bye|good (morning|night|evening))\b/i;
 const ABOUT_BOT = /\b(sources?|feeds? (are|you)|runs?|status|watching|subscri\w*|schedul\w*|scrape|transcribe|remember|forget)\b/i;
 
+const FROM_MEMORY = /\b(general knowledge|common knowledge|from (my )?(own )?(training|memory|knowledge)|not (found )?in (your|the) (current )?(rss )?feed|isn.t in (your|the) feed|outside (of )?(your|the) feed)\b/i;
+
 function needsWeb({ question, reply, alreadyWeb, feedItems }) {
   const q = String(question || '').trim(), r = String(reply || '');
   if (alreadyWeb) return { web: false, reason: 'already answered from the web' };
@@ -16,11 +18,74 @@ function needsWeb({ question, reply, alreadyWeb, feedItems }) {
   // "the feed does not contain ... launch dates" (2026-10-13: that sentence sent a
   // good bKash answer to the web, which then replaced it with "Not in your feed").
   if (feedItems > 0) return { web: false, reason: 'answered from feed items' };
+  // The bot answering from its own memory gets a sourced answer instead. Since the
+  // prompt stopped offering searches (2026-10-13) it says so in new words:
+  // "Argentina ... This information is general knowledge and not found in your
+  // current RSS feed." — the wording rule below missed it.
+  if (FROM_MEMORY.test(r) && !/https?:\/\//i.test(q) && !SMALL_TALK.test(q) && !ABOUT_BOT.test(q)) return { web: true, reason: 'answered from general knowledge' };
   if (!q || SMALL_TALK.test(q)) return { web: false, reason: 'small talk' };
   if (ABOUT_BOT.test(q)) return { web: false, reason: 'about the bot itself' };
   if (/https?:\/\//i.test(q)) return { web: false, reason: 'a link, handled by scrape_url' };
   if (!NO_ANSWER.test(r)) return { web: false, reason: 'the feed answered' };
   return { web: true, reason: 'the feed has no answer' };
+}
+
+// "Did the feed answer?" by meaning (2026-10-13). The NO_ANSWER wording above
+// missed "The feed has one item on your topic: ... doesn't give specific advice
+// ... Would you like me to search?" (Dhaka weather follow-up). The 9B judges the
+// reply against the question, thinking off, one short JSON verdict.
+const JUDGE_SYSTEM = 'You judge whether a reply answers the user\'s question. ' +
+  'answered = true only if the reply gives the user what they asked for (the facts, list, explanation or advice). ' +
+  'answered = false if the reply says the feed or the bot has nothing on it, cannot do it, lists only loosely related items without answering, ' +
+  'or mainly offers or asks to search. A reply that answers and then offers more is still answered.';
+const JUDGE_SCHEMA = { type: 'json_schema', json_schema: { name: 'judge', strict: true, schema: {
+  type: 'object', additionalProperties: false, required: ['answered'], properties: { answered: { type: 'boolean' } } } } };
+
+function judgeBody(model, question, reply) {
+  return { model, temperature: 0, reasoning_effort: 'none', max_tokens: 30, response_format: JUDGE_SCHEMA,
+    messages: [{ role: 'system', content: JUDGE_SYSTEM },
+      { role: 'user', content: 'Question: ' + String(question || '').slice(0, 500) + '\n\nReply: ' + String(reply || '').slice(0, 2500) }] };
+}
+
+// true / false, or null when the verdict cannot be read (then the wording rule stands)
+function readJudge(content) {
+  try { const v = JSON.parse(String(content || '').trim()).answered; return typeof v === 'boolean' ? v : null; } catch (e) { return null; }
+}
+
+// The judge is consulted only when the reply offers or asks to search: alone it
+// was 87/88 on recorded replies, but it called a correct answer that opened with a
+// correction ("$1.5B, not $2B") unanswered. Every real miss offered a search.
+// Measured 2026-10-13: wording rule 86/88, rule + (offer AND judge) 88/88.
+const OFFERS_SEARCH = /\b(would you like|do you want|want me to|shall i|should i|i can|i could|happy to|let me know if you('d| would) like)\b[^.?!]{0,80}\b(search|look (it |this )?up|run|find|check|dig|fetch|pull)\b/i;
+function offersSearch(reply) { return OFFERS_SEARCH.test(String(reply || '')); }
+
+// ...or says the feed lacks it in words NO_ANSWER does not cover ("The feed has
+// one item ... but it doesn't give specific advice"). Once replies stop offering
+// searches (2026-10-13), this is what puts such a reply in front of the judge.
+const SAYS_LACK = /\b(feed|items?|articles?|sources?|documents?)\b[^.?!]{0,160}\b(doesn.t|does not|don.t|do not|didn.t|isn.t|is not|aren.t|nothing|no specific|only (one|two|1|2))\b|\b(doesn.t|does not|don.t|do not|isn.t|no|nothing)\b[^.?!]{0,60}\b(specific|direct|details?|information|data|advice|mention|cover|answer|say)\b/i;
+function saysLack(reply) { return SAYS_LACK.test(String(reply || '')); }
+
+// The judge runs when the wording rule let a reply through but it offers a
+// search or says something is missing. Web only if the judge then says "not answered".
+function judgeNeeded(reply) { return offersSearch(reply) || saysLack(reply); }
+
+// A follow-up ("what's your advice during this weather?") searched as is finds
+// nothing useful; the web needs the place and topic from the previous exchange.
+const STANDALONE_SYSTEM = 'Rewrite the user\'s latest message as one standalone web search question. ' +
+  'Use the previous exchange only to fill in what the message leaves out (place, topic, product, time). ' +
+  'If the message already stands alone, return it unchanged. Reply with the question only, no quotes.';
+
+function standaloneBody(model, question, prevUser, prevBot) {
+  return { model, temperature: 0, reasoning_effort: 'none', max_tokens: 80,
+    messages: [{ role: 'system', content: STANDALONE_SYSTEM },
+      { role: 'user', content: 'Previous exchange:\nUser: ' + String(prevUser || '').slice(0, 400) + '\nBot: ' + String(prevBot || '').slice(0, 600) +
+        '\n\nLatest message: ' + String(question || '').slice(0, 400) }] };
+}
+
+// the rewrite, or the original question when the rewrite is empty or runs away
+function readStandalone(content, question) {
+  const t = String(content || '').trim().split(/\n/)[0].replace(/^["“']|["”']$/g, '').trim();
+  return t && t.length <= 300 ? t : String(question || '');
 }
 
 function tavilyBody(question) {
@@ -55,4 +120,4 @@ function formatWebReply(answer, results, checkMissing) {
   return 'From the web (not your feed):\n' + a + '\n\nSources:\n' + show.map((n) => '[' + n + '] ' + res[n - 1].title + ' ' + res[n - 1].url).join('\n');
 }
 
-module.exports = { needsWeb, tavilyBody, webAnswerBody, formatWebReply };
+module.exports = { needsWeb, judgeBody, readJudge, offersSearch, saysLack, judgeNeeded, standaloneBody, readStandalone, tavilyBody, webAnswerBody, formatWebReply };

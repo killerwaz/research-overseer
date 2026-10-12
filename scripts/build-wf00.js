@@ -56,9 +56,9 @@ const SYSTEM = `=You are Research Overseer's dispatcher on Telegram. Route reque
 Rules:
 0. You know NOTHING about runs or findings except what a tool returns for the CURRENT message. Earlier tool results in this chat are stale — runs start and finish, items arrive. Every question about runs or findings MUST call the matching tool again, even if you answered the same question a minute ago. Never answer from chat history or general knowledge. (The feed list below is fresh every message.)
 1. Free and instant actions run immediately, no confirmation: a pasted URL -> scrape_url; status questions -> run_status; 'what feeds/sources are you watching' -> manage_sources with action list; 'how are my sources/feeds doing', 'which feeds are worth it', 'where do good items come from' -> manage_sources with action scorecard (run status is NOT source quality); reading existing findings -> query_feed; 'anything new today' -> run_discovery with source rss. These touch nothing that costs money.
-2. Anything that starts a web search costs money and about six minutes, so it needs the user's word first. Run it immediately ONLY if they used an explicit search verb (search, find me, look up, go get, dig into). If they merely asked a question — 'what's happening with X', 'anything on X', 'how is X going' — answer it from query_feed first (free), then end your reply with a one-line offer naming the search source and query you would run. Do NOT start the search; execute it on their next message if they say yes. full_sweep always needs confirmation.
+2. Anything that starts a web search costs money and about six minutes, so it needs the user's word first. Run it immediately ONLY if they used an explicit search verb (search, find me, look up, go get, dig into). If they merely asked a question — 'what's happening with X', 'anything on X', 'how is X going' — answer it from query_feed (free). If the feed does not answer it, say so in one plain sentence and stop: the system answers from the web by itself, automatically. NEVER offer a search, never ask 'would you like me to search', never mention exa, tavily or brave in an answer. Discovery runs (which add items to the feed) happen only when the user asks to search, find or track something. full_sweep always needs confirmation.
 3. Retrospective questions are ALWAYS query_feed or run_status, and this OVERRIDES everything else even when a topic is named. Retrospective phrasing includes: catch me up, what did you find, what's new, anything good, show me, what did I miss, brief me, recap. "Catch me up on funding this week" is query_feed with max_age_days 7 — NOT a search, and NOT a confirmation prompt either; just read the feed and answer.
-3b. If a topic read comes back thin, retry query_feed once with fewer, broader keywords in tag. Never present items as being about the topic unless they are, and never answer a thin result by starting a search — say what the feed has and offer the search. If the question names a time ('today', 'last night', 'this week'), compute the ISO timestamp for the start of that window from the current time below and pass it to query_feed as the since parameter. Never answer a time-scoped question from an unfiltered read.
+3b. If a topic read comes back thin, retry query_feed once with fewer, broader keywords in tag. Never present items as being about the topic unless they are, and never answer a thin result by starting a search — say what the feed has, and if that does not answer the question, say so plainly (no offer; the web answer follows by itself). If the question names a time ('today', 'last night', 'this week'), compute the ISO timestamp for the start of that window from the current time below and pass it to query_feed as the since parameter. Never answer a time-scoped question from an unfiltered read.
 3c. Follow-ups about an item you just listed — 'the first one', '#3', 'tell me more about number 2', '1. especially the X part', 'open the second' — call get_item with that number. Do NOT call query_feed again for these: a fresh query returns a different list. If they describe an item without a number, match it to the list you showed and use its n.
 4. When uncertain between search sources, fail WIDE: prefer full_sweep (with confirmation) or brave. Never guess narrow.
 4b. Call at most ONE discovery tool per user request, ever. After full_sweep or run_discovery returns, summarize what it returned and stop. If it found little, say so — do NOT run it again with different wording. Each run costs money and minutes.
@@ -299,10 +299,18 @@ return $input.all().map(i => ({ json: { ...i.json,
     onError: 'continueRegularOutput', alwaysOutputData: true },
   // The agent did not run, so its memory node wrote nothing: record the exchange
   // here (Fix memory later rewrites this ai row if the web answer replaces it).
+  // base64 is computed in a Code node: n8n expressions have no Buffer, and the
+  // expression version failed on every message ("invalid symbol {"), 2026-10-13.
+  { id: 'synthmemtext', name: 'Synth memory text', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1330, 240],
+    parameters: { mode: 'runOnceForAllItems', jsCode: `
+const a = $('Agent input').first().json;
+const r = $input.first().json || {};
+const b64 = (s) => Buffer.from(String(s || ''), 'utf8').toString('base64');
+return [{ json: { chat_id: String(a.chat_id), q_b64: b64(a.text), out_b64: b64(r.output) } }];`.trim() } },
   { id: 'synthmem', name: 'Synth memory', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [1360, 240],
     parameters: { operation: 'executeQuery',
       query: "insert into n8n_chat_histories (session_id, message) values ($1::text, jsonb_build_object('type', 'human', 'content', convert_from(decode($2, 'base64'), 'UTF8'), 'additional_kwargs', '{}'::jsonb, 'response_metadata', '{}'::jsonb)), ($1::text, jsonb_build_object('type', 'ai', 'content', convert_from(decode($3, 'base64'), 'UTF8'), 'tool_calls', '[]'::jsonb, 'invalid_tool_calls', '[]'::jsonb, 'additional_kwargs', '{}'::jsonb, 'response_metadata', '{}'::jsonb)) returning id",
-      options: { queryReplacement: "={{ $('Agent input').first().json.chat_id }},{{ Buffer.from(String($('Agent input').first().json.text || ''), 'utf8').toString('base64') }},{{ Buffer.from(String($json.output || ''), 'utf8').toString('base64') }}" } },
+      options: { queryReplacement: "={{ $json.chat_id }},{{ $json.q_b64 }},{{ $json.out_b64 }}" } },
     credentials: { postgres: CRED_PG }, alwaysOutputData: true, onError: 'continueRegularOutput', executeOnce: true },
   // items go out as a tool step, which is where Prep reply looks for 👍/👎 buttons
   { id: 'synthres', name: 'Synth result', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1420, 240],
@@ -423,11 +431,19 @@ const items = (pf.items || []).slice(0, 3).map(i => i.n + '. ' + i.title).join('
 return [{ json: { output: "I couldn't confirm an answer to that in your feed's articles." + (items ? ' Closest items:\\n' + items + '\\nSay \\"tell me about 1\\" to open one.' : ''), checked_out: miss.join(', '), intermediateSteps: steps } }];`.trim() } },
 
   // put the corrected answer into memory in place of the rejected one (base64
-  // keeps free text out of the comma-split queryReplacement)
+  // keeps free text out of the comma-split queryReplacement). Computed in a Code
+  // node: the old expression used Buffer, which n8n expressions do not have, so
+  // this step failed on every message and memory kept the REJECTED reply — the bot
+  // forgot its own web answers ("I don't have access to live weather data" after
+  // giving the Dhaka weather), found 2026-10-13.
+  { id: 'fixmemtext', name: 'Memory text', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1900, -100],
+    parameters: { mode: 'runOnceForAllItems', jsCode: `
+const o = $input.first().json || {};
+return [{ json: { chat_id: String($('Agent input').first().json.chat_id), out_b64: Buffer.from(String(o.output || ''), 'utf8').toString('base64') } }];`.trim() } },
   { id: 'fixmem', name: 'Fix memory', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [1940, -100],
     parameters: { operation: 'executeQuery',
       query: "update n8n_chat_histories set message = jsonb_set(message, '{content}', to_jsonb(convert_from(decode($2, 'base64'), 'UTF8'))) where id = (select max(id) from n8n_chat_histories where session_id = $1::text and message->>'type' = 'ai') returning id",
-      options: { queryReplacement: "={{ $('Agent input').first().json.chat_id }},{{ Buffer.from(String($json.output || ''), 'utf8').toString('base64') }}" } },
+      options: { queryReplacement: "={{ $json.chat_id }},{{ $json.out_b64 }}" } },
     credentials: { postgres: CRED_PG }, alwaysOutputData: true, onError: 'continueRegularOutput' },
 
   // ---- Fix 2: answers from the web when the feed has none (2026-10-12) ----
@@ -441,13 +457,64 @@ const ctx = $('Agent input').first().json;
 // #13: items a synthesis answer showed (none for "Your feed has nothing on this yet.")
 const feedItems = a.synth ? (((a.intermediateSteps || [])[0] || {}).observation || {}).items?.length || 0 : 0;
 const n = ctx.fix_web === 'true' ? needsWeb({ question: ctx.text || '', reply: a.output || '', feedItems }) : { web: false, reason: 'switch fix_web off' };
-return [{ json: { ...a, web_go: String(n.web), web_reason: n.reason } }];`.trim() } },
+// the wording let it through, but it offers a search or says something is missing: ask the 9B
+const judge = ctx.fix_web === 'true' && !n.web && n.reason === 'the feed answered' && !a.synth && judgeNeeded(a.output || '');
+return [{ json: { ...a, web_go: String(n.web), web_reason: n.reason, judge_go: String(judge),
+  llm_body: judge ? JSON.stringify(judgeBody('qwen/qwen3.5-9b', ctx.text || '', a.output || '')) : '' } }];`.trim() } },
+  { id: 'judgeif', name: 'Judge?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [2060, 220],
+    parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, combinator: 'and',
+      conditions: [{ id: 'j1', leftValue: '={{ $json.judge_go }}', rightValue: 'true', operator: { type: 'string', operation: 'equals' } }] } } },
+  { id: 'judge', name: 'Judge', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [2100, 300],
+    parameters: { method: 'POST', url: 'http://host.docker.internal:1234/v1/chat/completions',
+      authentication: 'genericCredentialType', genericAuthType: 'httpBearerAuth',
+      sendBody: true, specifyBody: 'json', jsonBody: '={{ $json.llm_body }}', options: { timeout: 60000 } },
+    credentials: { httpBearerAuth: I.credentials.lmstudio }, retryOnFail: false, onError: 'continueRegularOutput' },
+  // unreadable verdict = the wording rule stands (answered)
+  { id: 'judgeverdict', name: 'Judge verdict', type: 'n8n-nodes-base.code', typeVersion: 2, position: [2140, 300],
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('web-fallback.js') + `
+const d = $('Web needed?').first().json;
+let content = '';
+try { content = $input.first().json.choices[0].message.content; } catch (e) {}
+const v = readJudge(content);
+return [{ json: { ...d, web_go: String(v === false), web_reason: v === false ? 'judge: not answered' : 'judge: answered' } }];`.trim() } },
   { id: 'webif', name: 'Web?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [2180, 120],
     parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, combinator: 'and',
       conditions: [{ id: 'w1', leftValue: '={{ $json.web_go }}', rightValue: 'true', operator: { type: 'string', operation: 'equals' } }] } } },
+  // A follow-up ("what's your advice during this weather?") is searched as a full
+  // question built from the previous exchange (memory rows 3-4 from the end: the
+  // current turn's two rows are already written).
+  { id: 'webctx', name: 'Web context', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [2220, 40],
+    parameters: { operation: 'executeQuery',
+      query: "with h as (select message->>'type' as t, message->>'content' as c from n8n_chat_histories where session_id = $1::text and message->>'type' in ('human', 'ai') order by id desc offset 2 limit 2) select coalesce((select c from h where t = 'human' limit 1), '') as prev_user, coalesce((select c from h where t = 'ai' limit 1), '') as prev_bot",
+      options: { queryReplacement: "={{ $('Agent input').first().json.chat_id }}" } },
+    credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true, onError: 'continueRegularOutput' },
+  { id: 'standaloneprep', name: 'Standalone prep', type: 'n8n-nodes-base.code', typeVersion: 2, position: [2240, 40],
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('web-fallback.js') + `
+const c = $input.first().json || {};
+const q = $('Agent input').first().json.text || '';
+return [{ json: { llm_body: JSON.stringify(standaloneBody('qwen/qwen3.5-9b', q, c.prev_user || '(none)', c.prev_bot || '(none)')) } }];`.trim() } },
+  { id: 'standalone', name: 'Standalone question', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [2260, 40],
+    parameters: { method: 'POST', url: 'http://host.docker.internal:1234/v1/chat/completions',
+      authentication: 'genericCredentialType', genericAuthType: 'httpBearerAuth',
+      sendBody: true, specifyBody: 'json', jsonBody: '={{ $json.llm_body }}', options: { timeout: 60000 } },
+    credentials: { httpBearerAuth: I.credentials.lmstudio }, retryOnFail: false, onError: 'continueRegularOutput' },
+  { id: 'webquery', name: 'Web query', type: 'n8n-nodes-base.code', typeVersion: 2, position: [2280, 40],
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('web-fallback.js') + `
+const q = $('Agent input').first().json.text || '';
+let content = '';
+try { content = $input.first().json.choices[0].message.content; } catch (e) {}
+return [{ json: { web_q: readStandalone(content, q) } }];`.trim() } },
+  // Like the big chat apps: say what is happening at once, then turn that same
+  // message into the answer (Send reply edits it). His call, 2026-10-13.
+  { id: 'webstatus', name: 'Searching status', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [2300, 40],
+    parameters: { method: 'POST', url: 'https://api.telegram.org/bot__TG_TOKEN__/sendMessage',
+      sendBody: true, specifyBody: 'json',
+      jsonBody: "={{ JSON.stringify({ chat_id: $('Agent input').first().json.chat_id, text: '🔎 Not in your feed — searching the web…' }) }}",
+      options: { timeout: 10000 } },
+    retryOnFail: false, onError: 'continueRegularOutput' },
   { id: 'webcall', name: 'Web answer', type: 'n8n-nodes-base.executeWorkflow', typeVersion: 1.2, position: [2340, 40],
     parameters: { workflowId: { __rl: true, value: WF.web_answer, mode: 'id' },
-      workflowInputs: { mappingMode: 'defineBelow', value: { question: "={{ $('Agent input').first().json.text }}" },
+      workflowInputs: { mappingMode: 'defineBelow', value: { question: "={{ $('Web query').first().json.web_q }}" },
         matchingColumns: [], schema: [{ id: 'question', displayName: 'question', required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: 'string' }] },
       options: { waitForSubWorkflow: true } },
     onError: 'continueRegularOutput', alwaysOutputData: true },
@@ -456,8 +523,10 @@ return [{ json: { ...a, web_go: String(n.web), web_reason: n.reason } }];`.trim(
     parameters: { mode: 'runOnceForAllItems', jsCode: `
 const w = $input.first().json || {};
 const before = $('Web needed?').first().json;
-if (!w.output) return [{ json: before }];
-return [{ json: { output: w.output, web: true, web_sources: w.sources || [] } }];`.trim() } },
+let edit_id;
+try { edit_id = $('Searching status').first().json.result.message_id; } catch (e) {}
+if (!w.output) return [{ json: { ...before, edit_id } }];
+return [{ json: { output: w.output, web: true, web_sources: w.sources || [], web_q: $('Web query').first().json.web_q, edit_id } }];`.trim() } },
 
   // memory keeps the conversation, not the bulk: drop tool calls + raw tool
   // output (n8n saves full results — 10 feed items — and offers no switch to
@@ -479,7 +548,7 @@ return [{ json: { output: w.output, web: true, web_sources: w.sources || [] } }]
   tool('run_discovery',
     "Run ONE search source now. COSTS MONEY AND ~6 MINUTES. " +
     "Call it immediately ONLY when the user used an explicit search verb — search, find me, look up, go get, dig into, run a search. " +
-    "For anything phrased as a question ('what's happening with X', 'anything on X', 'how is X going') do NOT call this tool: read query_feed instead and offer this search in one line. Call it on their next message only if they said yes. Asking costs one line; guessing wrong costs six minutes of their machine. " +
+    "For anything phrased as a question ('what's happening with X', 'anything on X', 'how is X going') do NOT call this tool and do NOT offer it: read query_feed instead; when the feed has no answer the system answers from the web by itself. Call this tool only when the user explicitly asks to search, find, dig into or track something (or says yes to a sweep you confirmed). A wrong call costs six minutes of their machine. " +
     "Params: source (exa|tavily|brave|rss), query. exa = conceptual or thematic digs. tavily = a specific named topic. brave = broad general sweep. rss = recency from known feeds ('anything new today', cheap, no confirmation needed). Does NOT read past results.",
     WF.run_discovery,
     { source: { desc: 'one of exa, tavily, brave, rss' },
@@ -571,14 +640,15 @@ if ($json.intermediateSteps) sources.push($json.intermediateSteps);
 try { sources.push($('Prefetch').all().map((i) => i.json)); } catch (e) {}
 if (!sources.length) { try { sources.push($('Overseer Agent').first().json.intermediateSteps); } catch (e) {} }
 const reply_markup = $json.web === true ? undefined : listKeyboard(shownItems(sources));   /* web answers: no feed buttons */
-return { json: { chat_id, output: forTelegram($json.output) || '(empty reply)', reply_markup } };`.trim() } },
+return { json: { chat_id, output: forTelegram($json.output) || '(empty reply)', reply_markup, edit_id: $json.edit_id } };`.trim() } },
 
   // HTTP, not the Telegram node: the node's inline keyboard is fixed at build
   // time, and these buttons depend on the items each reply showed.
   { id: 'reply', name: 'Send reply', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [1600, 100],
-    parameters: { method: 'POST', url: 'https://api.telegram.org/bot__TG_TOKEN__/sendMessage',
+    // edit_id = the "searching the web…" message, which becomes the answer
+    parameters: { method: 'POST', url: "={{ 'https://api.telegram.org/bot__TG_TOKEN__/' + ($json.edit_id ? 'editMessageText' : 'sendMessage') }}",
       sendBody: true, specifyBody: 'json',
-      jsonBody: "={{ JSON.stringify(Object.assign({ chat_id: $json.chat_id, text: $json.output, parse_mode: 'HTML' }, $json.reply_markup ? { reply_markup: $json.reply_markup } : {})) }}",
+      jsonBody: "={{ JSON.stringify(Object.assign({ chat_id: $json.chat_id, text: $json.output, parse_mode: 'HTML' }, $json.edit_id ? { message_id: $json.edit_id } : {}, $json.reply_markup ? { reply_markup: $json.reply_markup } : {})) }}",
       options: { timeout: 15000 } },
     retryOnFail: false, onError: 'continueRegularOutput' }
 ];
@@ -623,7 +693,8 @@ const connections = {
   'Has link?': { main: [[{ node: 'Ingest links', type: 'main', index: 0 }], [{ node: 'Big picture?', type: 'main', index: 0 }]] },
   'Big picture?': { main: [[{ node: 'Synth?', type: 'main', index: 0 }]] },
   'Synth?': { main: [[{ node: 'Synth answer', type: 'main', index: 0 }], [{ node: 'Overseer Agent', type: 'main', index: 0 }]] },
-  'Synth answer': { main: [[{ node: 'Synth memory', type: 'main', index: 0 }]] },
+  'Synth answer': { main: [[{ node: 'Synth memory text', type: 'main', index: 0 }]] },
+  'Synth memory text': { main: [[{ node: 'Synth memory', type: 'main', index: 0 }]] },
   'Synth memory': { main: [[{ node: 'Synth result', type: 'main', index: 0 }]] },
   'Synth result': { main: [[{ node: 'Web needed?', type: 'main', index: 0 }]] },
   'Ingest links': { main: [[{ node: 'Link note', type: 'main', index: 0 }]] },
@@ -637,10 +708,19 @@ const connections = {
   'Redo context': { main: [[{ node: 'Guarded agent', type: 'main', index: 0 }]] },
   'Guarded agent': { main: [[{ node: 'Final check', type: 'main', index: 0 }]] },
   'Final check': { main: [[{ node: 'Web needed?', type: 'main', index: 0 }]] },
-  'Web needed?': { main: [[{ node: 'Web?', type: 'main', index: 0 }]] },
-  'Web?': { main: [[{ node: 'Web answer', type: 'main', index: 0 }], [{ node: 'Prep reply', type: 'main', index: 0 }, { node: 'Fix memory', type: 'main', index: 0 }]] },
+  'Web needed?': { main: [[{ node: 'Judge?', type: 'main', index: 0 }]] },
+  'Judge?': { main: [[{ node: 'Judge', type: 'main', index: 0 }], [{ node: 'Web?', type: 'main', index: 0 }]] },
+  'Judge': { main: [[{ node: 'Judge verdict', type: 'main', index: 0 }]] },
+  'Judge verdict': { main: [[{ node: 'Web?', type: 'main', index: 0 }]] },
+  'Web?': { main: [[{ node: 'Web context', type: 'main', index: 0 }], [{ node: 'Prep reply', type: 'main', index: 0 }, { node: 'Memory text', type: 'main', index: 0 }]] },
+  'Web context': { main: [[{ node: 'Standalone prep', type: 'main', index: 0 }]] },
+  'Standalone prep': { main: [[{ node: 'Standalone question', type: 'main', index: 0 }]] },
+  'Standalone question': { main: [[{ node: 'Web query', type: 'main', index: 0 }]] },
+  'Web query': { main: [[{ node: 'Searching status', type: 'main', index: 0 }]] },
+  'Searching status': { main: [[{ node: 'Web answer', type: 'main', index: 0 }]] },
   'Web answer': { main: [[{ node: 'Use web answer', type: 'main', index: 0 }]] },
-  'Use web answer': { main: [[{ node: 'Prep reply', type: 'main', index: 0 }, { node: 'Fix memory', type: 'main', index: 0 }]] },
+  'Use web answer': { main: [[{ node: 'Prep reply', type: 'main', index: 0 }, { node: 'Memory text', type: 'main', index: 0 }]] },
+  'Memory text': { main: [[{ node: 'Fix memory', type: 'main', index: 0 }]] },
   'Prep reply': { main: [[{ node: 'Send reply', type: 'main', index: 0 }, { node: 'Tidy memory', type: 'main', index: 0 }]] }
 };
 
