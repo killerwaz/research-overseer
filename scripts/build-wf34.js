@@ -34,10 +34,11 @@ const workflow = {
     { id: 'trigger', name: 'WF Input', type: 'n8n-nodes-base.executeWorkflowTrigger', typeVersion: 1.1, position: [0, 0],
       parameters: { workflowInputs: { values: [
         { name: 'action', type: 'string' }, { name: 'url', type: 'string' },
-        { name: 'label', type: 'string' }, { name: 'id', type: 'string' } ] } } },
+        { name: 'label', type: 'string' }, { name: 'id', type: 'string' },
+        { name: 'days', type: 'string' } ] } } },
 
     { id: 'switch', name: 'Action', type: 'n8n-nodes-base.switch', typeVersion: 3.2, position: [200, 0],
-      parameters: { rules: { values: ['add', 'remove', 'list'].map((a, i) => ({
+      parameters: { rules: { values: ['add', 'remove', 'list', 'scorecard'].map((a, i) => ({
         conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' },
           combinator: 'and',
           conditions: [{ id: 'c' + i, leftValue: '={{ $json.action }}', rightValue: a,
@@ -83,6 +84,22 @@ const workflow = {
         query: 'select id, url, label, active from sources order by id', options: {} },
       credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true },
 
+    // #9 source scorecard (2026-10-12): report only, never switches a source off.
+    { id: 'scsql', name: 'Scorecard query', type: 'n8n-nodes-base.code', typeVersion: 2, position: [420, 320],
+      parameters: { mode: 'runOnceForAllItems', jsCode: inline('scorecard.js') + `
+return [{ json: { query: scorecardSql($('WF Input').first().json.days) } }];` } },
+
+    { id: 'scrun', name: 'Run scorecard', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [620, 320],
+      parameters: { operation: 'executeQuery', query: '={{ $json.query }}', options: {} },
+      credentials: { postgres: CRED_PG } },
+
+    { id: 'scshape', name: 'Shape scorecard', type: 'n8n-nodes-base.code', typeVersion: 2, position: [820, 320],
+      parameters: { mode: 'runOnceForAllItems', jsCode: inline('scorecard.js') + `
+const days = $('WF Input').first().json.days;
+const out = scorecard(JSON.parse($input.first().json.scorecard || '{}'));
+out.window = Number(days) > 0 ? 'last ' + Number(days) + ' days' : 'all time';
+return [{ json: out }];` } },
+
     { id: 'shape', name: 'Shape result', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1440, 0],
       parameters: { mode: 'runOnceForAllItems', jsCode: `
 const rows = $input.all().map(i => i.json).filter(j => j && Object.keys(j).length);
@@ -101,8 +118,11 @@ return [{ json: out }];
     'Action': { main: [
       [{ node: 'Add source', type: 'main', index: 0 }],
       [{ node: 'Remove source', type: 'main', index: 0 }],
-      [{ node: 'List sources', type: 'main', index: 0 }]
+      [{ node: 'List sources', type: 'main', index: 0 }],
+      [{ node: 'Scorecard query', type: 'main', index: 0 }]
     ] },
+    'Scorecard query': { main: [[{ node: 'Run scorecard', type: 'main', index: 0 }]] },
+    'Run scorecard': { main: [[{ node: 'Shape scorecard', type: 'main', index: 0 }]] },
     'Add source': { main: [[{ node: 'Needs bootstrap?', type: 'main', index: 0 }]] },
     'Needs bootstrap?': { main: [
       [{ node: 'Read feed once', type: 'main', index: 0 }],
