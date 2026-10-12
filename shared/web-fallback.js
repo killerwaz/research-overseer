@@ -9,9 +9,13 @@ const NO_ANSWER = /\b(the feed|your feed|feed's articles)\b[^.?!]{0,80}\b(doesn.
 const SMALL_TALK = /^\s*(hi|hey|hello|thanks?|thank you|ok(ay)?|cool|nice|great|bye|good (morning|night|evening))\b/i;
 const ABOUT_BOT = /\b(sources?|feeds? (are|you)|runs?|status|watching|subscri\w*|schedul\w*|scrape|transcribe|remember|forget)\b/i;
 
-function needsWeb({ question, reply, alreadyWeb }) {
+function needsWeb({ question, reply, alreadyWeb, feedItems }) {
   const q = String(question || '').trim(), r = String(reply || '');
   if (alreadyWeb) return { web: false, reason: 'already answered from the web' };
+  // #13: a cited answer built from feed items is an answer, even when it ends
+  // "the feed does not contain ... launch dates" (2026-10-13: that sentence sent a
+  // good bKash answer to the web, which then replaced it with "Not in your feed").
+  if (feedItems > 0) return { web: false, reason: 'answered from feed items' };
   if (!q || SMALL_TALK.test(q)) return { web: false, reason: 'small talk' };
   if (ABOUT_BOT.test(q)) return { web: false, reason: 'about the bot itself' };
   if (/https?:\/\//i.test(q)) return { web: false, reason: 'a link, handled by scrape_url' };
