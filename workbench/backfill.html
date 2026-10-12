@@ -39,14 +39,15 @@
   <h2>Latest pages</h2><ul id="recent"><li><span>—</span><span></span></li></ul>
   <div id="fails"></div>
 </main>
+<script src="poll.js"></script>
 <script>
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const dur = (s) => s == null ? '—' : s >= 60 ? Math.floor(s / 60) + 'm ' + (s % 60) + 's' : s + 's';
 let stamp = '';
 async function poll() {
   try {
-    const r = await fetch('data/backfill.json?t=' + Date.now(), { cache: 'no-store' });
-    if (r.ok) {
+    const r = await fetchIfChanged('backfill.json');
+    if (r && r.ok) {
       const p = await r.json();
       if (p.updated_at !== stamp) {
         stamp = p.updated_at;

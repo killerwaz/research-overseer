@@ -44,6 +44,7 @@
   <h2>Questions (answer is in the article, not its summary)</h2><div id="qs"></div>
   <h2>Topics the feed should NOT have</h2><div id="abs"></div>
 </main>
+<script src="poll.js"></script>
 <script>
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const ts = (s) => { s = Math.round(s); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
@@ -58,8 +59,8 @@ function render(d) {
   const ran = d.status === 'run';
   document.getElementById('live').textContent = (ran ? 'results from ' : 'questions only, not run yet — ') + new Date(d.generated_at).toLocaleString();
   document.getElementById('stats').innerHTML = d.summary ? [['passage search', d.summary.passage_hits + ' / ' + d.summary.total],
-    ['summary search', d.summary.item_hits + ' / ' + d.summary.total], ['lowest right passage', d.summary.lowest_hit_sim],
-    ['highest absent', d.summary.highest_absent_sim]].map(([k, v]) => '<div class="stat"><div class="v">' + v + '</div><div class="k">' + k + '</div></div>').join('') : '';
+    ['summary search', d.summary.item_hits + ' / ' + d.summary.total], ['as the router asks', d.summary.tag_hits + ' / ' + d.summary.total],
+    ['absent kept clean', d.summary.absent_clean + ' / ' + d.summary.absent_total]].map(([k, v]) => '<div class="stat"><div class="v">' + v + '</div><div class="k">' + k + '</div></div>').join('') : '';
   document.getElementById('qs').innerHTML = d.questions.map((x) => '<details><summary><span class="q">' + x.id + '. ' + esc(x.q) +
     '<span class="a">expected: #' + x.doc + ' · ' + esc(x.answer) + (x.video ? ' · video' : '') + '</span></span>' +
     (ran ? pill('passages', x.passage_rank) + pill('summaries', x.item_rank) : '') + '</summary>' +
@@ -69,8 +70,8 @@ function render(d) {
     (ran ? '<div class="cols">' + hits(x.passages, null, 'Passage search') + hits(x.items, null, 'Summary search') + '</div>' : '') + '</details>').join('');
 }
 async function poll() {
-  try { const r = await fetch('data/eval.json?t=' + Date.now(), { cache: 'no-store' });
-    if (r.ok) { const d = await r.json(); if (d.generated_at !== stamp) { stamp = d.generated_at; render(d); } } } catch (e) {}
+  try { const r = await fetchIfChanged('eval.json');
+    if (r && r.ok) { const d = await r.json(); if (d.generated_at !== stamp) { stamp = d.generated_at; render(d); } } } catch (e) {}
   setTimeout(poll, 3000);
 }
 poll();

@@ -63,6 +63,7 @@
   <div class="filters" id="filters"></div>
 </header>
 <main id="main"><div class="empty-state">No data yet.</div></main>
+<script src="poll.js"></script>
 <script>
 const RAW_LIMIT = 800;
 let data = null, stamp = '', filter = 'all';
@@ -125,8 +126,8 @@ document.addEventListener('toggle', (e) => {
 
 async function poll() {
   try {
-    const r = await fetch('data/chunks.json?t=' + Date.now(), { cache: 'no-store' });
-    if (r.ok) {
+    const r = await fetchIfChanged('chunks.json');
+    if (r && r.ok) {
       const j = await r.json();
       if (j.generated_at !== stamp) {
         const first = !stamp; stamp = j.generated_at; data = j; render();

@@ -16,6 +16,16 @@ const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; ch
 const server = http.createServer((req, res) => {
   let rel = decodeURIComponent(req.url.split('?')[0]);
   if (rel === '/') rel = '/index.html';
+  // Pages poll this tiny stamp and fetch the data only when it changed:
+  // re-fetching the 1.6 MB data file every 3 s exhausted the browser
+  // (ERR_INSUFFICIENT_RESOURCES) during a long session, 2026-10-12.
+  if (rel === '/stamp') {
+    const name = path.basename(new URL(req.url, 'http://x').searchParams.get('f') || '');
+    let m = 0;
+    try { m = fs.statSync(path.join(ROOT, 'data', name)).mtimeMs; } catch (e) {}
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    return res.end(JSON.stringify({ m }));
+  }
   const file = path.normalize(path.join(ROOT, rel));
   if (!file.startsWith(ROOT + path.sep) || path.basename(file) === 'server.js') {
     res.writeHead(403); return res.end('forbidden');
