@@ -28,6 +28,10 @@
             {
               "name": "id",
               "type": "string"
+            },
+            {
+              "name": "days",
+              "type": "string"
             }
           ]
         }
@@ -113,6 +117,29 @@
               },
               "renameOutput": true,
               "outputKey": "list"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "c3",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "scorecard",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "scorecard"
             }
           ]
         },
@@ -201,7 +228,7 @@
       ],
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "// Canonical URL form used for dedupe (spec §5.2).\n//\n// This file is the single source of truth: scripts/build-wf20.js inlines the\n// function body into WF-20's Canonicalize node, so the tests in\n// tests/canonicalize.test.js exercise exactly what runs in production.\n//\n// No URL/URLSearchParams — the n8n task-runner sandbox has neither.\n\n// `src` joins the list for the same reason as `source`: it is overwhelmingly a\n// referrer tag (?src=twitter), and leaving it in split one page into two feed\n// items during testing.\nconst STRIP = /^(utm_.*|fbclid|gclid|ref|source|src|mc_cid|mc_eid|igshid)$/i;\n\nfunction canon(rawUrl) {\n  try {\n    const s = String(rawUrl).trim();\n    const m = s.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):\\/\\/([^/?#]+)([^?#]*)(\\?[^#]*)?(#.*)?$/);\n    if (!m) return null;\n    const scheme = m[1].toLowerCase();\n    let hostport = m[2];\n    let path = m[3] || '/';\n    const query = m[4] ? m[4].slice(1) : '';\n    let userinfo = '';\n    const at = hostport.lastIndexOf('@');\n    if (at !== -1) { userinfo = hostport.slice(0, at + 1); hostport = hostport.slice(at + 1); }\n    let host = hostport;\n    let port = '';\n    const ci = hostport.lastIndexOf(':');\n    if (ci !== -1 && /^\\d+$/.test(hostport.slice(ci + 1))) { host = hostport.slice(0, ci); port = hostport.slice(ci); }\n    host = host.toLowerCase();\n    if (host.startsWith('amp.')) host = host.slice(4);\n    if ((scheme === 'http' && port === ':80') || (scheme === 'https' && port === ':443')) port = '';\n    path = path.replace(/\\/amp(\\/|$)/, '$1');\n    path = path.replace(/\\/{2,}/g, '/');\n    if (path.length > 1 && path.endsWith('/')) path = path.slice(0, -1);\n    if (!path) path = '/';\n    const params = query ? query.split('&').filter(p => p !== '' && !STRIP.test(p.split('=')[0])) : [];\n    const qs = params.length ? '?' + params.join('&') : '';\n    return scheme + '://' + userinfo + host + port + path + qs;\n  } catch (e) { return null; }\n}\n\nconst src = $('Add source').first().json;\nconst seen = [];\nfor (const item of $input.all()) {\n  const j = item.json || {};\n  if (j.error) continue;\n  const link = j.link || j.url;\n  const c = link ? canon(link) : null;\n  if (c) seen.push(c);\n}\nconst uniq = [...new Set(seen)];\nif (!uniq.length) return [{ json: { source_id: src.id, count: 0, values: '' } }];\nconst esc = (u) => String(u).replace(/'/g, \"''\");\n// one multi-row VALUES list rather than a round trip per URL\nconst values = uniq.map(u => \"('\" + esc(u) + \"','rss')\").join(',');\nreturn [{ json: { source_id: src.id, count: uniq.length, values } }];"
+        "jsCode": "// Canonical URL form used for dedupe (spec §5.2).\r\n//\r\n// This file is the single source of truth: scripts/build-wf20.js inlines the\r\n// function body into WF-20's Canonicalize node, so the tests in\r\n// tests/canonicalize.test.js exercise exactly what runs in production.\r\n//\r\n// No URL/URLSearchParams — the n8n task-runner sandbox has neither.\r\n\r\n// `src` joins the list for the same reason as `source`: it is overwhelmingly a\r\n// referrer tag (?src=twitter), and leaving it in split one page into two feed\r\n// items during testing.\r\nconst STRIP = /^(utm_.*|fbclid|gclid|ref|source|src|mc_cid|mc_eid|igshid)$/i;\r\n\r\n// Every YouTube URL shape for one video (watch?v=, youtu.be/, shorts/, embed/,\r\n// live/, m. and music. hosts) collapses to one key, with pp/si/t/list dropped:\r\n// otherwise the same video pasted twice became two feed items.\r\nconst YT_ID = /^(?:https?:\\/\\/)?(?:(?:www|m|music)\\.)?(?:youtube\\.com\\/(?:watch\\?(?:[^#]*&)?v=|shorts\\/|embed\\/|live\\/|v\\/)|youtu\\.be\\/)([A-Za-z0-9_-]{11})(?![A-Za-z0-9_-])/i;\r\nfunction youtubeId(rawUrl) {\r\n  const m = String(rawUrl || '').trim().match(YT_ID);\r\n  return m ? m[1] : null;\r\n}\r\n\r\nfunction canon(rawUrl) {\r\n  try {\r\n    const yt = youtubeId(rawUrl);\r\n    if (yt) return 'https://www.youtube.com/watch?v=' + yt;\r\n    const s = String(rawUrl).trim();\r\n    const m = s.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):\\/\\/([^/?#]+)([^?#]*)(\\?[^#]*)?(#.*)?$/);\r\n    if (!m) return null;\r\n    const scheme = m[1].toLowerCase();\r\n    let hostport = m[2];\r\n    let path = m[3] || '/';\r\n    const query = m[4] ? m[4].slice(1) : '';\r\n    let userinfo = '';\r\n    const at = hostport.lastIndexOf('@');\r\n    if (at !== -1) { userinfo = hostport.slice(0, at + 1); hostport = hostport.slice(at + 1); }\r\n    let host = hostport;\r\n    let port = '';\r\n    const ci = hostport.lastIndexOf(':');\r\n    if (ci !== -1 && /^\\d+$/.test(hostport.slice(ci + 1))) { host = hostport.slice(0, ci); port = hostport.slice(ci); }\r\n    host = host.toLowerCase();\r\n    if (host.startsWith('amp.')) host = host.slice(4);\r\n    if ((scheme === 'http' && port === ':80') || (scheme === 'https' && port === ':443')) port = '';\r\n    path = path.replace(/\\/amp(\\/|$)/, '$1');\r\n    path = path.replace(/\\/{2,}/g, '/');\r\n    if (path.length > 1 && path.endsWith('/')) path = path.slice(0, -1);\r\n    if (!path) path = '/';\r\n    const params = query ? query.split('&').filter(p => p !== '' && !STRIP.test(p.split('=')[0])) : [];\r\n    const qs = params.length ? '?' + params.join('&') : '';\r\n    return scheme + '://' + userinfo + host + port + path + qs;\r\n  } catch (e) { return null; }\r\n}\r\n\r\nconst src = $('Add source').first().json;\nconst seen = [];\nfor (const item of $input.all()) {\n  const j = item.json || {};\n  if (j.error) continue;\n  const link = j.link || j.url;\n  const c = link ? canon(link) : null;\n  if (c) seen.push(c);\n}\nconst uniq = [...new Set(seen)];\nif (!uniq.length) return [{ json: { source_id: src.id, count: 0, values: '' } }];\nconst esc = (u) => String(u).replace(/'/g, \"''\");\n// one multi-row VALUES list rather than a round trip per URL\nconst values = uniq.map(u => \"('\" + esc(u) + \"','rss')\").join(',');\nreturn [{ json: { source_id: src.id, count: uniq.length, values } }];"
       }
     },
     {
@@ -272,6 +299,55 @@
       "alwaysOutputData": true
     },
     {
+      "id": "scsql",
+      "name": "Scorecard query",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        320
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Source scorecard (build menu #9): where the good items come from.\n// Report only — it never switches a source off (Wasim, 2026-10-12).\n//\n// One query returns per-(discovery source, website) counts plus the RSS feed\n// list; scorecard() folds them into one row per discovery source and one row\n// per RSS feed. raw items don't record which RSS feed they came from, so an\n// RSS item is credited to the feed on the same website; HN-style feeds link to\n// other sites, and those items land in \"RSS (other site)\".\n\nconst GOOD = 7;   // score >= 7 counts as a good item (score runs 2-10)\n\nfunction scorecardSql(days) {\n  const d = Number(days);\n  const since = Number.isInteger(d) && d > 0 ? `and f.created_at > now() - interval '${d} days'` : '';\n  return `select json_build_object(\n  'groups', (select coalesce(json_agg(g), '[]'::json) from (\n    select coalesce(su.source, 'unknown') as source,\n           lower(substring(f.canonical_url from '^https?://(?:www\\\\.)?([^/:]+)')) as host,\n           count(*)::int as n,\n           count(*) filter (where f.score >= ${GOOD})::int as good,\n           -- score 0 = never scored on the current axes (pre-2026-07 items)\n           count(*) filter (where f.score > 0)::int as scored,\n           coalesce(sum(f.score) filter (where f.score > 0), 0)::int as score_sum,\n           count(*) filter (where fb.vote = 1)::int as up,\n           count(*) filter (where fb.vote = -1)::int as down,\n           to_char(max(f.created_at), 'YYYY-MM-DD') as last_at\n    from feed_items f\n    left join seen_urls su on su.canonical_url = f.canonical_url\n    left join feedback fb on fb.feed_item_id = f.id\n    where f.dup_of is null ${since}\n    group by 1, 2) g),\n  'feeds', (select coalesce(json_agg(json_build_object('id', id, 'url', url, 'label', label, 'active', active) order by id), '[]'::json)\n            from sources where kind = 'rss'))::text as scorecard`;\n}\n\nfunction hostOf(url) {\n  const m = String(url || '').toLowerCase().match(/^https?:\\/\\/(?:www\\.)?([^/:?#]+)/);\n  return m ? m[1] : '';\n}\n\n// A feed on feeds.example.com or example.substack.com still owns example.com items\n// only if the item's host equals the feed's host or is a subdomain of it, or vice versa.\nfunction sameSite(a, b) {\n  if (!a || !b) return false;\n  return a === b || a.endsWith('.' + b) || b.endsWith('.' + a);\n}\n\nfunction blank(name) { return { name, n: 0, scored: 0, good: 0, score_sum: 0, up: 0, down: 0, last_at: '' }; }\nfunction add(row, g) {\n  row.n += g.n; row.scored += g.scored || 0; row.good += g.good; row.score_sum += g.score_sum; row.up += g.up; row.down += g.down;\n  if (g.last_at && g.last_at > row.last_at) row.last_at = g.last_at;\n}\nfunction finish(row) {\n  const { score_sum, scored, ...r } = row;\n  r.unscored = row.n - scored;\n  r.good_rate = scored ? Math.round((100 * row.good) / scored) + '%' : '-';\n  r.avg_score = scored ? Math.round((10 * score_sum) / scored) / 10 : null;\n  return r;\n}\n\nfunction scorecard(data) {\n  const groups = (data && data.groups) || [];\n  const feeds = ((data && data.feeds) || []).map((f) => ({ ...f, host: hostOf(f.url) }));\n  const bySource = new Map();\n  const byFeed = new Map();\n  for (const g of groups) {\n    if (!bySource.has(g.source)) bySource.set(g.source, blank(g.source));\n    add(bySource.get(g.source), g);\n    if (g.source !== 'rss') continue;\n    // an active feed wins over an inactive one on the same site\n    const f = feeds.filter((x) => sameSite(g.host, x.host)).sort((a, b) => Number(b.active) - Number(a.active))[0];\n    const key = f ? 'feed:' + f.id : 'other';\n    if (!byFeed.has(key)) {\n      const name = f ? (f.label || f.url) + (f.active ? '' : ' (off)') : 'RSS (other site)';\n      byFeed.set(key, blank(name));\n    }\n    add(byFeed.get(key), g);\n  }\n  // active feeds with nothing yet still show up, so a silent feed is visible\n  for (const f of feeds) {\n    if (f.active && !byFeed.has('feed:' + f.id)) byFeed.set('feed:' + f.id, blank(f.label || f.url));\n  }\n  const order = (a, b) => b.good - a.good || b.n - a.n;\n  return {\n    good_means: 'score >= ' + GOOD + ' of 10',\n    sources: [...bySource.values()].map(finish).sort(order),\n    rss_feeds: [...byFeed.values()].map(finish).sort(order),\n    note: 'RSS items are matched to a feed by website; links to other sites count as \"RSS (other site)\". Merged duplicate stories count once. good_rate and avg_score cover scored items only; unscored = saved before the current scoring.',\n  };\n}\n\n\nreturn [{ json: { query: scorecardSql($('WF Input').first().json.days) } }];"
+      }
+    },
+    {
+      "id": "scrun",
+      "name": "Run scorecard",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        620,
+        320
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.query }}",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "tzBuhu9KEXlaRRfW",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "scshape",
+      "name": "Shape scorecard",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        820,
+        320
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Source scorecard (build menu #9): where the good items come from.\n// Report only — it never switches a source off (Wasim, 2026-10-12).\n//\n// One query returns per-(discovery source, website) counts plus the RSS feed\n// list; scorecard() folds them into one row per discovery source and one row\n// per RSS feed. raw items don't record which RSS feed they came from, so an\n// RSS item is credited to the feed on the same website; HN-style feeds link to\n// other sites, and those items land in \"RSS (other site)\".\n\nconst GOOD = 7;   // score >= 7 counts as a good item (score runs 2-10)\n\nfunction scorecardSql(days) {\n  const d = Number(days);\n  const since = Number.isInteger(d) && d > 0 ? `and f.created_at > now() - interval '${d} days'` : '';\n  return `select json_build_object(\n  'groups', (select coalesce(json_agg(g), '[]'::json) from (\n    select coalesce(su.source, 'unknown') as source,\n           lower(substring(f.canonical_url from '^https?://(?:www\\\\.)?([^/:]+)')) as host,\n           count(*)::int as n,\n           count(*) filter (where f.score >= ${GOOD})::int as good,\n           -- score 0 = never scored on the current axes (pre-2026-07 items)\n           count(*) filter (where f.score > 0)::int as scored,\n           coalesce(sum(f.score) filter (where f.score > 0), 0)::int as score_sum,\n           count(*) filter (where fb.vote = 1)::int as up,\n           count(*) filter (where fb.vote = -1)::int as down,\n           to_char(max(f.created_at), 'YYYY-MM-DD') as last_at\n    from feed_items f\n    left join seen_urls su on su.canonical_url = f.canonical_url\n    left join feedback fb on fb.feed_item_id = f.id\n    where f.dup_of is null ${since}\n    group by 1, 2) g),\n  'feeds', (select coalesce(json_agg(json_build_object('id', id, 'url', url, 'label', label, 'active', active) order by id), '[]'::json)\n            from sources where kind = 'rss'))::text as scorecard`;\n}\n\nfunction hostOf(url) {\n  const m = String(url || '').toLowerCase().match(/^https?:\\/\\/(?:www\\.)?([^/:?#]+)/);\n  return m ? m[1] : '';\n}\n\n// A feed on feeds.example.com or example.substack.com still owns example.com items\n// only if the item's host equals the feed's host or is a subdomain of it, or vice versa.\nfunction sameSite(a, b) {\n  if (!a || !b) return false;\n  return a === b || a.endsWith('.' + b) || b.endsWith('.' + a);\n}\n\nfunction blank(name) { return { name, n: 0, scored: 0, good: 0, score_sum: 0, up: 0, down: 0, last_at: '' }; }\nfunction add(row, g) {\n  row.n += g.n; row.scored += g.scored || 0; row.good += g.good; row.score_sum += g.score_sum; row.up += g.up; row.down += g.down;\n  if (g.last_at && g.last_at > row.last_at) row.last_at = g.last_at;\n}\nfunction finish(row) {\n  const { score_sum, scored, ...r } = row;\n  r.unscored = row.n - scored;\n  r.good_rate = scored ? Math.round((100 * row.good) / scored) + '%' : '-';\n  r.avg_score = scored ? Math.round((10 * score_sum) / scored) / 10 : null;\n  return r;\n}\n\nfunction scorecard(data) {\n  const groups = (data && data.groups) || [];\n  const feeds = ((data && data.feeds) || []).map((f) => ({ ...f, host: hostOf(f.url) }));\n  const bySource = new Map();\n  const byFeed = new Map();\n  for (const g of groups) {\n    if (!bySource.has(g.source)) bySource.set(g.source, blank(g.source));\n    add(bySource.get(g.source), g);\n    if (g.source !== 'rss') continue;\n    // an active feed wins over an inactive one on the same site\n    const f = feeds.filter((x) => sameSite(g.host, x.host)).sort((a, b) => Number(b.active) - Number(a.active))[0];\n    const key = f ? 'feed:' + f.id : 'other';\n    if (!byFeed.has(key)) {\n      const name = f ? (f.label || f.url) + (f.active ? '' : ' (off)') : 'RSS (other site)';\n      byFeed.set(key, blank(name));\n    }\n    add(byFeed.get(key), g);\n  }\n  // active feeds with nothing yet still show up, so a silent feed is visible\n  for (const f of feeds) {\n    if (f.active && !byFeed.has('feed:' + f.id)) byFeed.set('feed:' + f.id, blank(f.label || f.url));\n  }\n  const order = (a, b) => b.good - a.good || b.n - a.n;\n  return {\n    good_means: 'score >= ' + GOOD + ' of 10',\n    sources: [...bySource.values()].map(finish).sort(order),\n    rss_feeds: [...byFeed.values()].map(finish).sort(order),\n    note: 'RSS items are matched to a feed by website; links to other sites count as \"RSS (other site)\". Merged duplicate stories count once. good_rate and avg_score cover scored items only; unscored = saved before the current scoring.',\n  };\n}\n\n\nconst days = $('WF Input').first().json.days;\nconst out = scorecard(JSON.parse($input.first().json.scorecard || '{}'));\nout.window = Number(days) > 0 ? 'last ' + Number(days) + ' days' : 'all time';\nreturn [{ json: out }];"
+      }
+    },
+    {
       "id": "shape",
       "name": "Shape result",
       "type": "n8n-nodes-base.code",
@@ -317,6 +393,35 @@
         [
           {
             "node": "List sources",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Scorecard query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scorecard query": {
+      "main": [
+        [
+          {
+            "node": "Run scorecard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run scorecard": {
+      "main": [
+        [
+          {
+            "node": "Shape scorecard",
             "type": "main",
             "index": 0
           }

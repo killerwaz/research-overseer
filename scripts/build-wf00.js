@@ -54,7 +54,7 @@ const SYSTEM = `=You are Research Overseer's dispatcher on Telegram. Route reque
 
 Rules:
 0. You know NOTHING about runs or findings except what a tool returns for the CURRENT message. Earlier tool results in this chat are stale — runs start and finish, items arrive. Every question about runs or findings MUST call the matching tool again, even if you answered the same question a minute ago. Never answer from chat history or general knowledge. (The feed list below is fresh every message.)
-1. Free and instant actions run immediately, no confirmation: a pasted URL -> scrape_url; status questions -> run_status; 'what feeds/sources are you watching' -> manage_sources with action list; reading existing findings -> query_feed; 'anything new today' -> run_discovery with source rss. These touch nothing that costs money.
+1. Free and instant actions run immediately, no confirmation: a pasted URL -> scrape_url; status questions -> run_status; 'what feeds/sources are you watching' -> manage_sources with action list; 'how are my sources/feeds doing', 'which feeds are worth it', 'where do good items come from' -> manage_sources with action scorecard (run status is NOT source quality); reading existing findings -> query_feed; 'anything new today' -> run_discovery with source rss. These touch nothing that costs money.
 2. Anything that starts a web search costs money and about six minutes, so it needs the user's word first. Run it immediately ONLY if they used an explicit search verb (search, find me, look up, go get, dig into). If they merely asked a question — 'what's happening with X', 'anything on X', 'how is X going' — answer it from query_feed first (free), then end your reply with a one-line offer naming the search source and query you would run. Do NOT start the search; execute it on their next message if they say yes. full_sweep always needs confirmation.
 3. Retrospective questions are ALWAYS query_feed or run_status, and this OVERRIDES everything else even when a topic is named. Retrospective phrasing includes: catch me up, what did you find, what's new, anything good, show me, what did I miss, brief me, recap. "Catch me up on funding this week" is query_feed with max_age_days 7 — NOT a search, and NOT a confirmation prompt either; just read the feed and answer.
 3b. If a topic read comes back thin, retry query_feed once with fewer, broader keywords in tag. Never present items as being about the topic unless they are, and never answer a thin result by starting a search — say what the feed has and offer the search. If the question names a time ('today', 'last night', 'this week'), compute the ISO timestamp for the start of that window from the current time below and pass it to query_feed as the since parameter. Never answer a time-scoped question from an unfiltered read.
@@ -62,7 +62,7 @@ Rules:
 4. When uncertain between search sources, fail WIDE: prefer full_sweep (with confirmation) or brave. Never guess narrow.
 4b. Call at most ONE discovery tool per user request, ever. After full_sweep or run_discovery returns, summarize what it returned and stop. If it found little, say so — do NOT run it again with different wording. Each run costs money and minutes.
 5. Scheduling is OFF — this is a live chat agent; nothing runs on a timer. If asked to schedule, repeat, or run something later or every day, say scheduling is switched off and offer to run it now (searches still need their usual yes).
-6. manage_sources actions: add (url, optional label), remove (id or url), list.
+6. manage_sources actions: add (url, optional label), remove (id or url), list, scorecard (how well each source and feed is doing; optional days).
 7. Reply tersely — this is Telegram. Plain text, no markdown formatting. When you list feed items, start each line with its n from the tool result (e.g. '3. Title — one line why') so the user can say 'tell me about 3'.
 
 Feeds you are watching right now (read from the database this message — authoritative, the ONLY true list): {{ $json.sources }}
@@ -314,7 +314,9 @@ if (!g.retry && ctx.fix_check === 'true' && toolsUsed.length) {
   if (miss.length) g = { retry: true, reason: 'unsupported: ' + miss.slice(0, 6).join(', ') };
 }
 const pf = prefetchFor(question);
-return [{ json: { output: a.output || '', retry: String(g.retry), guard_reason: g.reason, tools_used: toolsUsed.join(','), prefetch_item: pf.item, prefetch_tag: pf.tag } }];`.trim() } },
+const sq = String(g.reason || '').startsWith('source quality');
+return [{ json: { output: a.output || '', retry: String(g.retry), guard_reason: g.reason, tools_used: toolsUsed.join(','), prefetch_item: pf.item, prefetch_tag: pf.tag,
+  source_q: String(sq), scorecard_days: scorecardDays(question) } }];`.trim() } },
 
   { id: 'retryif', name: 'Redo?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1460, 100],
     parameters: { options: {}, conditions: {
@@ -334,6 +336,24 @@ return [{ json: { output: a.output || '', retry: String(g.retry), guard_reason: 
       options: { waitForSubWorkflow: true } },
     onError: 'continueRegularOutput', alwaysOutputData: true },
 
+  // #9 (2026-10-12): a source-quality question gets the scorecard, run here for
+  // the same reason as Prefetch — the 9B answered 4/4 from the run list instead.
+  // It never runs Prefetch: no feed buttons, and his saved "#3" list is kept.
+  { id: 'srcq', name: 'Source question?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1500, -220],
+    parameters: { options: {}, conditions: {
+      options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, combinator: 'and',
+      conditions: [{ id: 'sq1', leftValue: '={{ $json.source_q }}', rightValue: 'true', operator: { type: 'string', operation: 'equals' } }] } } },
+
+  { id: 'scprefetch', name: 'Scorecard prefetch', type: 'n8n-nodes-base.executeWorkflow', typeVersion: 1.2, position: [1580, -220],
+    parameters: { workflowId: { __rl: true, value: WF.manage_sources, mode: 'id' },
+      workflowInputs: { mappingMode: 'defineBelow', value: {
+        action: 'scorecard', days: "={{ $('Guard check').first().json.scorecard_days }}",
+        url: '', label: '', id: '' },
+        matchingColumns: [], schema: ['action', 'url', 'label', 'id', 'days']
+          .map((id) => ({ id, displayName: id, required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: 'string' })) },
+      options: { waitForSubWorkflow: true } },
+    onError: 'continueRegularOutput', alwaysOutputData: true, executeOnce: true },
+
   // the exchange before this one, so "tell me more about the first one" still
   // works in the memoryless redo. Offset 2 skips the rejected attempt itself.
   { id: 'retryctx', name: 'Redo context', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [1620, 0],
@@ -344,7 +364,7 @@ return [{ json: { output: a.output || '', retry: String(g.retry), guard_reason: 
 
   { id: 'agent2', name: 'Guarded agent', type: '@n8n/n8n-nodes-langchain.agent', typeVersion: 3.1, position: [1780, 0],
     parameters: { promptType: 'define',
-      text: "={{ $('Agent input').first().json.text }}\n\n[previous exchange, for reference: {{ $json.previous }}]\n[live data, fetched just now: latest runs: {{ $('Agent input').first().json.runs }}]\n[live data, feed lookup run just now for this message: {{ JSON.stringify($('Prefetch').first().json).slice(0, 20000) }}]\n{{ String($('Guard check').first().json.guard_reason || '').startsWith('unsupported') ? '[Your first answer was rejected because it stated facts that are not in the feed: ' + String($('Guard check').first().json.guard_reason).slice(13) + '. Answer ONLY from the feed lookup above: quote its figures and names exactly; if it does not contain the answer, say the feed does not say.]' : '[Your first answer to this was rejected because it described the feed without checking it. Answer ONLY from the feed lookup above (list items with their n); call a tool only if the lookup clearly does not answer the question.]' }}",
+      text: "={{ $('Agent input').first().json.text }}\n\n[previous exchange, for reference: {{ $json.previous }}]\n[live data, fetched just now: latest runs: {{ $('Agent input').first().json.runs }}]\n{{ String($('Guard check').first().json.guard_reason || '').startsWith('source quality') ? '[live data, source scorecard run just now: ' + JSON.stringify($('Scorecard prefetch').first().json).slice(0, 12000) + ']\\n[Your first answer was rejected because it answered a question about how the sources are doing without the scorecard. Answer ONLY from the scorecard above: per source and per RSS feed, good items (score 7+) out of scored, good rate, average score; name the silent feeds (0 items). Do not call any tool and do not switch anything off.]' : '[live data, feed lookup run just now for this message: ' + JSON.stringify($('Prefetch').first().json).slice(0, 20000) + ']\\n' + (String($('Guard check').first().json.guard_reason || '').startsWith('unsupported') ? '[Your first answer was rejected because it stated facts that are not in the feed: ' + String($('Guard check').first().json.guard_reason).slice(13) + '. Answer ONLY from the feed lookup above: quote its figures and names exactly; if it does not contain the answer, say the feed does not say.]' : '[Your first answer to this was rejected because it described the feed without checking it. Answer ONLY from the feed lookup above (list items with their n); call a tool only if the lookup clearly does not answer the question.]') }}",
       options: { systemMessage: SYSTEM.replace(/\{\{ \$json\.(sources|runs) \}\}/g, "{{ $('Agent input').first().json.$1 }}"), maxIterations: 6, returnIntermediateSteps: true } } },
 
   // Fix 1a, second line: the redo's answer is checked too. Still unsupported =
@@ -357,7 +377,9 @@ const steps = a.intermediateSteps;   /* Prep reply builds the 👍/👎 buttons 
 if (ctx.fix_check !== 'true') return [{ json: { output: a.output || '', intermediateSteps: steps } }];
 let pf = {};
 try { pf = $('Prefetch').first().json || {}; } catch (e) {}
-const evidence = JSON.stringify(pf) + ' ' + (a.intermediateSteps || []).map(s => typeof s.observation === 'string' ? s.observation : JSON.stringify(s.observation || '')).join(' ') + ' ' + ctx.sources + ' ' + ctx.runs;
+let sc = {};
+try { sc = $('Scorecard prefetch').first().json || {}; } catch (e) {}
+const evidence = JSON.stringify(pf) + ' ' + JSON.stringify(sc) + ' ' + (a.intermediateSteps || []).map(s => typeof s.observation === 'string' ? s.observation : JSON.stringify(s.observation || '')).join(' ') + ' ' + ctx.sources + ' ' + ctx.runs;
 const miss = unsupportedFacts(a.output || '', evidence, ctx.text || '');
 if (!miss.length) return [{ json: { output: a.output || '', intermediateSteps: steps } }];
 const items = (pf.items || []).slice(0, 3).map(i => i.n + '. ' + i.title).join('\\n');
@@ -489,12 +511,13 @@ return [{ json: { output: w.output, web: true, web_sources: w.sources || [] } }]
     { limit: { desc: 'how many recent runs to return, empty for default 5' } }, [1860, 320]),
 
   tool('manage_sources',
-    "Add, remove or list RSS feeds. Use for 'add this feed', 'stop following X', 'what feeds are you watching'. Params: action (add|remove|list); url (for add/remove); label (optional); id (for remove).",
+    "Add, remove or list RSS feeds, or score every source. Use for 'add this feed', 'stop following X', 'what feeds are you watching'; action scorecard for 'how are my sources doing', 'which feeds are worth it', 'where do the good items come from' — report its numbers (good = score 7+), list silent feeds (0 items) by name, and never switch a source off unless asked. Params: action (add|remove|list|scorecard); url (for add/remove); label (optional); id (for remove); days (scorecard window, empty = all time).",
     WF.manage_sources,
     { action: { desc: 'add, remove, or list' },
       url: { desc: 'feed URL for add or remove, else empty' },
       label: { desc: 'short label for the feed, optional' },
-      id: { desc: 'source id for remove, else empty' } }, [2140, 320]),
+      id: { desc: 'source id for remove, else empty' },
+      days: { desc: 'scorecard only: look back this many days, empty for all time' } }, [2140, 320]),
 
   { id: 'prepreply', name: 'Prep reply', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1400, 100],
     parameters: { mode: 'runOnceForEachItem', jsCode: inline('telegram-format.js') + inline('feedback.js') + `
@@ -563,8 +586,10 @@ const connections = {
   'Link note': { main: [[{ node: 'Overseer Agent', type: 'main', index: 0 }]] },
   'Overseer Agent': { main: [[{ node: 'Guard check', type: 'main', index: 0 }]] },
   'Guard check': { main: [[{ node: 'Redo?', type: 'main', index: 0 }]] },
-  'Redo?': { main: [[{ node: 'Prefetch', type: 'main', index: 0 }], [{ node: 'Web needed?', type: 'main', index: 0 }]] },
+  'Redo?': { main: [[{ node: 'Source question?', type: 'main', index: 0 }], [{ node: 'Web needed?', type: 'main', index: 0 }]] },
+  'Source question?': { main: [[{ node: 'Scorecard prefetch', type: 'main', index: 0 }], [{ node: 'Prefetch', type: 'main', index: 0 }]] },
   'Prefetch': { main: [[{ node: 'Redo context', type: 'main', index: 0 }]] },
+  'Scorecard prefetch': { main: [[{ node: 'Redo context', type: 'main', index: 0 }]] },
   'Redo context': { main: [[{ node: 'Guarded agent', type: 'main', index: 0 }]] },
   'Guarded agent': { main: [[{ node: 'Final check', type: 'main', index: 0 }]] },
   'Final check': { main: [[{ node: 'Web needed?', type: 'main', index: 0 }]] },

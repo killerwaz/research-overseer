@@ -11,9 +11,34 @@
 // action, is only acceptable if a tool actually ran this turn. Sources and runs are
 // exempt: they are handed to the model fresh every message, so answering those from
 // context is correct.
+// "How are my sources doing?" is about source QUALITY (WF-34 scorecard), not run
+// status. Measured 2026-10-12: with thinking off the 9B answered 4/4 phrasings
+// from the run list in its context and never called the scorecard, so the guard
+// routes it deterministically (WF-00 runs the scorecard before the redo).
+function sourceQualityQ(question) {
+  const q = String(question || '').replace(/\bopen[- ]source\b/gi, '');
+  if (/\bhow (are|is|did|have|has) (my |the |our |all )?(rss |search )?(sources?|feeds?)\b/i.test(q)) return true;
+  const subject = /\b(sources?|feeds?|rss|exa|brave|tavily|search engines?|providers?)\b/i.test(q);
+  const quality = /\b(doing|worth|useful|useless|perform\w*|quality|good|best|worst|better|compare[ds]?|comparison|scorecard|score|pay(ing)?|keep(ing)?|drop|cut|value|deliver\w*|produc\w*)\b/i.test(q);
+  const origin = /\bwhere do (my |the )?(best|good|top|useful)\b[^?]*\bcome from\b/i.test(q);
+  const listOnly = /\bwhat (feeds|sources)\b[^?]*\b(watching|following|follow|have)\b/i.test(q) && !/\b(good|worth|doing|best)\b/i.test(q);
+  return !listOnly && ((subject && quality) || origin);
+}
+
+// "last 30 days", "this week", "past month" -> a whole number of days; '' = all time.
+function scorecardDays(question) {
+  const q = String(question || '');
+  const n = q.match(/\b(?:last|past)\s+(\d{1,3})\s+days?\b/i);
+  if (n) return n[1];
+  if (/\b(this|last|past) week\b/i.test(q)) return '7';
+  if (/\b(this|last|past) month\b/i.test(q)) return '30';
+  return '';
+}
+
 function needsFreshLookup({ question, reply, toolsUsed }) {
   const q = String(question || '');
   const r = String(reply || '');
+  if (sourceQualityQ(q) && !(toolsUsed || []).includes('manage_sources')) return { retry: true, reason: 'source quality: needs the scorecard' };
   if (Array.isArray(toolsUsed) && toolsUsed.length > 0) return { retry: false, reason: 'tool ran' };
   if (!r.trim()) return { retry: true, reason: 'empty reply' };
 
@@ -76,4 +101,4 @@ function prefetchFor(question) {
   return { item: '', tag: tag.split(/\s+/).length <= 20 ? tag : '' };
 }
 
-module.exports = { needsFreshLookup, prefetchFor };
+module.exports = { needsFreshLookup, prefetchFor, sourceQualityQ, scorecardDays };
