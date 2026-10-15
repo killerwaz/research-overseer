@@ -359,7 +359,7 @@ const nodes = [
 
   { id: 'mediaok', name: 'Media OK?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1650, -400],
     parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' },
-      combinator: 'and', conditions: [ { id: 'c1', leftValue: '={{ ($json.paragraphs || []).length }}', rightValue: 3,
+      combinator: 'and', conditions: [ { id: 'c1', leftValue: '={{ ($json.paragraphs || []).length }}', rightValue: 1,
         operator: { type: 'number', operation: 'gte' } } ] } } },
 
   codeNode('Prep media', 'prepmedia', [1800, -400], 'runOnceForEachItem', PREP_MEDIA),

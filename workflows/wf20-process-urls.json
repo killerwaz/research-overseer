@@ -315,7 +315,7 @@
             {
               "id": "c1",
               "leftValue": "={{ ($json.paragraphs || []).length }}",
-              "rightValue": 3,
+              "rightValue": 1,
               "operator": {
                 "type": "number",
                 "operation": "gte"
