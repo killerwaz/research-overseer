@@ -283,10 +283,53 @@ return $('Feed switch?').all(1).map(i => ({ json: { ...i.json, sources, runs, fi
   // "what's happening with X?" gets one cited answer from WF-45 instead of the
   // agent's list. Decided in code (shared/synth.js bigPictureQ), switch fix_synth
   // = off | fast | think. Lists, follow-ups, commands and bot questions stay on the agent.
+  // the bot's previous message: a "yes"/"no" to its sweep question is routed in
+  // code (shared/sweep-confirm.js), never by the 9B
+  { id: 'lastbot', name: 'Last bot msg', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [1175, 160],
+    parameters: { operation: 'executeQuery',
+      query: "select coalesce((select message->>'content' from n8n_chat_histories where session_id = $1::text and message->>'type' = 'ai' order by id desc limit 1), '') as last_bot",
+      options: { queryReplacement: "={{ String($('Agent input').first().json.chat_id) }}" } },
+    credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true, onError: 'continueRegularOutput' },
   { id: 'bigq', name: 'Big picture?', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1180, 160],
-    parameters: { mode: 'runOnceForAllItems', jsCode: inline('synth.js') + `
-return $input.all().map(i => ({ json: { ...i.json,
-  synth_go: String(['fast', 'think'].includes(i.json.fix_synth) && bigPictureQ(i.json.text || '')) } }));`.trim() } },
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('synth.js') + inline('sweep-confirm.js') + `
+let lastBot = '';
+try { lastBot = $input.first().json.last_bot || ''; } catch (e) {}
+return $('Recall note').all().map(i => {
+  const s = sweepDecision(i.json.text || '', lastBot);
+  return { json: { ...i.json, ...s,
+    synth_go: String(!s.sweep && ['fast', 'think'].includes(i.json.fix_synth) && bigPictureQ(i.json.text || '')) } };
+});`.trim() } },
+  { id: 'sweepif', name: 'Sweep?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1200, 120],
+    parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, combinator: 'and',
+      conditions: [{ id: 'w1', leftValue: '={{ $json.sweep }}', rightValue: 'go', operator: { type: 'string', operation: 'equals' } }] } } },
+  { id: 'sweepnoif', name: 'Sweep declined?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1220, 140],
+    parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, combinator: 'and',
+      conditions: [{ id: 'w2', leftValue: '={{ $json.sweep }}', rightValue: 'no', operator: { type: 'string', operation: 'equals' } }] } } },
+  // WF-40's own gate re-checks the yes against the same memory row
+  { id: 'sweepcall', name: 'Run sweep', type: 'n8n-nodes-base.executeWorkflow', typeVersion: 1.2, position: [1260, 60],
+    parameters: { workflowId: { __rl: true, value: WF.full_sweep, mode: 'id' },
+      workflowInputs: { mappingMode: 'defineBelow', value: {
+        query: "={{ $json.sweep_query }}", trigger: 'agent',
+        user_message: "={{ $('Agent input').first().json.text }}", chat_id: "={{ String($('Agent input').first().json.chat_id) }}" },
+        matchingColumns: [], schema: ['query', 'trigger', 'user_message', 'chat_id'].map((id) => ({ id, displayName: id, required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: 'string' })) },
+      options: { waitForSubWorkflow: true } },
+    executeOnce: true, onError: 'continueRegularOutput', alwaysOutputData: true },
+  // the agent did not run: write the exchange to memory here, like the synth path
+  { id: 'sweepreply', name: 'Sweep reply', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1300, 60],
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('sweep-confirm.js') + `
+const d = $('Big picture?').first().json;
+let r = null;
+try { r = $('Run sweep').first().json; } catch (e) {}
+const output = sweepReply(d, r);
+const b64 = (s) => Buffer.from(String(s || ''), 'utf8').toString('base64');
+return [{ json: { output, chat_id: String(d.chat_id), q_b64: b64(d.text), out_b64: b64(output) } }];`.trim() } },
+  { id: 'sweepmem', name: 'Sweep memory', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [1330, 60],
+    parameters: { operation: 'executeQuery',
+      query: "insert into n8n_chat_histories (session_id, message) values ($1::text, jsonb_build_object('type', 'human', 'content', convert_from(decode($2, 'base64'), 'UTF8'), 'additional_kwargs', '{}'::jsonb, 'response_metadata', '{}'::jsonb)), ($1::text, jsonb_build_object('type', 'ai', 'content', convert_from(decode($3, 'base64'), 'UTF8'), 'tool_calls', '[]'::jsonb, 'invalid_tool_calls', '[]'::jsonb, 'additional_kwargs', '{}'::jsonb, 'response_metadata', '{}'::jsonb)) returning id",
+      options: { queryReplacement: "={{ $json.chat_id }},{{ $json.q_b64 }},{{ $json.out_b64 }}" } },
+    credentials: { postgres: CRED_PG }, alwaysOutputData: true, onError: 'continueRegularOutput', executeOnce: true },
+  { id: 'sweepout', name: 'Sweep out', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1360, 60],
+    parameters: { mode: 'runOnceForAllItems', jsCode: `return [{ json: { output: $('Sweep reply').first().json.output } }];` } },
   { id: 'synthif', name: 'Synth?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1240, 160],
     parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, combinator: 'and',
       conditions: [{ id: 's1', leftValue: '={{ $json.synth_go }}', rightValue: 'true', operator: { type: 'string', operation: 'equals' } }] } } },
@@ -764,8 +807,16 @@ const connections = {
   'Recall embed': { main: [[{ node: 'Recall sql', type: 'main', index: 0 }]] },
   'Recall sql': { main: [[{ node: 'Recall search', type: 'main', index: 0 }]] },
   'Recall search': { main: [[{ node: 'Recall note', type: 'main', index: 0 }]] },
-  'Recall note': { main: [[{ node: 'Big picture?', type: 'main', index: 0 }]] },
-  'Big picture?': { main: [[{ node: 'Synth?', type: 'main', index: 0 }]] },
+  'Recall note': { main: [[{ node: 'Last bot msg', type: 'main', index: 0 }]] },
+  'Last bot msg': { main: [[{ node: 'Big picture?', type: 'main', index: 0 }]] },
+  'Big picture?': { main: [[{ node: 'Sweep?', type: 'main', index: 0 }]] },
+  'Sweep?': { main: [[{ node: 'Run sweep', type: 'main', index: 0 }], [{ node: 'Sweep declined?', type: 'main', index: 0 }]] },
+  'Sweep declined?': { main: [[{ node: 'Sweep reply', type: 'main', index: 0 }], [{ node: 'Synth?', type: 'main', index: 0 }]] },
+  'Run sweep': { main: [[{ node: 'Sweep reply', type: 'main', index: 0 }]] },
+  'Sweep reply': { main: [[{ node: 'Sweep memory', type: 'main', index: 0 }]] },
+  'Sweep memory': { main: [[{ node: 'Sweep out', type: 'main', index: 0 }]] },
+  // straight to the reply: no web fallback after a sweep or a declined one
+  'Sweep out': { main: [[{ node: 'Prep reply', type: 'main', index: 0 }, { node: 'Memory text', type: 'main', index: 0 }]] },
   'Synth?': { main: [[{ node: 'Synth answer', type: 'main', index: 0 }], [{ node: 'Overseer Agent', type: 'main', index: 0 }]] },
   'Synth answer': { main: [[{ node: 'Synth memory text', type: 'main', index: 0 }]] },
   'Synth memory text': { main: [[{ node: 'Synth memory', type: 'main', index: 0 }]] },
