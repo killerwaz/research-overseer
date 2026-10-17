@@ -390,7 +390,7 @@ return [{ json: { ...base, ingest_note: note } }];`.trim() } },
   // redone by a memoryless agent that is told to look it up. The decision is
   // shared/answer-guard.js (tested); the model cannot argue its way past it.
   { id: 'guard', name: 'Guard check', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1300, 100],
-    parameters: { mode: 'runOnceForAllItems', jsCode: inline('answer-guard.js') + inline('answer-check.js') + inline('recall.js') + `
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('answer-guard.js') + inline('answer-check.js') + inline('recall.js') + inline('bare-reply.js') + `
 const a = $input.first().json;
 const ctx = $('Agent input').first().json;
 const question = ctx.text || '';
@@ -408,9 +408,12 @@ if (!g.retry && ctx.fix_check === 'true' && toolsUsed.length) {
   const miss = unsupportedFacts(a.output || '', evidence, question);
   if (miss.length) g = { retry: true, reason: 'unsupported: ' + miss.slice(0, 6).join(', ') };
 }
+// a bare "yes"/"ok" has no topic: a redo would prefetch the feed for "yes" (shared/bare-reply.js)
+let output = a.output || '';
+if (g.retry && bareReply(question)) { output = bareReplyText(question); g = { retry: false, reason: 'bare reply: asked what it refers to' }; }
 const pf = prefetchFor(question);
 const sq = String(g.reason || '').startsWith('source quality');
-return [{ json: { output: a.output || '', retry: String(g.retry), guard_reason: g.reason, tools_used: toolsUsed.join(','), prefetch_item: pf.item, prefetch_tag: pf.tag,
+return [{ json: { output, retry: String(g.retry), guard_reason: g.reason, tools_used: toolsUsed.join(','), prefetch_item: pf.item, prefetch_tag: pf.tag,
   source_q: String(sq), scorecard_days: scorecardDays(question), recall_note } }];`.trim() } },
 
   { id: 'retryif', name: 'Redo?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1460, 100],
@@ -503,19 +506,20 @@ return [{ json: { chat_id: String($('Agent input').first().json.chat_id), output
   // the final reply (shared/web-fallback.js), never by the model; at most one
   // web search per message. WF-44 does the search and the cited answer.
   { id: 'webneed', name: 'Web needed?', type: 'n8n-nodes-base.code', typeVersion: 2, position: [2020, 120],
-    parameters: { mode: 'runOnceForAllItems', jsCode: inline('web-fallback.js') + inline('recall.js') + `
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('web-fallback.js') + inline('recall.js') + inline('bare-reply.js') + `
 const a = $input.first().json;
 const ctx = $('Agent input').first().json;
 // #13: items a synthesis answer showed (none for "Your feed has nothing on this yet.")
 const feedItems = a.synth ? (((a.intermediateSteps || [])[0] || {}).observation || {}).items?.length || 0 : 0;
-let n = ctx.fix_web === 'true' ? needsWeb({ question: ctx.text || '', reply: a.output || '', feedItems }) : { web: false, reason: 'switch fix_web off' };
+// a bare "no" was searched on the web (a Meghan Trainor song): never (shared/bare-reply.js)
+let n = bareReply(ctx.text) ? { web: false, reason: 'bare reply' } : ctx.fix_web === 'true' ? needsWeb({ question: ctx.text || '', reply: a.output || '', feedItems }) : { web: false, reason: 'switch fix_web off' };
 // the wording let it through, but it offers a search or says something is missing: ask the 9B
-let judge = ctx.fix_web === 'true' && !n.web && n.reason === 'the feed answered' && !a.synth && judgeNeeded(a.output || '');
+let judge = ctx.fix_web === 'true' && !bareReply(ctx.text) && !n.web && n.reason === 'the feed answered' && !a.synth && judgeNeeded(a.output || '');
 // #14: the reply is built on an earlier chat that answered, yet says the feed has
 // nothing — the 9B judges whether it answered (Pathao: yes; "still nothing": no).
 let rc = {};
 try { rc = $('Recall note').first().json || {}; } catch (e) {}
-if (n.web && !a.synth && answeredFromRecall(a.output || '', rc.recall_rows, (r) => needsWeb({ question: r.question, reply: r.answer }).web)) {
+if (n.web && !a.synth && !bareReply(ctx.text) && answeredFromRecall(a.output || '', rc.recall_rows, (r) => needsWeb({ question: r.question, reply: r.answer }).web)) {
   n = { web: false, reason: 'earlier chat: the judge decides' }; judge = true;
 }
 return [{ json: { ...a, web_go: String(n.web), web_reason: n.reason, judge_go: String(judge),
