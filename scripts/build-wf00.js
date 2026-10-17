@@ -257,7 +257,8 @@ return [{ json: { chat_id, output: text } }];
         "coalesce((select value from settings where key = 'fix_web'), '') as fix_web, " +
         "coalesce((select value from settings where key = 'fix_synth'), 'off') as fix_synth, " +
         "coalesce((select value from settings where key = 'fix_verify'), 'false') as fix_verify, " +
-        "coalesce((select value from settings where key = 'fix_recall'), 'true') as fix_recall",
+        "coalesce((select value from settings where key = 'fix_recall'), 'true') as fix_recall, " +
+        "coalesce((select value from settings where key = 'fix_fit'), 'true') as fix_fit",
       options: {} },
     credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true },
 
@@ -266,8 +267,8 @@ return [{ json: { chat_id, output: text } }];
   { id: 'ctxmerge', name: 'Agent input', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1060, 100],
     parameters: { mode: 'runOnceForAllItems', jsCode: `
 const ctx = $('Agent context').first().json;
-const sources = ctx.sources || 'none', runs = ctx.runs || 'unknown', fix_check = ctx.fix_check || '', fix_web = ctx.fix_web || '', fix_synth = ctx.fix_synth || 'off', fix_verify = ctx.fix_verify || 'false', fix_recall = ctx.fix_recall || 'true';
-return $('Feed switch?').all(1).map(i => ({ json: { ...i.json, sources, runs, fix_check, fix_web, fix_synth, fix_verify, fix_recall } }));`.trim() } },
+const sources = ctx.sources || 'none', runs = ctx.runs || 'unknown', fix_check = ctx.fix_check || '', fix_web = ctx.fix_web || '', fix_synth = ctx.fix_synth || 'off', fix_verify = ctx.fix_verify || 'false', fix_recall = ctx.fix_recall || 'true', fix_fit = ctx.fix_fit || 'true';
+return $('Feed switch?').all(1).map(i => ({ json: { ...i.json, sources, runs, fix_check, fix_web, fix_synth, fix_verify, fix_recall, fix_fit } }));`.trim() } },
 
   // Links are ingested deterministically, BEFORE the model runs (2026-10-11):
   // the 9B answered a two-link message with "I've ingested both YouTube links"
@@ -505,6 +506,58 @@ return [{ json: { chat_id: String($('Agent input').first().json.chat_id), output
   // Wasim's call: automatic, no cap, Tavily, answer only. Decided in code from
   // the final reply (shared/web-fallback.js), never by the model; at most one
   // web search per message. WF-44 does the search and the cited answer.
+  // ---- feed replies that list items (2026-10-17, shared/feed-fit.js) ----
+  // "The feed has 10 items on products using the REA repo" + 7 items, none of them
+  // a product built with it. Code fixes the count; the 9B checks the shown items
+  // against the question: one call, or for "products built with X" one call per
+  // item that must name the thing and quote the sentence. eval: scripts/eval-fit.js
+  // (12/12 misses caught, 39/41 answers kept). Switch fix_fit (default on).
+  { id: 'fitprep', name: 'Fit prep', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1980, 120],
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('feed-fit.js') + inline('bare-reply.js') + `
+const a = $input.first().json;
+const ctx = $('Agent input').first().json;
+const output = fixCount(a.output || '');
+const sources = [];
+if (a.intermediateSteps) sources.push(a.intermediateSteps);
+try { sources.push($('Prefetch').all().map((i) => i.json)); } catch (e) {}
+try { sources.push($('Overseer Agent').first().json.intermediateSteps); } catch (e) {}
+const shown = ctx.fix_fit === 'false' || a.synth || bareReply(ctx.text) ? [] : shownFeedItems(output, sources).slice(0, 8);
+const base = { ...a, output, fit_go: 'false', fit_mode: '' };
+if (!shown.length) return [{ json: base }];
+const MODEL = 'qwen/qwen3.5-9b';
+if (relationQ(ctx.text)) return shown.map((i) => ({ json: { ...base, fit_go: 'true', fit_mode: 'named', fit_item: i, llm_body: JSON.stringify(namedBody(MODEL, ctx.text, i)) } }));
+return [{ json: { ...base, fit_go: 'true', fit_mode: 'fit', llm_body: JSON.stringify(fitBody(MODEL, ctx.text, shown)) } }];`.trim() } },
+  { id: 'fitif', name: 'Fit?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1990, 200],
+    parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, combinator: 'and',
+      conditions: [{ id: 'f1', leftValue: '={{ $json.fit_go }}', rightValue: 'true', operator: { type: 'string', operation: 'equals' } }] } } },
+  // one request per item (named mode sends up to 8, each ~0.5 s with thinking off)
+  { id: 'fitjudge', name: 'Fit judge', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [2000, 280],
+    parameters: { method: 'POST', url: 'http://host.docker.internal:1234/v1/chat/completions',
+      authentication: 'genericCredentialType', genericAuthType: 'httpBearerAuth',
+      sendBody: true, specifyBody: 'json', jsonBody: '={{ $json.llm_body }}', options: { timeout: 30000 } },
+    credentials: { httpBearerAuth: I.credentials.lmstudio }, retryOnFail: false, onError: 'continueRegularOutput' },
+  // unreadable or failed verdicts = the reply stands as it is
+  { id: 'fitapply', name: 'Fit apply', type: 'n8n-nodes-base.code', typeVersion: 2, position: [2010, 280],
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('feed-fit.js') + `
+const preps = $('Fit prep').all().map((i) => i.json);
+const res = $input.all().map((i) => { try { return i.json.choices[0].message.content; } catch (e) { return null; } });
+const ctx = $('Agent input').first().json;
+const p = preps[0];
+let miss = false, detail = '', gap = '';
+if (p.fit_mode === 'named') {
+  const named = preps.map((x, k) => readNamed(res[k], x.fit_item, ctx.text)).filter(Boolean);
+  const answered = res.filter((r) => r != null).length;
+  miss = answered === preps.length && named.length === 0;
+  detail = 'named: ' + (named.join('; ') || 'none') + ' (' + answered + '/' + preps.length + ' read)';
+} else {
+  const v = readFit(res[0]);
+  miss = !!v && !v.answers;
+  gap = v ? v.gap : '';
+  detail = v ? 'yes ' + v.yes + ' partly ' + v.partly + ' no ' + v.no : 'unreadable';
+}
+const { fit_item, llm_body, ...a } = p;
+return [{ json: { ...a, output: miss ? missNote(gap) + a.output : a.output, fit_miss: String(miss), fit_detail: detail } }];`.trim() } },
+
   { id: 'webneed', name: 'Web needed?', type: 'n8n-nodes-base.code', typeVersion: 2, position: [2020, 120],
     parameters: { mode: 'runOnceForAllItems', jsCode: inline('web-fallback.js') + inline('recall.js') + inline('bare-reply.js') + `
 const a = $input.first().json;
@@ -513,6 +566,8 @@ const ctx = $('Agent input').first().json;
 const feedItems = a.synth ? (((a.intermediateSteps || [])[0] || {}).observation || {}).items?.length || 0 : 0;
 // a bare "no" was searched on the web (a Meghan Trainor song): never (shared/bare-reply.js)
 let n = bareReply(ctx.text) ? { web: false, reason: 'bare reply' } : ctx.fix_web === 'true' ? needsWeb({ question: ctx.text || '', reply: a.output || '', feedItems }) : { web: false, reason: 'switch fix_web off' };
+// the fit check found that none of the listed items answers the question
+if (!n.web && a.fit_miss === 'true' && ctx.fix_web === 'true' && !bareReply(ctx.text)) n = { web: true, reason: 'feed items do not answer' };
 // the wording let it through, but it offers a search or says something is missing: ask the 9B
 let judge = ctx.fix_web === 'true' && !bareReply(ctx.text) && !n.web && n.reason === 'the feed answered' && !a.synth && judgeNeeded(a.output || '');
 // #14: the reply is built on an earlier chat that answered, yet says the feed has
@@ -830,13 +885,17 @@ const connections = {
   'Link note': { main: [[{ node: 'Overseer Agent', type: 'main', index: 0 }]] },
   'Overseer Agent': { main: [[{ node: 'Guard check', type: 'main', index: 0 }]] },
   'Guard check': { main: [[{ node: 'Redo?', type: 'main', index: 0 }]] },
-  'Redo?': { main: [[{ node: 'Source question?', type: 'main', index: 0 }], [{ node: 'Web needed?', type: 'main', index: 0 }]] },
+  'Redo?': { main: [[{ node: 'Source question?', type: 'main', index: 0 }], [{ node: 'Fit prep', type: 'main', index: 0 }]] },
   'Source question?': { main: [[{ node: 'Scorecard prefetch', type: 'main', index: 0 }], [{ node: 'Prefetch', type: 'main', index: 0 }]] },
   'Prefetch': { main: [[{ node: 'Redo context', type: 'main', index: 0 }]] },
   'Scorecard prefetch': { main: [[{ node: 'Redo context', type: 'main', index: 0 }]] },
   'Redo context': { main: [[{ node: 'Guarded agent', type: 'main', index: 0 }]] },
   'Guarded agent': { main: [[{ node: 'Final check', type: 'main', index: 0 }]] },
-  'Final check': { main: [[{ node: 'Web needed?', type: 'main', index: 0 }]] },
+  'Final check': { main: [[{ node: 'Fit prep', type: 'main', index: 0 }]] },
+  'Fit prep': { main: [[{ node: 'Fit?', type: 'main', index: 0 }]] },
+  'Fit?': { main: [[{ node: 'Fit judge', type: 'main', index: 0 }], [{ node: 'Web needed?', type: 'main', index: 0 }]] },
+  'Fit judge': { main: [[{ node: 'Fit apply', type: 'main', index: 0 }]] },
+  'Fit apply': { main: [[{ node: 'Web needed?', type: 'main', index: 0 }]] },
   'Web needed?': { main: [[{ node: 'Judge?', type: 'main', index: 0 }]] },
   'Judge?': { main: [[{ node: 'Judge', type: 'main', index: 0 }], [{ node: 'Web?', type: 'main', index: 0 }]] },
   'Judge': { main: [[{ node: 'Judge verdict', type: 'main', index: 0 }]] },
