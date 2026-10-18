@@ -146,4 +146,22 @@ function itemAnswer(content, item, request) {
   return { output: out || "I couldn't open that item again. Ask about it by name and I'll search the feed.", fallback: reason };
 }
 
-module.exports = { referentKind, refRoute, refNote, REF_WINDOW_MIN, plainText, botSaidSql, AGENT_ROWS, itemText, itemBody, plainSummary, itemAnswer };
+// ---- an instruction sent WITH the link (WF-43, 2026-10-18) ----
+// "<link> summarize it without timestamps": the video's item, looked up by its
+// canonical url (both texts base64: web text never goes into SQL as a literal),
+// with the saved transcript, and the instruction echoed back so each row carries it.
+function itemLookupSql(canonicalUrl, instruction) {
+  const b = (s) => Buffer.from(String(s || ''), 'utf8').toString('base64');
+  return "select f.id, f.title, f.summary, f.canonical_url, f.structured, " +
+    "coalesce((select left(string_agg(dc.text, chr(10) || chr(10) order by dc.n), 6000) from doc_chunks dc where dc.raw_doc_id = f.raw_doc_id), '') as page_excerpt, " +
+    "convert_from(decode('" + b(instruction) + "', 'base64'), 'UTF8') as instruction " +
+    "from feed_items f where f.canonical_url = convert_from(decode('" + b(canonicalUrl) + "', 'base64'), 'UTF8') order by f.id desc limit 1";
+}
+
+// the Telegram message: the video's title, then the answer (HTML-escaped)
+function answerMessage(item, answer) {
+  const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return ('\u{1F3AC} <b>' + esc((item || {}).title) + '</b>\n\n' + esc(answer)).slice(0, 4000);
+}
+
+module.exports = { itemLookupSql, answerMessage, referentKind, refRoute, refNote, REF_WINDOW_MIN, plainText, botSaidSql, AGENT_ROWS, itemText, itemBody, plainSummary, itemAnswer };

@@ -104,3 +104,18 @@ test('BARE_MEDIA_REPLY: a short "transcribe" reply yes; questions and chat no', 
     'transcribe https://youtu.be/x', 'what did you hear about Bkash', 'hearing aids startups', 'slides', 'transcribe slides https://youtu.be/x', 'transcribe the slides from the fintech deck', ''])
     assert.strictEqual(BARE_MEDIA_REPLY.test(t), false, t);
 });
+
+const { mediaInstruction } = require('../shared/media.js');
+
+test('a link message keeps its instruction (18 Oct: "summarize it without timestamps" was dropped)', () => {
+  assert.strictEqual(parseMediaRequest('https://www.youtube.com/watch?v=cLqtxkYrMDI summarize it without timestamps').instruction, 'summarize it without timestamps');
+  assert.strictEqual(parseMediaRequest('what does he say about pricing? https://youtu.be/aaaaaaaaaaa').instruction, 'what does he say about pricing?');
+  assert.strictEqual(mediaInstruction('in 3 bullets'), 'in 3 bullets');
+});
+
+test('plain shares, trigger words and filler are not instructions', () => {
+  for (const t of ['', 'check this out', 'summarize this video', 'summarise please', 'thoughts?', 'fyi, interesting one',
+    'transcribe', 'slides', 'transcribe slides please', 'watch this', 'lol', '👀'])
+    assert.strictEqual(mediaInstruction(t), '', t);
+  assert.strictEqual(parseMediaRequest('https://youtu.be/aaaaaaaaaaa').instruction, '');
+});

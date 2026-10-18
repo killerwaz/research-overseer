@@ -43,7 +43,19 @@ function parseMediaRequest(text, extraUrl) {
     if (!seen.has(u)) { seen.add(u); urls.push(u); }
   }
   const words = raw.replace(/https?:\/\/[^\s<>"')\]]+/gi, ' ');
-  return { urls, slides: SLIDE_WORDS.test(words), transcribe: TRANSCRIBE_WORDS.test(words) };
+  return { urls, slides: SLIDE_WORDS.test(words), transcribe: TRANSCRIBE_WORDS.test(words), instruction: mediaInstruction(words) };
+}
+
+// What he asked for besides "summarise this link" (2026-10-18): "<link> summarize it
+// without timestamps" got the stored summary, timestamps and all — the words after the
+// link went nowhere. The text minus the link is the instruction when something is left
+// once the plain-summary filler and the trigger words are taken out; else ''.
+const MEDIA_FILLER = /\b(?:check|this|that|it|out|here|look|at|please|pls|summari[sz]e|summary|sum up|tl;?dr|of|the|a|an|video|clip|vid|link|podcast|episode|fyi|interesting|thoughts?|can you|could you|for me|me|and|see|new|one|cool|wow|lol|haha|nice|great|just|watch|via)\b/gi;
+function mediaInstruction(textWithoutLinks) {
+  const t = String(textWithoutLinks || '').replace(/\s+/g, ' ').trim();
+  const rest = t.replace(SLIDE_WORDS, ' ').replace(TRANSCRIBE_WORDS, ' ').replace(MEDIA_FILLER, ' ')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  return rest.length >= 2 ? t.slice(0, 500) : '';
 }
 
 function mmss(seconds) {
@@ -170,4 +182,4 @@ function mediaMessage(item) {
   return out.join('\n').slice(0, 4000);   // Telegram's limit is 4096
 }
 
-module.exports = { isMediaUrl, parseMediaRequest, BARE_MEDIA_REPLY, mmss, parseTs, mediaMarkdown, MEDIA_SKILL_PROMPT, MEDIA_SKILL_SCHEMA, timeLink, mediaMessage, snapKeyPoints };
+module.exports = { isMediaUrl, parseMediaRequest, mediaInstruction, BARE_MEDIA_REPLY, mmss, parseTs, mediaMarkdown, MEDIA_SKILL_PROMPT, MEDIA_SKILL_SCHEMA, timeLink, mediaMessage, snapKeyPoints };

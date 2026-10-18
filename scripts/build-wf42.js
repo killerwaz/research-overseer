@@ -64,7 +64,7 @@ if (p.need_last) {
   urls = [g.last_no_captions];
   transcribe = true;
 }
-const media = urls.filter(isMediaUrl).map((url) => ({ url, slides: p.slides, transcribe }));
+const media = urls.filter(isMediaUrl).map((url) => ({ url, slides: p.slides, transcribe, instruction: p.instruction || '' }));
 const other = urls.filter((u) => !isMediaUrl(u)).map((url) => ({ url, source: 'manual' }));
 return [{ json: { media, other, trigger: p.trigger } }];
 `.trim();
@@ -125,7 +125,7 @@ const ITEMS = inline('canonicalize.js') + `
 const j = $input.first().json;
 let items = [];
 try { items = JSON.parse(j.items_json || '[]'); } catch (e) {}
-const out = items.map((m) => ({ url: m.url, canonical_url: canon(m.url) || m.url, slides: Boolean(m.slides), transcribe: Boolean(m.transcribe) }));
+const out = items.map((m) => ({ url: m.url, canonical_url: canon(m.url) || m.url, slides: Boolean(m.slides), transcribe: Boolean(m.transcribe), instruction: String(m.instruction || '') }));
 if (!out.length) return [];
 const esc = (u) => String(u).replace(/'/g, "''");
 const query = "select coalesce(json_object_agg(f.canonical_url, json_build_object('id', f.id, 'title', f.title, 'summary', f.summary, 'score', f.score, " +
@@ -154,10 +154,49 @@ return { json: { text: '\\u{1F4DA} Already in your feed:\\n\\n' + mediaMessage($
 // memory row + the chat's list = this video (shared/referent.js)
 const RECORD_STORED = inline('referent.js') + `
 const msgs = $('Stored message').all();
-const decided = $('Decide').all().filter((i) => i.json.reuse);
+const decided = $('Decide').all().filter((i) => i.json.reuse && !i.json.instruction);
 return $input.all().map((r, k) => ({ json: { sql: r.json.ok === true && msgs[k] && decided[k]
   ? botSaidSql('__TG_CHAT__', msgs[k].json.text, [decided[k].json.stored.id], 'media') : 'select 1 as skipped' } }));
 `.trim();
+
+// ---- an instruction sent with the link (2026-10-18, shared/referent.js) ----
+// "<link> summarize it without timestamps": a stored video gets the answer
+// INSTEAD of its stored summary; a new one gets WF-20's summary first (that is
+// the record) and the answer after it. The 9B answers from the item's own text,
+// thinking off, figure-checked; a failed answer = the summary without times.
+const PICK = (from) => inline('referent.js') + `
+return ${from}.filter((i) => i.json.instruction).map((i) => ({ json: { sql: itemLookupSql(i.json.canonical_url, i.json.instruction) } }));
+`.trim();
+const ANSWER_PREP = inline('answer-check.js') + inline('referent.js') + `
+return $input.all().filter((i) => Number(i.json.id) > 0).map((i) => ({ json: { item: i.json,
+  llm_body: JSON.stringify(itemBody('qwen/qwen3.5-9b', i.json.instruction, i.json)) } }));
+`.trim();
+const ANSWER_REPLY = inline('answer-check.js') + inline('referent.js') + inline('feedback.js') + `
+const preps = $('Answer prep').all();
+return $input.all().map((r, k) => {
+  const item = preps[k].json.item;
+  let content = '';
+  try { content = r.json.choices[0].message.content; } catch (e) {}
+  const a = itemAnswer(content, item, item.instruction);
+  return { json: { id: item.id, text: answerMessage(item, a.output), reply_markup: itemKeyboard(item.id), fallback: a.fallback } };
+});
+`.trim();
+const RECORD_ANSWER = inline('referent.js') + `
+const msgs = $('Answer reply').all();
+return $input.all().map((r, k) => ({ json: { sql: r.json.ok === true && msgs[k]
+  ? botSaidSql('__TG_CHAT__', msgs[k].json.text, [msgs[k].json.id], 'media') : 'select 1 as skipped' } }));
+`.trim();
+const lmHttp = (name, id, pos) => ({ id, name, type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: pos,
+  parameters: { method: 'POST', url: 'http://host.docker.internal:1234/v1/chat/completions',
+    authentication: 'genericCredentialType', genericAuthType: 'httpBearerAuth',
+    sendBody: true, specifyBody: 'json', jsonBody: '={{ $json.llm_body }}', options: { timeout: 90000 } },
+  credentials: { httpBearerAuth: I.credentials.lmstudio }, retryOnFail: false, onError: 'continueRegularOutput' });
+const tgSend = (name, id, pos) => ({ id, name, type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: pos,
+  parameters: { method: 'POST', url: 'https://api.telegram.org/bot__TG_TOKEN__/sendMessage',
+    sendBody: true, specifyBody: 'json',
+    jsonBody: "={{ JSON.stringify(Object.assign({ chat_id: '__TG_CHAT__', text: $json.text, parse_mode: 'HTML' }, $json.reply_markup ? { reply_markup: $json.reply_markup } : {})) }}",
+    options: { timeout: 15000 } },
+  retryOnFail: false, onError: 'continueRegularOutput' });
 
 const wf43 = {
   name: 'WF-43 media_queue',
@@ -178,6 +217,16 @@ const wf43 = {
       retryOnFail: false, onError: 'continueRegularOutput' },
     code('Record prep', 'recordprep', [1400, -150], RECORD_STORED),
     pg('Record send', 'recordsend', [1600, -150], '={{ $json.sql }}', null, { alwaysOutputData: true, onError: 'continueRegularOutput' }),
+    ifNode('Instruction?', 'instr', [900, -50], '={{ Boolean($json.instruction) }}'),
+    code('Answer pick (stored)', 'pickstored', [1000, 300], PICK('$input.all()')),
+    code('Answer pick (new)', 'picknew', [1200, 300], PICK("$('Decide').all().filter((i) => !i.json.reuse)")),
+    pg('Answer item', 'answeritem', [1400, 300], '={{ $json.sql }}', null, { alwaysOutputData: true, onError: 'continueRegularOutput' }),
+    code('Answer prep', 'answerprep', [1600, 300], ANSWER_PREP),
+    lmHttp('Answer model', 'answermodel', [1800, 300]),
+    code('Answer reply', 'answerreply', [2000, 300], ANSWER_REPLY),
+    tgSend('Send answer', 'sendanswer', [2200, 300]),
+    code('Record answer prep', 'recordanswerprep', [2400, 300], RECORD_ANSWER),
+    pg('Record answer', 'recordanswer', [2600, 300], '={{ $json.sql }}', null, { alwaysOutputData: true, onError: 'continueRegularOutput' }),
     // one WF-20 run per video, waited on in turn: summaries arrive one by one,
     // and the media service's own pacing spaces the YouTube requests
     Object.assign(execWf('Process video', 'process', [1000, 150], '__WF20__',
@@ -189,7 +238,17 @@ const wf43 = {
     'Items': { main: [[{ node: 'Stored summaries', type: 'main', index: 0 }]] },
     'Stored summaries': { main: [[{ node: 'Decide', type: 'main', index: 0 }]] },
     'Decide': { main: [[{ node: 'Already summarised?', type: 'main', index: 0 }]] },
-    'Already summarised?': { main: [[{ node: 'Stored message', type: 'main', index: 0 }], [{ node: 'Process video', type: 'main', index: 0 }]] },
+    'Already summarised?': { main: [[{ node: 'Instruction?', type: 'main', index: 0 }], [{ node: 'Process video', type: 'main', index: 0 }]] },
+    'Instruction?': { main: [[{ node: 'Answer pick (stored)', type: 'main', index: 0 }], [{ node: 'Stored message', type: 'main', index: 0 }]] },
+    'Process video': { main: [[{ node: 'Answer pick (new)', type: 'main', index: 0 }]] },
+    'Answer pick (stored)': { main: [[{ node: 'Answer item', type: 'main', index: 0 }]] },
+    'Answer pick (new)': { main: [[{ node: 'Answer item', type: 'main', index: 0 }]] },
+    'Answer item': { main: [[{ node: 'Answer prep', type: 'main', index: 0 }]] },
+    'Answer prep': { main: [[{ node: 'Answer model', type: 'main', index: 0 }]] },
+    'Answer model': { main: [[{ node: 'Answer reply', type: 'main', index: 0 }]] },
+    'Answer reply': { main: [[{ node: 'Send answer', type: 'main', index: 0 }]] },
+    'Send answer': { main: [[{ node: 'Record answer prep', type: 'main', index: 0 }]] },
+    'Record answer prep': { main: [[{ node: 'Record answer', type: 'main', index: 0 }]] },
     'Stored message': { main: [[{ node: 'Send stored', type: 'main', index: 0 }]] },
     'Send stored': { main: [[{ node: 'Record prep', type: 'main', index: 0 }]] },
     'Record prep': { main: [[{ node: 'Record send', type: 'main', index: 0 }]] }

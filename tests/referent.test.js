@@ -92,3 +92,17 @@ test('itemAnswer keeps a faithful answer, falls back on invented figures or empt
   assert.ok(!bad.output.includes('1:02'), 'fallback has no timestamps either');
   assert.strictEqual(itemAnswer('', ITEM, 'x').fallback, 'empty');
 });
+
+const { itemLookupSql, answerMessage } = require('../shared/referent.js');
+
+test('a link instruction looks its item up with both texts base64, never as literals', () => {
+  const sql = itemLookupSql("https://www.youtube.com/watch?v=x'1", 'cost $785606.5? no timestamps');
+  assert.ok(!sql.includes("x'1") && !sql.includes('785606'));
+  assert.ok(sql.includes(Buffer.from('cost $785606.5? no timestamps').toString('base64')));
+  assert.match(sql, /from feed_items f where f\.canonical_url = convert_from/);
+  assert.match(sql, /doc_chunks/);
+});
+
+test('the answer message carries the title and escapes the answer', () => {
+  assert.strictEqual(answerMessage({ title: 'A & B' }, 'x < y'), '\u{1F3AC} <b>A &amp; B</b>\n\nx &lt; y');
+});
