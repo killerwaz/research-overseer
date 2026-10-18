@@ -150,6 +150,15 @@ const REUSE_MSG = inline('media.js') + inline('feedback.js') + `
 return { json: { text: '\\u{1F4DA} Already in your feed:\\n\\n' + mediaMessage($json.stored), reply_markup: itemKeyboard($json.stored.id) } };
 `.trim();
 
+// a re-sent summary is recorded like a fresh one (WF-20 'Record prep'):
+// memory row + the chat's list = this video (shared/referent.js)
+const RECORD_STORED = inline('referent.js') + `
+const msgs = $('Stored message').all();
+const decided = $('Decide').all().filter((i) => i.json.reuse);
+return $input.all().map((r, k) => ({ json: { sql: r.json.ok === true && msgs[k] && decided[k]
+  ? botSaidSql('__TG_CHAT__', msgs[k].json.text, [decided[k].json.stored.id], 'media') : 'select 1 as skipped' } }));
+`.trim();
+
 const wf43 = {
   name: 'WF-43 media_queue',
   nodes: [
@@ -167,6 +176,8 @@ const wf43 = {
         jsonBody: "={{ JSON.stringify(Object.assign({ chat_id: '__TG_CHAT__', text: $json.text, parse_mode: 'HTML' }, $json.reply_markup ? { reply_markup: $json.reply_markup } : {})) }}",
         options: { timeout: 15000 } },
       retryOnFail: false, onError: 'continueRegularOutput' },
+    code('Record prep', 'recordprep', [1400, -150], RECORD_STORED),
+    pg('Record send', 'recordsend', [1600, -150], '={{ $json.sql }}', null, { alwaysOutputData: true, onError: 'continueRegularOutput' }),
     // one WF-20 run per video, waited on in turn: summaries arrive one by one,
     // and the media service's own pacing spaces the YouTube requests
     Object.assign(execWf('Process video', 'process', [1000, 150], '__WF20__',
@@ -179,7 +190,9 @@ const wf43 = {
     'Stored summaries': { main: [[{ node: 'Decide', type: 'main', index: 0 }]] },
     'Decide': { main: [[{ node: 'Already summarised?', type: 'main', index: 0 }]] },
     'Already summarised?': { main: [[{ node: 'Stored message', type: 'main', index: 0 }], [{ node: 'Process video', type: 'main', index: 0 }]] },
-    'Stored message': { main: [[{ node: 'Send stored', type: 'main', index: 0 }]] }
+    'Stored message': { main: [[{ node: 'Send stored', type: 'main', index: 0 }]] },
+    'Send stored': { main: [[{ node: 'Record prep', type: 'main', index: 0 }]] },
+    'Record prep': { main: [[{ node: 'Record send', type: 'main', index: 0 }]] }
   },
   settings: { executionOrder: 'v1', errorWorkflow: 'PNJMA4NbQGmp1xKv' }
 };

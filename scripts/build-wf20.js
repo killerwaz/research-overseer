@@ -438,7 +438,7 @@ const nodes = [
   codeNode('Collect stats', 'stats', [3800, 0], 'runOnceForAllItems', COLLECT_STATS),
 
   pgNode('Finalize run', 'finalize', [4000, 0],
-    "update runs set finished_at = now(), urls_new = $2::int, urls_scraped = (select count(*) from raw_docs where run_id = $1::bigint), items_created = (select count(*) from feed_items where run_id = $1::bigint), error = nullif($3,''), status = case when $2::int = 0 and $3 = '' then 'ok' when (select count(*) from raw_docs where run_id = $1::bigint) = 0 and $2::int > 0 then 'failed' when (select count(*) from raw_docs where run_id = $1::bigint) < $2::int then 'partial' when (select count(*) from feed_items where run_id = $1::bigint) < (select count(*) from raw_docs where run_id = $1::bigint) then 'partial' else 'ok' end where id = $1::bigint returning id as run_id, status, scope, urls_found, urls_new, urls_scraped, items_created, error, (select title from feed_items where run_id = $1::bigint order by score desc, relevance desc nulls last, id desc limit 1) as top_title, (select json_build_object('id', f.id, 'title', f.title, 'summary', f.summary, 'score', f.score, 'canonical_url', f.canonical_url, 'key_points', f.structured->'key_points', 'transcript_source', substr(d.scraper, 7), 'screen', split_part(substring(d.markdown from 'Screen: (.*)'), chr(10), 1))::text from feed_items f join raw_docs d on d.id = f.raw_doc_id where f.run_id = $1::bigint and d.scraper like 'media:%' order by f.id desc limit 1) as media",
+    "update runs set finished_at = now(), urls_new = $2::int, urls_scraped = (select count(*) from raw_docs where run_id = $1::bigint), items_created = (select count(*) from feed_items where run_id = $1::bigint), error = nullif($3,''), status = case when $2::int = 0 and $3 = '' then 'ok' when (select count(*) from raw_docs where run_id = $1::bigint) = 0 and $2::int > 0 then 'failed' when (select count(*) from raw_docs where run_id = $1::bigint) < $2::int then 'partial' when (select count(*) from feed_items where run_id = $1::bigint) < (select count(*) from raw_docs where run_id = $1::bigint) then 'partial' else 'ok' end where id = $1::bigint returning id as run_id, status, scope, urls_found, urls_new, urls_scraped, items_created, error, (select title from feed_items where run_id = $1::bigint order by score desc, relevance desc nulls last, id desc limit 1) as top_title, (select json_build_object('id', f.id, 'title', f.title, 'summary', f.summary, 'score', f.score, 'canonical_url', f.canonical_url, 'key_points', f.structured->'key_points', 'transcript_source', substr(d.scraper, 7), 'screen', split_part(substring(d.markdown from 'Screen: (.*)'), chr(10), 1))::text from feed_items f join raw_docs d on d.id = f.raw_doc_id where f.run_id = $1::bigint and d.scraper like 'media:%' order by f.id desc limit 1) as media, (select string_agg(id::text, ',' order by score desc nulls last, id) from feed_items where run_id = $1::bigint) as run_item_ids",
     "={{ $json.run_id }},{{ $json.urls_new }},{{ $json.error }}",
     { executeOnce: true }),
 
@@ -502,6 +502,20 @@ return [{ json: { text } }];
       options: { timeout: 15000 } },
     executeOnce: true, retryOnFail: false, onError: 'continueRegularOutput' },
 
+  // What he was sent goes into chat memory, and the items it showed become the
+  // chat's numbered list, so "summarize the video" / "#1" can find them
+  // (shared/referent.js, 2026-10-18). Only pasted links set the list; a send
+  // Telegram refused is not recorded.
+  codeNode('Record prep', 'recordprep', [4390, -120], 'runOnceForAllItems', inline('referent.js') + `
+const r = $('Finalize run').first().json;
+const c = $('Compose summary').first().json;
+let sent = false;
+try { sent = $('Telegram summary').first().json.ok === true; } catch (e) {}
+const ids = r.scope === 'url' ? String(r.run_item_ids || '').split(',').map(Number).filter((x) => x > 0) : [];
+return [{ json: { sql: sent ? botSaidSql('__TG_CHAT__', c.text, ids, r.media ? 'media' : 'pipeline') : 'select 1 as skipped' } }];`.trim()),
+  pgNode('Record send', 'recordsend', [4395, -120], '={{ $json.sql }}', null,
+    { executeOnce: true, alwaysOutputData: true, onError: 'continueRegularOutput' }),
+
   codeNode('Return summary', 'retsummary', [4400, 0], 'runOnceForAllItems',
     "return $('Finalize run').all();")
 ];
@@ -550,7 +564,9 @@ const connections = {
   'Finalize run': { main: [[{ node: 'Compose summary', type: 'main', index: 0 }]] },
   'Compose summary': { main: [[{ node: 'Remember no-captions', type: 'main', index: 0 }]] },
   'Remember no-captions': { main: [[{ node: 'Telegram summary', type: 'main', index: 0 }]] },
-  'Telegram summary': { main: [[{ node: 'Return summary', type: 'main', index: 0 }]] }
+  'Telegram summary': { main: [[{ node: 'Record prep', type: 'main', index: 0 }]] },
+  'Record prep': { main: [[{ node: 'Record send', type: 'main', index: 0 }]] },
+  'Record send': { main: [[{ node: 'Return summary', type: 'main', index: 0 }]] }
 };
 
 const workflow = {

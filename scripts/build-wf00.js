@@ -6,6 +6,7 @@
 const fs = require('fs');
 const path = require('path');
 const { BARE_MEDIA_REPLY } = require('../shared/media.js');
+const { AGENT_ROWS } = require('../shared/referent.js');
 
 // Inlined from shared/ so the committed tests cover what actually ships.
 const inline = (f) => fs.readFileSync(path.join(__dirname, '..', 'shared', f), 'utf8')
@@ -288,18 +289,82 @@ return $('Feed switch?').all(1).map(i => ({ json: { ...i.json, sources, runs, fi
   // code (shared/sweep-confirm.js), never by the 9B
   { id: 'lastbot', name: 'Last bot msg', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [1175, 160],
     parameters: { operation: 'executeQuery',
-      query: "select coalesce((select message->>'content' from n8n_chat_histories where session_id = $1::text and message->>'type' = 'ai' order by id desc limit 1), '') as last_bot",
+      // + the last list this chat was shown, for "summarize the video" (shared/referent.js).
+      // Rows WF-20/43 recorded (tagged) are not the bot's sweep question.
+      query: "select coalesce((select message->>'content' from n8n_chat_histories where session_id = $1::text and message->>'type' = 'ai' and " + AGENT_ROWS + " order by id desc limit 1), '') as last_bot, " +
+        "coalesce((select coalesce(array_length(item_ids, 1), 0) from chat_results where chat_id = $1::bigint), 0) as list_n, " +
+        "(select floor(extract(epoch from now() - created_at) / 60)::int from chat_results where chat_id = $1::bigint) as list_age_min, " +
+        "coalesce((select json_agg(json_build_object('title', f.title, 'url', f.canonical_url) order by u.k)::text from chat_results cr, unnest(cr.item_ids) with ordinality u(id, k) left join feed_items f on f.id = u.id where cr.chat_id = $1::bigint), '[]') as list_items",
       options: { queryReplacement: "={{ String($('Agent input').first().json.chat_id) }}" } },
     credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true, onError: 'continueRegularOutput' },
   { id: 'bigq', name: 'Big picture?', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1180, 160],
-    parameters: { mode: 'runOnceForAllItems', jsCode: inline('synth.js') + inline('sweep-confirm.js') + `
-let lastBot = '';
-try { lastBot = $input.first().json.last_bot || ''; } catch (e) {}
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('synth.js') + inline('sweep-confirm.js') + inline('answer-check.js') + inline('referent.js') + `
+let lb = {};
+try { lb = $input.first().json || {}; } catch (e) {}
+const lastBot = lb.last_bot || '';
 return $('Recall note').all().map(i => {
   const s = sweepDecision(i.json.text || '', lastBot);
-  return { json: { ...i.json, ...s,
-    synth_go: String(!s.sweep && ['fast', 'think'].includes(i.json.fix_synth) && bigPictureQ(i.json.text || '')) } };
+  // a message that points at something already shown is answered about THAT,
+  // before any keyword route ("summarize the video" is not an overview question)
+  let items = [];
+  try { items = JSON.parse(lb.list_items || '[]'); } catch (e) {}
+  const list = { n: lb.list_n, items, age_min: lb.list_age_min == null ? NaN : lb.list_age_min };
+  const ref = s.sweep ? { route: '' } : refRoute(i.json.text || '', list);
+  // a reference with nothing recent to point at still is not an overview question:
+  // the agent asks which one, instead of synth summarising every item named "video"
+  const pointing = Boolean(referentKind(i.json.text || ''));
+  return { json: { ...i.json, ...s, ref_route: ref.route, ref_n: String(ref.n || ''),
+    ref_note: ref.route === 'agent' ? refNote(list) : '',
+    synth_go: String(!s.sweep && !pointing && ['fast', 'think'].includes(i.json.fix_synth) && bigPictureQ(i.json.text || '')) } };
 });`.trim() } },
+  { id: 'refif', name: 'Ref item?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1230, 150],
+    parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, combinator: 'and',
+      conditions: [{ id: 'ri1', leftValue: '={{ $json.ref_route }}', rightValue: 'item', operator: { type: 'string', operation: 'equals' } }] } } },
+  // ---- one shown item, asked about (2026-10-18, shared/referent.js) ----
+  // The list holds one item (a video or link summary he was just sent): fetch it
+  // as get_item would, and the 9B answers the request from its text only,
+  // following any format instruction; invented figures -> the stored summary.
+  { id: 'reffetch', name: 'Ref fetch', type: 'n8n-nodes-base.executeWorkflow', typeVersion: 1.2, position: [1260, 300],
+    parameters: { workflowId: { __rl: true, value: WF.query_feed, mode: 'id' },
+      workflowInputs: { mappingMode: 'defineBelow', value: {
+        item: "={{ $json.ref_n || '1' }}", chat_id: "={{ String($('Agent input').first().json.chat_id) }}",
+        tag: '', limit: '', since: '', min_relevance: '', min_score: '', max_age_days: '', group_stories: '', user_text: '' },
+        matchingColumns: [], schema: ['item', 'chat_id', 'tag', 'limit', 'since', 'min_relevance', 'min_score', 'max_age_days', 'group_stories', 'user_text']
+          .map((id) => ({ id, displayName: id, required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: 'string' })) },
+      options: { waitForSubWorkflow: true } },
+    executeOnce: true, onError: 'continueRegularOutput', alwaysOutputData: true },
+  { id: 'refprep', name: 'Ref prep', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1280, 300],
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('answer-check.js') + inline('referent.js') + `
+const r = $input.first().json || {};
+const item = r.found ? r.item : null;
+return [{ json: { item, llm_body: JSON.stringify(itemBody('qwen/qwen3.5-9b', $('Agent input').first().json.text || '', item || {})) } }];`.trim() } },
+  { id: 'refmodel', name: 'Ref model', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [1300, 300],
+    parameters: { method: 'POST', url: 'http://host.docker.internal:1234/v1/chat/completions',
+      authentication: 'genericCredentialType', genericAuthType: 'httpBearerAuth',
+      sendBody: true, specifyBody: 'json', jsonBody: '={{ $json.llm_body }}', options: { timeout: 90000 } },
+    credentials: { httpBearerAuth: I.credentials.lmstudio }, retryOnFail: false, onError: 'continueRegularOutput' },
+  // the agent did not run: write the exchange to memory here, like the sweep path
+  { id: 'refreply', name: 'Ref reply', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1320, 300],
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('answer-check.js') + inline('referent.js') + `
+const p = $('Ref prep').first().json;
+const a = $('Agent input').first().json;
+let content = '';
+try { content = $input.first().json.choices[0].message.content; } catch (e) {}
+const ans = p.item ? itemAnswer(content, p.item, a.text) : itemAnswer('', {}, a.text);
+const b64 = (s) => Buffer.from(String(s || ''), 'utf8').toString('base64');
+return [{ json: { output: ans.output, ref_fallback: ans.fallback, chat_id: String(a.chat_id), q_b64: b64(a.text), out_b64: b64(ans.output),
+  item: p.item ? { n: Number(p.item.n) || 1, id: p.item.id, title: p.item.title } : null } }];`.trim() } },
+  { id: 'refmem', name: 'Ref memory', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [1340, 300],
+    parameters: { operation: 'executeQuery',
+      query: "insert into n8n_chat_histories (session_id, message) values ($1::text, jsonb_build_object('type', 'human', 'content', convert_from(decode($2, 'base64'), 'UTF8'), 'additional_kwargs', '{}'::jsonb, 'response_metadata', '{}'::jsonb)), ($1::text, jsonb_build_object('type', 'ai', 'content', convert_from(decode($3, 'base64'), 'UTF8'), 'tool_calls', '[]'::jsonb, 'invalid_tool_calls', '[]'::jsonb, 'additional_kwargs', '{}'::jsonb, 'response_metadata', '{}'::jsonb)) returning id",
+      options: { queryReplacement: "={{ $json.chat_id }},{{ $json.q_b64 }},{{ $json.out_b64 }}" } },
+    credentials: { postgres: CRED_PG }, alwaysOutputData: true, onError: 'continueRegularOutput', executeOnce: true },
+  // the item goes out as a tool step, which is where Prep reply finds its 👍/👎 buttons
+  { id: 'refout', name: 'Ref out', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1360, 300],
+    parameters: { mode: 'runOnceForAllItems', jsCode: `
+const r = $('Ref reply').first().json;
+return [{ json: { output: r.output, ref_fallback: r.ref_fallback,
+  intermediateSteps: r.item ? [{ action: { tool: 'get_item' }, observation: { items: [r.item] } }] : [] } }];`.trim() } },
   { id: 'sweepif', name: 'Sweep?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1200, 120],
     parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, combinator: 'and',
       conditions: [{ id: 'w1', leftValue: '={{ $json.sweep }}', rightValue: 'go', operator: { type: 'string', operation: 'equals' } }] } } },
@@ -383,7 +448,7 @@ return [{ json: { ...base, ingest_note: note } }];`.trim() } },
     // Live run data rides in the USER turn, not just the system prompt: with it
     // only in the system prompt the 9B still copied a stale run_status answer
     // from chat history (it saw run 58, answered "run 57"). The latest turn wins.
-    parameters: { promptType: 'define', text: '={{ $json.text }}\n\n[live data, fetched just now: latest runs: {{ $json.runs }}]{{ $json.ingest_note ? "\\n[ALREADY DONE for this message, by the system: " + $json.ingest_note + " Do NOT call scrape_url. Reply in one short line.]" : "" }}{{ $json.recall_note ? "\\n" + $json.recall_note : "" }}',
+    parameters: { promptType: 'define', text: '={{ $json.text }}\n\n[live data, fetched just now: latest runs: {{ $json.runs }}]{{ $json.ingest_note ? "\\n[ALREADY DONE for this message, by the system: " + $json.ingest_note + " Do NOT call scrape_url. Reply in one short line.]" : "" }}{{ $json.recall_note ? "\\n" + $json.recall_note : "" }}{{ $json.ref_note ? "\\n" + $json.ref_note : "" }}',
       options: { systemMessage: SYSTEM, maxIterations: 6, returnIntermediateSteps: true } } },
 
   // ---- answer guard (2026-10-09) ----
@@ -457,7 +522,7 @@ return [{ json: { output, retry: String(g.retry), guard_reason: g.reason, tools_
   // works in the memoryless redo. Offset 2 skips the rejected attempt itself.
   { id: 'retryctx', name: 'Redo context', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [1620, 0],
     parameters: { operation: 'executeQuery',
-      query: "select coalesce((select string_agg(case when t = 'human' then 'You: ' else 'Bot: ' end || left(regexp_replace(c, '\\s*\\[live data, fetched just now:.*$', '', 's'), 600), ' | ' order by id) from (select id, message->>'type' as t, message->>'content' as c from n8n_chat_histories where session_id = $1::text and message->>'type' in ('human', 'ai') order by id desc offset 2 limit 2) h), 'nothing') as previous",
+      query: "select coalesce((select string_agg(case when t = 'human' then 'You: ' else 'Bot: ' end || left(regexp_replace(c, '\\s*\\[live data, fetched just now:.*$', '', 's'), 600), ' | ' order by id) from (select id, message->>'type' as t, message->>'content' as c from n8n_chat_histories where session_id = $1::text and message->>'type' in ('human', 'ai') and " + AGENT_ROWS + " order by id desc offset 2 limit 2) h), 'nothing') as previous",
       options: { queryReplacement: "={{ $('Agent input').first().json.chat_id }}" } },
     credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true },
 
@@ -498,7 +563,7 @@ const o = $input.first().json || {};
 return [{ json: { chat_id: String($('Agent input').first().json.chat_id), output: String(o.output || ''), out_b64: Buffer.from(String(o.output || ''), 'utf8').toString('base64') } }];`.trim() } },
   { id: 'fixmem', name: 'Fix memory', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [1940, -100],
     parameters: { operation: 'executeQuery',
-      query: "update n8n_chat_histories set message = jsonb_set(message, '{content}', to_jsonb(convert_from(decode($2, 'base64'), 'UTF8'))) where id = (select max(id) from n8n_chat_histories where session_id = $1::text and message->>'type' = 'ai') returning id",
+      query: "update n8n_chat_histories set message = jsonb_set(message, '{content}', to_jsonb(convert_from(decode($2, 'base64'), 'UTF8'))) where id = (select max(id) from n8n_chat_histories where session_id = $1::text and message->>'type' = 'ai' and " + AGENT_ROWS + ") returning id",
       options: { queryReplacement: "={{ $json.chat_id }},{{ $json.out_b64 }}" } },
     credentials: { postgres: CRED_PG }, alwaysOutputData: true, onError: 'continueRegularOutput' },
 
@@ -603,7 +668,7 @@ return [{ json: { ...d, web_go: String(v === false), web_reason: v === false ? '
   // current turn's two rows are already written).
   { id: 'webctx', name: 'Web context', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [2220, 40],
     parameters: { operation: 'executeQuery',
-      query: "with h as (select message->>'type' as t, message->>'content' as c from n8n_chat_histories where session_id = $1::text and message->>'type' in ('human', 'ai') order by id desc offset 2 limit 2) select coalesce((select c from h where t = 'human' limit 1), '') as prev_user, coalesce((select c from h where t = 'ai' limit 1), '') as prev_bot",
+      query: "with h as (select message->>'type' as t, message->>'content' as c from n8n_chat_histories where session_id = $1::text and message->>'type' in ('human', 'ai') and " + AGENT_ROWS + " order by id desc offset 2 limit 2) select coalesce((select c from h where t = 'human' limit 1), '') as prev_user, coalesce((select c from h where t = 'ai' limit 1), '') as prev_bot",
       options: { queryReplacement: "={{ $('Agent input').first().json.chat_id }}" } },
     credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true, onError: 'continueRegularOutput' },
   { id: 'standaloneprep', name: 'Standalone prep', type: 'n8n-nodes-base.code', typeVersion: 2, position: [2240, 40],
@@ -777,7 +842,7 @@ return [{ json: { sql: rememberSql(a.chat_id, a.text, m.output, vec) } }];`.trim
   // tool descriptions far more than the system prompt (CLAUDE.md, Models).
   tool('get_item',
     "Fetch ONE item from the list you last showed in this chat, by its number n, with the cleaned text of the saved article (page_excerpt). Use for every follow-up about a listed item: 'the first one', '#3', 'tell me more about number 2', 'what does 4 say', '1. especially the global south part'. " +
-    "Never re-run query_feed for these — a new query returns a different list. Answer from the summary and page_excerpt it returns. If it says the item is not found, ask which item they mean.",
+    "Never re-run query_feed for these — a new query returns a different list. Answer from the summary and page_excerpt it returns, and follow any format instruction in the message (shorter, no timestamps, bullets, plain prose). A video or link summary the user was just sent is item 1. If it says the item is not found, ask which item they mean.",
     WF.query_feed,
     { item: { desc: 'the number n of the item in your last list, e.g. 3' },
       chat_id: { fixed: "={{ $('Agent input').first().json.chat_id }}" },
@@ -870,7 +935,15 @@ const connections = {
   'Last bot msg': { main: [[{ node: 'Big picture?', type: 'main', index: 0 }]] },
   'Big picture?': { main: [[{ node: 'Sweep?', type: 'main', index: 0 }]] },
   'Sweep?': { main: [[{ node: 'Run sweep', type: 'main', index: 0 }], [{ node: 'Sweep declined?', type: 'main', index: 0 }]] },
-  'Sweep declined?': { main: [[{ node: 'Sweep reply', type: 'main', index: 0 }], [{ node: 'Synth?', type: 'main', index: 0 }]] },
+  'Sweep declined?': { main: [[{ node: 'Sweep reply', type: 'main', index: 0 }], [{ node: 'Ref item?', type: 'main', index: 0 }]] },
+  'Ref item?': { main: [[{ node: 'Ref fetch', type: 'main', index: 0 }], [{ node: 'Synth?', type: 'main', index: 0 }]] },
+  'Ref fetch': { main: [[{ node: 'Ref prep', type: 'main', index: 0 }]] },
+  'Ref prep': { main: [[{ node: 'Ref model', type: 'main', index: 0 }]] },
+  'Ref model': { main: [[{ node: 'Ref reply', type: 'main', index: 0 }]] },
+  'Ref reply': { main: [[{ node: 'Ref memory', type: 'main', index: 0 }]] },
+  'Ref memory': { main: [[{ node: 'Ref out', type: 'main', index: 0 }]] },
+  // straight to the reply, like a sweep: the answer is about a shown item, never the web
+  'Ref out': { main: [[{ node: 'Prep reply', type: 'main', index: 0 }, { node: 'Memory text', type: 'main', index: 0 }]] },
   'Run sweep': { main: [[{ node: 'Sweep reply', type: 'main', index: 0 }]] },
   'Sweep reply': { main: [[{ node: 'Sweep memory', type: 'main', index: 0 }]] },
   'Sweep memory': { main: [[{ node: 'Sweep out', type: 'main', index: 0 }]] },
