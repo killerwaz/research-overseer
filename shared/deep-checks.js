@@ -156,4 +156,52 @@ function outOfRegionText(text, reg) {
   return COUNTRIES.filter((c) => !reg.countries.includes(c) && has(c));
 }
 
-module.exports = { outOfRegionText, hedgeHeadline, daysAgo, recencyBoost, staleLimit, daysBetween, ruledOutLines, overclaims, soften, cutoff, isoDate, periodNote, outOfPeriod, regionOf, outOfRegion, REGIONS };
+// ---- myth guard (2026-10-19, the deploy gate's traps: scripts/deep-traps.json)
+// The three myths it caught share one cause: a retelling or a list was taken as the source.
+const lowName = (e) => String(e || '').split('/').pop().replace(/\(.*?\)/g, '').trim().toLowerCase();
+// a. Part of a ruled-out item. REA v4 live: PhotoCraft and FilmCraft listed as built with REA
+//    while ArtCraft was ruled out; they are ArtCraft apps. Returns the excerpt where both
+//    names appear within `span` characters (the 9B then says whether one is part of the other).
+function nearEachOther(text, a, b, span = 400) {
+  const t = String(text || ''), lt = t.toLowerCase(), x = lowName(a), y = lowName(b);
+  if (x.length < 3 || y.length < 3 || x === y) return '';
+  for (let i = lt.indexOf(x); i >= 0; i = lt.indexOf(x, i + 1)) {
+    const j = lt.slice(Math.max(0, i - span), i + x.length + span).indexOf(y);
+    if (j >= 0) { const s = Math.max(0, i - span); return t.slice(Math.max(0, s + Math.min(j, i - s) - 300), s + Math.max(j, i - s) + 400); }
+  }
+  return '';
+}
+// b. A name in a list is not a deployment. A2A v4: ServiceNow, Salesforce and Atlassian
+//    "confirmed" from one sentence on the protocol's own blog naming the platforms that support it.
+function listMention(quote, self, names) {
+  const q = String(quote || '').toLowerCase(), me = lowName(self);
+  return [...new Set((names || []).map(lowName))].filter((n) => n.length >= 3 && n !== me && !me.includes(n) && !n.includes(me) && q.includes(n)).length >= 2;
+}
+// c. The claim's origin. Klarna v4: "Yes, Klarna fired ~700 staff ... and rehired them", from
+//    2025-26 retellings; the 2024 original said the AI did "the equivalent work of 700 agents".
+//    The earliest dated pages that carry the claim's figure are read against the claim.
+function claimFigures(claim) {
+  return [...new Set((String(claim || '').replace(/(\d),(\d{3})/g, '$1$2').match(/\d+(?:\.\d+)?/g) || [])
+    .filter((n) => !/^(19|20)\d\d$/.test(n) && !(+n <= 10 && Number.isInteger(+n))))];
+}
+function originPages(pages, claim, max = 2) {
+  const figs = claimFigures(claim);
+  if (!figs.length) return [];
+  return (pages || []).map((p, i) => ({ i, d: isoDate(p.date), t: String(p.text || '').replace(/(\d),(\d{3})/g, '$1$2') }))
+    .filter((x) => x.d && figs.some((f) => new RegExp('(^|[^\\d.])' + f.replace('.', '\\.') + '(?![\\d])').test(x.t)))
+    .sort((a, b) => a.d.localeCompare(b.d)).slice(0, max)
+    .map((x) => { const f = figs.find((g) => x.t.includes(g)); const k = x.t.indexOf(f); return { page: x.i, date: x.d, excerpt: x.t.slice(Math.max(0, k - 1200), k + 1200) }; });
+}
+// a headline that answers a claim question with yes
+const AFFIRMS = /^\W*(yes|true|correct|accurate|confirmed|that'?s (right|true|what happened)|it'?s true|it is true)\b/i;
+function affirms(headline) { return AFFIRMS.test(String(headline || '')); }
+
+// d. The question's own words decide built_with. Gate run 2026-10-19: the 9B parsed "the top 5
+//    products that 'reverse engineer anything' repo was used to create" as used_in_production, so
+//    nothing was ruled out and PhotoCraft came back as a product. Only overrides the two shapes it confuses.
+const BUILT_WORDS = /\b(built|made|created|developed|written|coded)\s+(with|using|on top of|on)\b|\bused to (create|build|make|develop)\b|\b(was|were|been) used to\b.*\b(create|build|make)\b/i;
+function shapeFromWords(question, shape) {
+  return (shape === 'used_in_production' || shape === 'which_entities') && BUILT_WORDS.test(String(question || '')) ? 'built_with' : shape;
+}
+
+module.exports = { shapeFromWords, nearEachOther, listMention, claimFigures, originPages, affirms, outOfRegionText, hedgeHeadline, daysAgo, recencyBoost, staleLimit, daysBetween, ruledOutLines, overclaims, soften, cutoff, isoDate, periodNote, outOfPeriod, regionOf, outOfRegion, REGIONS };

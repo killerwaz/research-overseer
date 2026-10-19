@@ -98,3 +98,41 @@ test('region: the UAE is not South Asia', () => {
   assert.strictEqual(D.regionOf('which bangladeshi ai startups raised money', '').name, 'bangladesh');
   assert.strictEqual(D.regionOf('lm studio vs ollama for parallel requests', ''), null);
 });
+
+// ---- myth guard
+test('nearEachOther: both names close together -> excerpt; far apart or absent -> empty', () => {
+  const { nearEachOther } = require('../shared/deep-checks.js');
+  assert.ok(nearEachOther('ArtCraft now lists twelve apps, including PhotoCraft.', 'PhotoCraft', 'ArtCraft').includes('PhotoCraft'));
+  assert.equal(nearEachOther('PhotoCraft.' + ' x'.repeat(600) + ' ArtCraft', 'PhotoCraft', 'ArtCraft'), '');
+  assert.equal(nearEachOther('only PhotoCraft here', 'PhotoCraft', 'ArtCraft'), '');
+});
+
+test('listMention: a quote naming 2+ other candidates is a list, a lone deployment is not', () => {
+  const { listMention } = require('../shared/deep-checks.js');
+  const names = ['ServiceNow', 'Salesforce', 'Atlassian', 'Yahoo'];
+  assert.equal(listMention('platforms like ServiceNow, Salesforce and Atlassian connect workflows with A2A', 'ServiceNow', names), true);
+  assert.equal(listMention("Yahoo's Seller Agent coordinates campaigns over A2A in production", 'Yahoo', names), false);
+});
+
+test('originPages: earliest dated page carrying the claim figure first; years and small numbers ignored', () => {
+  const { originPages, claimFigures } = require('../shared/deep-checks.js');
+  assert.deepEqual(claimFigures('Klarna fired 700 people in 2024, 3 times'), ['700']);
+  const pages = [{ date: '2025-06-09', text: 'sacked 700 workers' }, { date: '2024-02-27', text: 'the equivalent work of 700 full-time agents' }, { date: '', text: '700' }, { date: '2023-01-01', text: '7000 users' }];
+  assert.deepEqual(originPages(pages, 'fired 700 people').map((o) => o.page), [1, 0]);
+  assert.deepEqual(originPages(pages, 'no figure here'), []);
+});
+
+test('affirms: a yes headline, not a partly/no one', () => {
+  const { affirms } = require('../shared/deep-checks.js');
+  assert.equal(affirms('Yes, Klarna fired ~700 staff'), true);
+  assert.equal(affirms('Partly: the 700 was an estimate'), false);
+  assert.equal(affirms('No: Klarna never fired 700 people'), false);
+});
+
+test('shapeFromWords: build wording turns used_in_production into built_with; other questions untouched', () => {
+  const { shapeFromWords } = require('../shared/deep-checks.js');
+  assert.equal(shapeFromWords("top 5 products that 'reverse engineer anything' repo on github was used to create", 'used_in_production'), 'built_with');
+  assert.equal(shapeFromWords('what real products are built on browser-use?', 'which_entities'), 'built_with');
+  assert.equal(shapeFromWords("who's actually using google's a2a protocol in production?", 'used_in_production'), 'used_in_production');
+  assert.equal(shapeFromWords('klarna fired 700 people for ai and rehired them', 'is_claim_true'), 'is_claim_true');
+});

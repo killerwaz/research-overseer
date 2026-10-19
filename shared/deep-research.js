@@ -267,6 +267,19 @@ partner_or_member - ENTITY supports, joined, endorsed or partners on ${subject},
 demo_or_pilot - a demo, sample, pilot, hackathon or tutorial; vendor_claim - the vendor of ${subject} says so without detail from ENTITY;
 only_mentioned - named near ${subject} with no relationship stated. Quote the words that decide it.`;
 }
+// myth guard (shared/deep-checks.js nearEachOther / originPages)
+const PARTOF_SYSTEM = `You read an excerpt and say whether PART is a part of WHOLE: one of its apps, products, editions, modules or tools,
+made by the same people as part of WHOLE. Use only the excerpt. "part_of" - the excerpt says or clearly shows it (e.g. "WHOLE now lists apps
+including PART", "PART, one of the WHOLE apps"); "separate" - the excerpt treats them as different things; "unclear" - it does not say. Quote the deciding words.`;
+const PARTOF_FORMAT = deepSchema('partof', { type: 'object', additionalProperties: false, required: ['quote', 'verdict'],
+  properties: { quote: { type: 'string' }, verdict: { type: 'string', enum: ['part_of', 'separate', 'unclear'] } } });
+const ORIGIN_SYSTEM = `You read the EARLIEST source found that carries a viral claim's figure, and say whether it states the claim as worded.
+Use only the excerpt. "states_claim" - it says the same thing (same figure, same event, same meaning);
+"says_different" - it uses the figure for something else or something narrower (an estimate instead of a count, a forecast instead of a result,
+equivalent work instead of people fired, a share of users instead of a share of people); "not_about" - the excerpt is not about the claim.
+quote = the exact sentence with the figure, copied from the excerpt.`;
+const ORIGIN_FORMAT = deepSchema('origin', { type: 'object', additionalProperties: false, required: ['quote', 'verdict', 'actually_says'],
+  properties: { quote: { type: 'string' }, verdict: { type: 'string', enum: ['states_claim', 'says_different', 'not_about'] }, actually_says: { type: 'string' } } });
 const relFormat = (shape) => deepSchema('relation', { type: 'object', additionalProperties: false, required: ['quote', 'relation'],
   properties: { quote: { type: 'string' }, relation: { type: 'string', enum: REL_KINDS[shape] } } });
 function relExcerpt(text, quote, span = 700) {
@@ -380,6 +393,8 @@ async function deepResearch(question, io) {
     const quoted = question.match(/['"‘“]([^'"’”]{3,40})['"’”]/);
     plan.search_name = quoted ? quoted[1] : plan.search_name.split(/\s+/).slice(-4).join(' ');
   }
+  const wordShape = shapeFromWords(question, plan.shape);
+  if (wordShape !== plan.shape) { trace.shapeFrom = plan.shape; plan.shape = wordShape; }
   trace.plan = plan; lap('plan', t);
   log(`  plan: ${plan.shape} "${plan.search_name}" ${plan.claim ? '| claim: ' + plan.claim : ''}`);
   const names = [plan.search_name, ...(plan.also_called || [])].filter((n) => n && n.length >= 3);
@@ -507,7 +522,12 @@ async function deepResearch(question, io) {
         trace.calls.relation++;
         vs.push({ p, v: (r && r.relation) || 'invalid', quote: (r && r.quote) || '' });
       }
-      const good = vs.find((x) => x.v === REL_GOOD[plan.shape]), against = vs.find((x) => x.v === 'made_without');
+      let good = vs.find((x) => x.v === REL_GOOD[plan.shape]);
+      const against = vs.find((x) => x.v === 'made_without');
+      // a name in a list of supporters is not a deployment (myth guard b)
+      if (good && plan.shape === 'used_in_production' && vs.filter((x) => x.v === 'production_user').every((x) => listMention(x.quote, e.name, ranked.map((r) => r.name)))) {
+        rulings.unconfirmed.push(`${e.name} (named in a list, no deployment described)`); trace.listOnly = (trace.listOnly || []).concat(e.name); continue;
+      }
       if (good && !against) { rulings.confirmed.push(e.name); verified.push({ entity: e.name, finding: `${rel(e.name)} The page says: "${good.quote.slice(0, 200)}"`, page: good.p, ruling: true }); }
       else if (against) {
         rulings.ruledOut.push(e.name); verified.push({ entity: e.name, finding: `${e.name} was NOT made with ${plan.search_name}; the page says: "${against.quote.slice(0, 200)}"`, page: against.p, ruling: true });
@@ -515,6 +535,23 @@ async function deepResearch(question, io) {
         const claims = findings.filter((f) => entKey(f.entity) === entKey(e.name) && BUILD.test(f.finding) && subjectRe.test(f.finding)).length;
         rulings.ruledOutInfo.push({ name: e.name, claims, mentions: web(e.name), why: `"${against.quote.slice(0, 160)}"`, page: against.p });
       } else rulings.unconfirmed.push(`${e.name} (${[...new Set(vs.map((x) => x.v.replace(/_/g, ' ')))].join(', ')})`);
+    }
+    // a confirmed item the pages place inside a ruled-out one is not confirmed (myth guard a)
+    for (const c of [...rulings.confirmed]) {
+      for (const r of rulings.ruledOut) {
+        if (late()) break;
+        const p = pages.findIndex((pg) => nearEachOther(pg.text, c, r));
+        if (p < 0) continue;
+        const v = await llm('partof', PARTOF_SYSTEM, `PART: ${c}\nWHOLE: ${r}\n\n<excerpt>\n${nearEachOther(pages[p].text, c, r)}\n</excerpt>`, PARTOF_FORMAT, 300);
+        trace.calls.partof = (trace.calls.partof || 0) + 1;
+        if (!v || v.verdict !== 'part_of') continue;
+        rulings.confirmed = rulings.confirmed.filter((x) => x !== c);
+        rulings.ruledOut.push(`${c} (part of ${r})`);
+        for (let i = verified.length - 1; i >= 0; i--) if (verified[i].ruling && entKey(verified[i].entity) === entKey(c)) verified.splice(i, 1);
+        verified.push({ entity: c, finding: `${c} is part of ${r}, which was NOT made with ${plan.search_name}; the page says: "${String(v.quote).slice(0, 200)}"`, page: p, ruling: true });
+        trace.partOf = (trace.partOf || []).concat(`${c} in ${r}`);
+        break;
+      }
     }
     const ok = new Set(rulings.confirmed.map(entKey));
     factPool = findings.filter((f) => ok.has(entKey(f.entity)));
@@ -557,6 +594,22 @@ async function deepResearch(question, io) {
     if (f.verdict === 'supported') verified.push(f);
   }
   trace.unchecked = unchecked;
+  // the claim's origin: the earliest dated page carrying its figure, read against the claim (myth guard c)
+  let origin = null;
+  if (plan.shape === 'is_claim_true' && plan.claim) {
+    for (const o of originPages(pages, plan.claim)) {
+      if (late()) break;
+      const v = await llm('origin', ORIGIN_SYSTEM, `Claim: ${plan.claim}\n\nEarliest source: ${pages[o.page].title} (${pages[o.page].url}, ${o.date})\n<excerpt>\n${o.excerpt}\n</excerpt>`, ORIGIN_FORMAT, 400);
+      trace.calls.origin = (trace.calls.origin || 0) + 1;
+      if (!v || v.verdict === 'not_about' || !quoteFound(v.quote, pages[o.page].text)) continue;
+      if (v.verdict === 'says_different') {
+        origin = { page: o.page, date: o.date, quote: String(v.quote).slice(0, 240), says: v.actually_says };
+        verified.push({ entity: 'origin', finding: `The earliest source found (${o.date}) says: "${origin.quote}" -- not the claim as worded (${v.actually_says})`, page: o.page, date: o.date });
+      }
+      break;
+    }
+    trace.origin = origin;
+  }
   lap('verify', t);
   log(`  verify: ${cand.length - unchecked} checked, ${verified.length} supported`);
 
@@ -582,7 +635,9 @@ async function deepResearch(question, io) {
     (rel ? `\n\nRelationship check (did the page say it was made with / uses ${plan.search_name}?):\nCONFIRMED: ${rulings.confirmed.join(', ') || 'none'}\n` +
       `RULED OUT (a page says otherwise; if any is widely credited, say in the verdict that it was NOT built with it): ${rulings.ruledOut.join(', ') || 'none'}\n` +
       `NOT CONFIRMED (mentioned, relationship not stated): ${rulings.unconfirmed.join(', ') || 'none'}\n` +
-      `Only CONFIRMED entities may be items.` : '');
+      `Only CONFIRMED entities may be items.` : '') +
+    (origin ? `\n\nORIGIN CHECK: the earliest source found [${sid[origin.page]}] (${origin.date}) says: "${origin.quote}". That is not the claim as worded: ${origin.says}. ` +
+      `Later articles that repeat the viral version are retellings, not confirmation. The headline must not answer yes; say what the original actually said.` : '');
   let ans = null, problems = [];
   const writeSys = writeSystem(today);
   for (let attempt = 0; attempt < WRITE_TRIES; attempt++) {
@@ -610,6 +665,10 @@ async function deepResearch(question, io) {
     } else {
       if (old.length) problems.push(`these items are dated before ${cut}, outside the period the question asks about: ${old.join(', ')}; remove them from the items (you may mention them once in the limits)`);
       if (away.length) problems.push(`these items are outside ${reg.name}, the region the question asks about: ${away.join(', ')}; remove them`);
+    }
+    if (origin && affirms(ans.headline)) {
+      if (last) { ans.headline = `Not as claimed: the earliest source (${origin.date}) says "${origin.quote}" [${sid[origin.page]}]`; trace.originOverride = true; }
+      else problems.push(`the headline says yes, but the earliest source [${sid[origin.page]}] says something different ("${origin.quote}"); say what the original said`);
     }
     const awayText = outOfRegionText(ans.headline + ' ' + ans.verdict, reg);
     if (awayText.length && !last) problems.push(`the headline or verdict leads with places outside ${reg.name}: ${awayText.join(', ')}; answer for ${reg.name} only (you may mention them once in the limits)`);
