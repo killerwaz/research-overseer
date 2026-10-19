@@ -541,11 +541,14 @@ async function deepResearch(question, io) {
     for (const c of [...rulings.confirmed]) {
       for (const r of rulings.ruledOut) {
         if (late()) break;
-        const p = pages.findIndex((pg) => nearEachOther(pg.text, c, r));
+        // up to 3 pages: replay on the saved REA pages, the 9B said part_of on 1 of 3 (scripts/replay-partof.js)
+        let p = -1, v = null;
+        for (const q of pages.map((pg, i) => (nearEachOther(pg.text, c, r) ? i : -1)).filter((i) => i >= 0).slice(0, 3)) {
+          v = await llm('partof', PARTOF_SYSTEM, `PART: ${c}\nWHOLE: ${r}\n\n<excerpt>\n${nearEachOther(pages[q].text, c, r)}\n</excerpt>`, PARTOF_FORMAT, 300);
+          trace.calls.partof = (trace.calls.partof || 0) + 1;
+          if (v && v.verdict === 'part_of') { p = q; break; }
+        }
         if (p < 0) continue;
-        const v = await llm('partof', PARTOF_SYSTEM, `PART: ${c}\nWHOLE: ${r}\n\n<excerpt>\n${nearEachOther(pages[p].text, c, r)}\n</excerpt>`, PARTOF_FORMAT, 300);
-        trace.calls.partof = (trace.calls.partof || 0) + 1;
-        if (!v || v.verdict !== 'part_of') continue;
         rulings.confirmed = rulings.confirmed.filter((x) => x !== c);
         rulings.ruledOut.push(`${c} (part of ${r})`);
         for (let i = verified.length - 1; i >= 0; i--) if (verified[i].ruling && entKey(verified[i].entity) === entKey(c)) verified.splice(i, 1);
@@ -725,4 +728,4 @@ async function deepResearch(question, io) {
   return { reply, answer: ans, sources, trace };
 }
 
-module.exports = { deepResearch, deepTemplates, subjectOnly, canonicalRepo, lookalike, entKey, quoteFound, recoverJson, hostOf, cleanPage, chunksOf, renderDeep, REL_GOOD };
+module.exports = { deepResearch, deepTemplates, subjectOnly, canonicalRepo, lookalike, entKey, quoteFound, recoverJson, hostOf, cleanPage, chunksOf, renderDeep, REL_GOOD, PARTOF_SYSTEM, PARTOF_FORMAT };
