@@ -7,6 +7,7 @@
 //   __ZZ_SECRET__  <- .env ZZ_WEBHOOK_SECRET      (wf00 test hook, tools/*)
 //   __WF40_ID__    <- instance.json workflows     (wf30)
 //   __BEAT__       <- beat.md                     (wf20, wf30 triage prompt)
+//   __EXA_KEY__ __BRAVE_KEY__ __FIRECRAWL_KEY__ __LM_KEY__ <- .env (wf46 'Deep run')
 //
 // The PUT body is {name, nodes, connections, settings} ONLY — n8n rejects the
 // full GET payload.
@@ -52,6 +53,11 @@ async function main() {
     __TG_CHAT__: env.TG_CHAT_ID,
     __ZZ_SECRET__: env.ZZ_WEBHOOK_SECRET,
     __MEDIA_TOKEN__: env.MEDIA_TOKEN,
+    // wf46 deep research: its one Code node calls these APIs itself (no n8n credentials in Code nodes)
+    __EXA_KEY__: env.EXA_API_KEY,
+    __BRAVE_KEY__: env.BRAVE_API_KEY,
+    __FIRECRAWL_KEY__: env.FIRECRAWL_API_KEY,
+    __LM_KEY__: env.LMSTUDIO_API_KEY,
     __BEAT__: loadBeat()
   };
   // __WF31__ / __WF40_ID__ style tokens resolve to workflow ids by number.

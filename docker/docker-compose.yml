@@ -27,6 +27,8 @@ services:
       - TZ=Asia/Dhaka
       - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
       - N8N_RUNNERS_ENABLED=true
+      # deep research (WF-46) runs one ~6.5 min Code node; the default stops any Code node at 300 s
+      - N8N_RUNNERS_TASK_TIMEOUT=900
     volumes:
       - n8n_data:/home/node/.n8n
     networks:

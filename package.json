@@ -7,6 +7,6 @@
     "test": "node --test tests/*.test.js",
     "workbench": "node workbench/server.js",
     "workbench:chunks": "node scripts/workbench-chunks.js",
-    "build": "node scripts/build-wf20.js && node scripts/build-wf30.js && node scripts/build-wf31.js && node scripts/build-wf42.js && node scripts/build-wf00.js"
+    "build": "node scripts/build-wf20.js && node scripts/build-wf30.js && node scripts/build-wf31.js && node scripts/build-wf42.js && node scripts/build-wf00.js && node scripts/build-wf46.js"
   }
 }

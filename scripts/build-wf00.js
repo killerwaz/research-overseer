@@ -48,6 +48,7 @@ const WF = {
   query_feed: I.workflows['wf31-query-feed'],
   web_answer: I.workflows['wf44-web-answer'],
   synth_answer: I.workflows['wf45-synth-answer'],
+  deep_research: I.workflows['wf46-deep-research'],
   run_status: I.workflows['wf32-run-status'],
   manage_sources: I.workflows['wf34-manage-sources']
 };
@@ -294,15 +295,20 @@ return $('Feed switch?').all(1).map(i => ({ json: { ...i.json, sources, runs, fi
       query: "select coalesce((select message->>'content' from n8n_chat_histories where session_id = $1::text and message->>'type' = 'ai' and " + AGENT_ROWS + " order by id desc limit 1), '') as last_bot, " +
         "coalesce((select coalesce(array_length(item_ids, 1), 0) from chat_results where chat_id = $1::bigint), 0) as list_n, " +
         "(select floor(extract(epoch from now() - created_at) / 60)::int from chat_results where chat_id = $1::bigint) as list_age_min, " +
-        "coalesce((select json_agg(json_build_object('title', f.title, 'url', f.canonical_url) order by u.k)::text from chat_results cr, unnest(cr.item_ids) with ordinality u(id, k) left join feed_items f on f.id = u.id where cr.chat_id = $1::bigint), '[]') as list_items",
+        "coalesce((select json_agg(json_build_object('title', f.title, 'url', f.canonical_url) order by u.k)::text from chat_results cr, unnest(cr.item_ids) with ordinality u(id, k) left join feed_items f on f.id = u.id where cr.chat_id = $1::bigint), '[]') as list_items, " +
+        // his previous message, for "deep search on that" (shared/deep-trigger.js); this one is not written yet
+        "coalesce((select message->>'content' from n8n_chat_histories where session_id = $1::text and message->>'type' = 'human' order by id desc limit 1), '') as last_human",
       options: { queryReplacement: "={{ String($('Agent input').first().json.chat_id) }}" } },
     credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true, onError: 'continueRegularOutput' },
   { id: 'bigq', name: 'Big picture?', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1180, 160],
-    parameters: { mode: 'runOnceForAllItems', jsCode: inline('synth.js') + inline('sweep-confirm.js') + inline('answer-check.js') + inline('referent.js') + inline('search-gate.js') + `
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('synth.js') + inline('sweep-confirm.js') + inline('answer-check.js') + inline('referent.js') + inline('search-gate.js') + inline('deep-trigger.js') + `
 let lb = {};
 try { lb = $input.first().json || {}; } catch (e) {}
 const lastBot = lb.last_bot || '';
 return $('Recall note').all().map(i => {
+  // "deep search: X" goes to WF-46 before anything else (shared/deep-trigger.js)
+  const deep = deepAsk(i.json.text || '', String(lb.last_human || '').replace(/\\s*\\[live data, fetched just now:[\\s\\S]*$/, ''));
+  if (deep.go) return { json: { ...i.json, deep_go: 'true', deep_q: deep.question, sweep: '', synth_go: 'false', ref_route: '', search_ok: 'false' } };
   const s = sweepDecision(i.json.text || '', lastBot);
   // a message that points at something already shown is answered about THAT,
   // before any keyword route ("summarize the video" is not an overview question)
@@ -318,6 +324,19 @@ return $('Recall note').all().map(i => {
     ref_note: ref.route === 'agent' ? refNote(list) : '',
     synth_go: String(!s.sweep && !pointing && ['fast', 'think'].includes(i.json.fix_synth) && bigPictureQ(i.json.text || '')) } };
 });`.trim() } },
+  // ---- deep research (2026-10-19, WF-46) ----
+  // "deep search: X" -> WF-46, not waited for: it sends "🔬 Researching…", the
+  // answer ~6 min later, and writes both memory rows itself. The bot stays free.
+  { id: 'deepif', name: 'Deep?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1190, 100],
+    parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, combinator: 'and',
+      conditions: [{ id: 'dp1', leftValue: '={{ $json.deep_go }}', rightValue: 'true', operator: { type: 'string', operation: 'equals' } }] } } },
+  { id: 'deepcall', name: 'Deep research', type: 'n8n-nodes-base.executeWorkflow', typeVersion: 1.2, position: [1220, 20],
+    parameters: { workflowId: { __rl: true, value: WF.deep_research, mode: 'id' },
+      workflowInputs: { mappingMode: 'defineBelow', value: {
+        question: '={{ $json.deep_q }}', text: "={{ $('Agent input').first().json.text }}", chat_id: "={{ String($('Agent input').first().json.chat_id) }}" },
+        matchingColumns: [], schema: ['question', 'text', 'chat_id'].map((id) => ({ id, displayName: id, required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: 'string' })) },
+      options: { waitForSubWorkflow: false } },
+    executeOnce: true, onError: 'continueRegularOutput' },
   { id: 'refif', name: 'Ref item?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1230, 150],
     parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, combinator: 'and',
       conditions: [{ id: 'ri1', leftValue: '={{ $json.ref_route }}', rightValue: 'item', operator: { type: 'string', operation: 'equals' } }] } } },
@@ -938,7 +957,8 @@ const connections = {
   'Recall search': { main: [[{ node: 'Recall note', type: 'main', index: 0 }]] },
   'Recall note': { main: [[{ node: 'Last bot msg', type: 'main', index: 0 }]] },
   'Last bot msg': { main: [[{ node: 'Big picture?', type: 'main', index: 0 }]] },
-  'Big picture?': { main: [[{ node: 'Sweep?', type: 'main', index: 0 }]] },
+  'Big picture?': { main: [[{ node: 'Deep?', type: 'main', index: 0 }]] },
+  'Deep?': { main: [[{ node: 'Deep research', type: 'main', index: 0 }], [{ node: 'Sweep?', type: 'main', index: 0 }]] },
   'Sweep?': { main: [[{ node: 'Run sweep', type: 'main', index: 0 }], [{ node: 'Sweep declined?', type: 'main', index: 0 }]] },
   'Sweep declined?': { main: [[{ node: 'Sweep reply', type: 'main', index: 0 }], [{ node: 'Ref item?', type: 'main', index: 0 }]] },
   'Ref item?': { main: [[{ node: 'Ref fetch', type: 'main', index: 0 }], [{ node: 'Synth?', type: 'main', index: 0 }]] },
