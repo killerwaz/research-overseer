@@ -15,6 +15,8 @@
 // Usage:
 //   node scripts/deploy.js wf20-process-urls tools/zz-sql-runner ...
 //   node scripts/deploy.js --all
+// wf46-deep-research first runs scripts/deep-gate.js (known myths) and is refused on a failure;
+// --skip-gate overrides.
 const fs = require('fs');
 const path = require('path');
 
@@ -67,8 +69,15 @@ async function main() {
   }
 
   let names = process.argv.slice(2);
+  const skipGate = names.includes('--skip-gate');
+  names = names.filter((n) => n !== '--skip-gate');
   if (names[0] === '--all') names = Object.keys(instance.workflows);
-  if (!names.length) throw new Error('usage: node scripts/deploy.js <name...> | --all');
+  if (!names.length) throw new Error('usage: node scripts/deploy.js <name...> | --all  [--skip-gate]');
+
+  // wf46 deep research deploys only if no known myth comes back (scripts/deep-traps.json)
+  if (names.includes('wf46-deep-research') && !skipGate && !require('./deep-gate.js').main()) {
+    throw new Error('wf46-deep-research NOT deployed: the deep gate failed (see above; --skip-gate to override)');
+  }
 
   for (const name of names) {
     const key = name.replace(/\.json$/, '');

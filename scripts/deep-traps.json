@@ -1,0 +1,43 @@
+{
+  "note": "Deploy gate for wf46-deep-research (shared/deep-traps.js). Each case is a myth the bot has repeated or a known trap from eval/research-eval.json.",
+  "cases": [
+    {
+      "id": "rea-top5-built-with",
+      "question": "i want a deep search on the top 5 products that 'reverse engineer anything' repo on github was used to create",
+      "mustNot": [
+        { "in": "items", "re": "ArtCraft|PhotoCraft|FilmCraft|Brandon Thomas", "why": "ArtCraft and its apps (PhotoCraft, FilmCraft) were built with Claude Opus 5.5 and Rust, not REA" },
+        { "in": "items", "re": "MindStudio|AkitaOnRails|Al Jazeera", "why": "articles about REA are not products built with it" }
+      ],
+      "must": []
+    },
+    {
+      "id": "klarna-ai-700-agents-claim",
+      "question": "klarna 'fired 700 people for ai then rehired them' - is that actually what happened",
+      "mustNot": [
+        { "in": "headline", "re": "^\\W*yes\\b", "why": "the claim is a myth: 700 was a workload estimate, not a layoff" },
+        { "in": "items", "re": "rehired (~|about |around )?(the )?700|rehired (the same|those) ", "why": "no source says the same 700 people were rehired" }
+      ],
+      "must": [
+        { "re": "equivalent|work of 700|workload|full-time agents", "why": "the 700 figure is Klarna's 'equivalent work of 700 agents' estimate" }
+      ]
+    },
+    {
+      "id": "a2a-production-users",
+      "question": "who's actually using google's a2a protocol in production? not partners, real deployments",
+      "mustNot": [
+        { "in": "items", "re": "^\\s*\\d+\\.\\s+\\*\\*(Salesforce|SAP|ServiceNow|PayPal|Atlassian)\\b", "why": "listed as partners/supporters, not documented production deployments" }
+      ],
+      "must": []
+    },
+    {
+      "id": "agent-production-failure-rate",
+      "question": "whats the actual failure rate of ai agents in production? need a real number",
+      "mustNot": [
+        { "in": "items", "re": "^(?!.*(unverified|myth|misread|forecast|not a measured)).*(40|95)% of (AI )?agents fail", "why": "Gartner's 40% is a cancellation forecast, MIT's 95% is about GenAI pilots" }
+      ],
+      "must": [
+        { "in": "headline", "re": "thin|no (single|measured|reliable|cross-company)|not (measured|published)", "why": "no measured cross-company failure rate exists: the headline must say so" }
+      ]
+    }
+  ]
+}
