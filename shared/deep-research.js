@@ -291,12 +291,13 @@ function relExcerpt(text, quote, span = 700) {
 
 // ---------------------------------------------------------------- render
 // "**Headline**", items, "Not built with it", limits, numbered sources
-function renderDeep({ ans, outLines, sourceLine, cited }) {
+function renderDeep({ ans, outLines, sourceLine, cited, checks = [] }) {
   if (!ans) return 'Sorry, I could not put an answer together from what I found.';
   const lines = [`**${ans.headline}**`, '', ans.verdict];
   if (ans.ranked_by) lines.push('', `Ranked by: ${ans.ranked_by}`);
   if (ans.items.length) { lines.push(''); ans.items.forEach((it, i) => lines.push(`${i + 1}. **${it.name}**: ${it.point}${it.caveat ? ' Caveat: ' + it.caveat : ''}${it.sources.length ? ' [' + it.sources.join('][') + ']' : ''}`)); }
   if (outLines.length) lines.push('', '**Not built with it:** ' + outLines.join(' '));
+  if (checks.length) lines.push('', '**Check these (2 min):**', ...checks.map((c) => `- ${c.name}: "${c.quote}" [${c.n}] ${c.url}`));
   if (ans.limits.length) lines.push('', '**Limits:** ' + ans.limits.join(' '));
   if (cited.length) lines.push('', 'Sources:', ...cited.map(sourceLine));
   return lines.join('\n');
@@ -714,7 +715,9 @@ async function deepResearch(question, io) {
   const cited = ans ? [...new Set([...ans.items.flatMap((i) => i.sources), ...citesIn(ans.verdict), ...outSrc])].filter((n) => used.some((p) => sid[p] === n)).sort((a, b) => a - b) : [];
   const sources = cited.map((n) => { const pg = pages[used.find((q) => sid[q] === n)]; return { n, title: pg.title || hostOf(pg.url), url: pg.url, date: pg.date || '' }; });
   const sourceLine = (n) => { const s = sources.find((x) => x.n === n); return `[${n}] ${s.title ? s.title.slice(0, 80) + ' - ' : ''}${s.url}${s.date ? ' (' + s.date + ')' : ''}`; };
-  const reply = renderDeep({ ans, outLines, sourceLine, cited });
+  const checks = ans ? checkThese(ans.items, verified.filter((f) => f.quote && sid[f.page]).map((f) => ({ entity: f.entity, quote: f.quote, n: sid[f.page], url: pages[f.page].url }))) : [];
+  trace.checks = checks;
+  const reply = renderDeep({ ans, outLines, sourceLine, cited, checks });
   trace.answer = ans;
   trace.pages = pages.map((p) => ({ url: p.url, via: p.via, chars: p.text.length }));
   trace.findings = findings.length;

@@ -136,3 +136,14 @@ test('shapeFromWords: build wording turns used_in_production into built_with; ot
   assert.equal(shapeFromWords("who's actually using google's a2a protocol in production?", 'used_in_production'), 'used_in_production');
   assert.equal(shapeFromWords('klarna fired 700 people for ai and rehired them', 'is_claim_true'), 'is_claim_true');
 });
+
+test('checkThese: one quote per item from a source it cites, preferring its own fact, no repeats', () => {
+  const { checkThese } = require('../shared/deep-checks.js');
+  const facts = [
+    { entity: 'Other', quote: 'A long enough quote about something else entirely.', n: 1, url: 'u1' },
+    { entity: 'DX-Ball', quote: 'DX-Ball sound-pan calculation recovered with REA.', n: 1, url: 'u1' },
+    { entity: 'TH04', quote: 'TH04 bullet ring recovered from 16-bit DOS code.', n: 2, url: 'u2' }];
+  const out = checkThese([{ name: 'DX-Ball', sources: [1] }, { name: 'TH04', sources: [2] }, { name: 'Nothing', sources: [9] }], facts);
+  assert.deepEqual(out.map((c) => [c.name, c.n]), [['DX-Ball', 1], ['TH04', 2]]);
+  assert.ok(out[0].quote.startsWith('DX-Ball'));
+});

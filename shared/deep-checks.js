@@ -204,4 +204,21 @@ function shapeFromWords(question, shape) {
   return (shape === 'used_in_production' || shape === 'which_entities') && BUILT_WORDS.test(String(question || '')) ? 'built_with' : shape;
 }
 
-module.exports = { shapeFromWords, nearEachOther, listMention, claimFigures, originPages, affirms, outOfRegionText, hedgeHeadline, daysAgo, recencyBoost, staleLimit, daysBetween, ruledOutLines, overclaims, soften, cutoff, isoDate, periodNote, outOfPeriod, regionOf, outOfRegion, REGIONS };
+// e. "Check these": a 2-minute check for the reader. For the first `max` items, one verbatim
+//    quote (already found on the page by the extract step) from a source the item cites,
+//    preferring a fact about that item. facts: [{entity, quote, n, url}].
+function checkThese(items, facts, max = 3) {
+  const used = new Set(), out = [];
+  const key = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+  for (const it of (items || []).slice(0, max)) {
+    const ok = (facts || []).filter((f) => f.quote && f.quote.length >= 20 && f.quote.length <= 260 && !/https?:\/\/|^\W*#/.test(f.quote) && f.quote.split(/\s+/).length >= 6 && (it.sources || []).includes(f.n) && !used.has(f.quote));
+    const k = key(it.name);
+    const pick = ok.find((f) => k && (key(f.entity).includes(k) || k.includes(key(f.entity)) || key(f.quote).includes(k))) || ok[0];
+    if (!pick) continue;
+    used.add(pick.quote);
+    out.push({ name: it.name, quote: pick.quote.replace(/\s+/g, ' ').trim(), n: pick.n, url: pick.url });
+  }
+  return out;
+}
+
+module.exports = { checkThese, shapeFromWords, nearEachOther, listMention, claimFigures, originPages, affirms, outOfRegionText, hedgeHeadline, daysAgo, recencyBoost, staleLimit, daysBetween, ruledOutLines, overclaims, soften, cutoff, isoDate, periodNote, outOfPeriod, regionOf, outOfRegion, REGIONS };
