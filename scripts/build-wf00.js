@@ -298,7 +298,7 @@ return $('Feed switch?').all(1).map(i => ({ json: { ...i.json, sources, runs, fi
       options: { queryReplacement: "={{ String($('Agent input').first().json.chat_id) }}" } },
     credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true, onError: 'continueRegularOutput' },
   { id: 'bigq', name: 'Big picture?', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1180, 160],
-    parameters: { mode: 'runOnceForAllItems', jsCode: inline('synth.js') + inline('sweep-confirm.js') + inline('answer-check.js') + inline('referent.js') + `
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('synth.js') + inline('sweep-confirm.js') + inline('answer-check.js') + inline('referent.js') + inline('search-gate.js') + `
 let lb = {};
 try { lb = $input.first().json || {}; } catch (e) {}
 const lastBot = lb.last_bot || '';
@@ -313,7 +313,8 @@ return $('Recall note').all().map(i => {
   // a reference with nothing recent to point at still is not an overview question:
   // the agent asks which one, instead of synth summarising every item named "video"
   const pointing = Boolean(referentKind(i.json.text || ''));
-  return { json: { ...i.json, ...s, ref_route: ref.route, ref_n: String(ref.n || ''),
+  // run_discovery may start a paid search only on an explicit search verb (shared/search-gate.js)
+  return { json: { ...i.json, ...s, search_ok: String(searchAllowed(i.json.text || '', lastBot)), ref_route: ref.route, ref_n: String(ref.n || ''),
     ref_note: ref.route === 'agent' ? refNote(list) : '',
     synth_go: String(!s.sweep && !pointing && ['fast', 'think'].includes(i.json.fix_synth) && bigPictureQ(i.json.text || '')) } };
 });`.trim() } },
@@ -789,7 +790,11 @@ return [{ json: { sql: rememberSql(a.chat_id, a.text, m.output, vec) } }];`.trim
     WF.run_discovery,
     { source: { desc: 'one of exa, tavily, brave, rss' },
       query: { desc: 'the search query (empty for rss)' },
-      trigger: { fixed: 'agent' } }, [1300, 320]),
+      trigger: { fixed: 'agent' },
+      // filled by n8n, not the model: WF-41 refuses a paid search unless the
+      // message asked for one (shared/search-gate.js, decided in 'Big picture?').
+      // A link message skips that node: no search.
+      search_ok: { fixed: "={{ $('Big picture?').isExecuted ? $('Big picture?').first().json.search_ok : 'false' }}" } }, [1300, 320]),
 
   tool('full_sweep',
     "Run ALL discovery sources (exa, tavily, brave, rss). The most expensive action there is. NEVER call it in response to the message that first asks for it — 'sweep', 'go wide', 'full run on X' get a one-line confirmation question and nothing else. " +

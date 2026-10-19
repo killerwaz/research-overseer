@@ -3,7 +3,14 @@
   "nodes": [
     { "id": "trigger", "name": "WF Input", "type": "n8n-nodes-base.executeWorkflowTrigger", "typeVersion": 1.1, "position": [0, 0],
       "parameters": { "workflowInputs": { "values": [
-        { "name": "source", "type": "string" }, { "name": "query", "type": "string" }, { "name": "trigger", "type": "string" } ] } } },
+        { "name": "source", "type": "string" }, { "name": "query", "type": "string" }, { "name": "trigger", "type": "string" }, { "name": "search_ok", "type": "string" } ] } } },
+    { "id": "asked", "name": "Search asked?", "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [100, 0],
+      "parameters": { "options": {}, "conditions": { "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" }, "combinator": "or", "conditions": [
+        { "id": "a1", "leftValue": "={{ $json.trigger }}", "rightValue": "agent", "operator": { "type": "string", "operation": "notEquals" } },
+        { "id": "a2", "leftValue": "={{ $json.source }}", "rightValue": "rss", "operator": { "type": "string", "operation": "equals" } },
+        { "id": "a3", "leftValue": "={{ String($json.search_ok) }}", "rightValue": "true", "operator": { "type": "string", "operation": "equals" } } ] } } },
+    { "id": "notasked", "name": "Not asked", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [200, 300],
+      "parameters": { "mode": "runOnceForAllItems", "jsCode": "// 2026-10-18: the 9B called run_discovery for bare topics (run 102). WF-00\n// decides in code whether the message asked for a search (shared/search-gate.js)\n// and passes search_ok; an agent call without it starts nothing.\nreturn [{ json: { status: 'not_run', message: 'NOT RUN. The user did not ask for a search, so none was started. Answer from query_feed; if the feed has nothing on it, say so in one plain sentence and stop. Do not offer a search and do not call run_discovery again.' } }];" } },
     { "id": "switch", "name": "Which source", "type": "n8n-nodes-base.switch", "typeVersion": 3.2, "position": [200, 0],
       "parameters": { "rules": { "values": [
         { "conditions": { "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" }, "combinator": "and", "conditions": [ { "id": "c1", "leftValue": "={{ $json.source }}", "rightValue": "exa", "operator": { "type": "string", "operation": "equals" } } ] }, "renameOutput": true, "outputKey": "exa" },
@@ -50,7 +57,8 @@
       "parameters": { "mode": "runOnceForAllItems", "jsCode": "const j = $input.first().json;\nif (j.error) return [{ json: { error: String(typeof j.error === 'object' ? JSON.stringify(j.error) : j.error).slice(0, 300) } }];\nreturn [{ json: j }];" } }
   ],
   "connections": {
-    "WF Input": { "main": [[{ "node": "Which source", "type": "main", "index": 0 }]] },
+    "WF Input": { "main": [[{ "node": "Search asked?", "type": "main", "index": 0 }]] },
+    "Search asked?": { "main": [[{ "node": "Which source", "type": "main", "index": 0 }], [{ "node": "Not asked", "type": "main", "index": 0 }]] },
     "Which source": { "main": [
       [{ "node": "Run Exa", "type": "main", "index": 0 }],
       [{ "node": "Run Tavily", "type": "main", "index": 0 }],
