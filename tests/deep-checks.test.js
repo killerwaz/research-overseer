@@ -17,6 +17,39 @@ test('ruledOutLines needs a quote that says how it was made (Neon Rooftops, 2026
   assert.deepStrictEqual(lines, ['ArtCraft was not built with REA: "ArtCraft now lists twelve apps, all built in Rust and free to use." [5]']);
 });
 
+test('hedgeHeadline: a thin answer never gets a firm headline (held-out C8, C6)', () => {
+  const a = D.hedgeHeadline({ headline: 'Verified count: ~400 active; 12,000 ordered but not yet operational', verdict: 'The count is verified by two sources.', evidence_thin: true });
+  assert.strictEqual(a.headline, 'Evidence is thin: ~400 active; 12,000 ordered but not yet operational');
+  assert.strictEqual(a.verdict, 'The count is reported by two sources.');
+  const b = D.hedgeHeadline({ headline: 'The government has confirmed two Indian companies running IndiaAI models', verdict: 'x', evidence_thin: true });
+  assert.match(b.headline, /^Evidence is thin: the government has reported two Indian companies/);
+  const c = D.hedgeHeadline({ headline: 'No single total for Q3 2026 is disclosed', verdict: 'x', evidence_thin: true });
+  assert.strictEqual(c.headline, 'No single total for Q3 2026 is disclosed', 'already hedged');
+  const d = D.hedgeHeadline({ headline: 'Confirmed browser-use products: desktop, Cloud', verdict: 'x', evidence_thin: false });
+  assert.strictEqual(d.headline, 'Reported browser-use products: desktop, Cloud');
+  assert.strictEqual(D.hedgeHeadline({ headline: 'Confirmed deployments: Instacart, Replit', verdict: 'x' }).headline, 'Instacart, Replit');
+  const e = D.hedgeHeadline({ headline: 'The $5.6m figure is a calculated estimate', verdict: 'y', evidence_thin: false });
+  assert.strictEqual(e.headline, 'The $5.6m figure is a calculated estimate', 'firm answers are left alone');
+});
+
+test('outOfRegionText catches a headline that leads with another region (Singapore, tuning v4)', () => {
+  const reg = D.regionOf('which south asian governments have signed deals with openai or anthropic', '');
+  assert.deepStrictEqual(D.outOfRegionText('Singapore has signed an MOU with OpenAI; India and Pakistan have procurement records.', reg), ['singapore']);
+  assert.deepStrictEqual(D.outOfRegionText('India and Pakistan have procurement records with OpenAI.', reg), []);
+  assert.deepStrictEqual(D.outOfRegionText('anything', null), []);
+});
+
+test('recency helpers', () => {
+  assert.strictEqual(D.daysAgo('2026-10-19', 183), '2026-04-19');
+  assert.strictEqual(D.recencyBoost('2026-08-01', '2026-10-19'), 2);
+  assert.strictEqual(D.recencyBoost('2026-01-05', '2026-10-19'), 1);
+  assert.strictEqual(D.recencyBoost('2024-05-01', '2026-10-19'), 0);
+  assert.strictEqual(D.recencyBoost('', '2026-10-19'), 0);
+  assert.strictEqual(D.staleLimit(['2025-03-01', '2025-11-02'], '2026-10-19'), 'The newest source found is from 2025-11-02; there may be later news.');
+  assert.strictEqual(D.staleLimit(['2025-03-01', '2026-09-30'], '2026-10-19'), '');
+  assert.match(D.staleLimit([], '2026-10-19'), /None of the sources carried a date/);
+});
+
 test('soften turns "confirmed" into "reported" when the rewrites did not', () => {
   assert.strictEqual(D.soften("Google's A2A Protocol in Production: Confirmed Deployments (Vendor-Reported)"), "Google's A2A Protocol in Production: Vendor-Reported Deployments");
   assert.strictEqual(D.soften('The evidence confirms usage by Microsoft. Verified by nobody.'), 'The evidence reports usage by Microsoft. Reported by nobody.');

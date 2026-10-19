@@ -120,7 +120,7 @@ function lookalike(url, names, repo, official) {
   if (official.has(h)) return false;
   return short(compact(h.split('.').slice(0, -1).join('')), true) || short(compact(h.split('.')[0]), true);
 }
-function pickPages(results, already, max, subjectRe, penalty = () => 0) {
+function pickPages(results, already, max, subjectRe, penalty = () => 0, today = '') {
   const by = new Map();
   for (const r of results) {
     const h = hostOf(r.url);
@@ -129,7 +129,8 @@ function pickPages(results, already, max, subjectRe, penalty = () => 0) {
     x.hits++; x.qs.add(r.q); if (!x.text && r.text) x.text = r.text; by.set(r.url, x);
   }
   const score = (x) => x.qs.size * 2 + (subjectRe.test(x.title + ' ' + x.text.slice(0, 3000)) ? 2 : 0) +
-    (/github\.com|\.gov|\.gov\.\w+|europa\.eu|\.org$/.test(hostOf(x.url)) ? 1 : 0) + (x.text.length > 2000 ? 1 : 0) - penalty(x.url);
+    (/github\.com|\.gov|\.gov\.\w+|europa\.eu|\.org$/.test(hostOf(x.url)) ? 1 : 0) + (x.text.length > 2000 ? 1 : 0) - penalty(x.url) +
+    (today ? recencyBoost(x.date, today) : 0);   // newer pages get read first (shared/deep-checks.js)
   const ranked = [...by.values()].sort((a, b) => score(b) - score(a));
   const per = {}, out = [];   // at most 2 pages per host so one site cannot fill the read list
   for (const x of ranked) { const h = hostOf(x.url); if ((per[h] = (per[h] || 0) + 1) > 2) continue; out.push(x); if (out.length >= max) break; }
@@ -178,6 +179,15 @@ function deepTemplates(p, today) {
   }
   if (p.shape === 'used_in_production') t.push(E(`site:engineering OR "engineering blog" ${s} how we built`));
   if (p.shape === 'compare' && p.a && p.b) t.push(E(`${p.a} official documentation ${p.axis}`), E(`${p.b} official documentation ${p.axis}`));
+  // the last 6 months only (Exa startPublishedDate): held-out grading found answers that
+  // stopped at 2025 evidence and missed the 2026 statement that flipped the verdict
+  const since = daysAgo(today, 183);
+  // A claim's own wording, date-limited, finds this year's RETELLINGS of the story (Klarna
+  // v4: a 2026 blog post retelling "fired 700, then rehired" became source [1] and flipped
+  // a right "no" to "yes"). For a claim, look for what the subject itself said lately.
+  const core = { is_claim_true: `${s} official statement`, compare: `${p.a} vs ${p.b} ${p.axis}`, built_with: `built with ${s}`, used_in_production: `${s} in production`,
+    changed_since: `${s} update`, number: `${s}${r}`, which_entities: `${s}${r}` }[p.shape] || s;
+  if (since) t.push({ engine: 'exa', q: core, since }, { engine: 'exa', q: p.shape === 'is_claim_true' ? `${s} company says ${y}` : `${core} latest news`, since });
   return t.concat((p.extra_queries || []).slice(0, 2).map(E));
 }
 
@@ -219,7 +229,11 @@ news pieces that repeat the viral version are not confirmation. If the original 
 For "who uses X in production": the vendor's own case-study pages are vendor claims; say so, and put company-authored sources first.
 For "A vs B": answer A vs B on the axis asked (from their own docs or a measurement); a third option may be one item at most, never the headline.
 caveat: a real limitation from the evidence (small, unverified, a preview, self-reported, dated, a pilot); never filler like "it is a full application".
-Only include items that answer the question; no padding to reach five.`;
+Only include items that answer the question; no padding to reach five.
+The evidence is listed newest first, each source with its date. When sources from different dates disagree about what is true NOW (a status, a rule,
+a price, a count, who uses what), the newest dated statement is the current answer: lead with it, and say what it replaced and when.
+Whether a story or claim is true is different: the original source decides (the company's own statement, the study, the record), and a newer article
+retelling the story is not new evidence. If evidence_thin is true, the headline must say that the evidence is thin.`;
 const WRITE_FORMAT = deepSchema('answer', { type: 'object', additionalProperties: false, required: ['headline', 'verdict', 'ranked_by', 'items', 'limits', 'evidence_thin'],
   properties: { headline: { type: 'string' }, verdict: { type: 'string' }, ranked_by: { type: 'string' },
     items: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['name', 'point', 'caveat', 'sources'],
@@ -312,10 +326,11 @@ async function deepResearch(question, io) {
     if (io.cache && out && !out.error) await io.cache.set(kind, req, out);
     return out;
   }
-  async function exa(q, n = 8) {
-    const out = await cached('exa', { q, n }, async () => {
+  async function exa(q, n = 8, since = '') {
+    // `since` only enters the cache key when set, so undated queries keep their old cache entries
+    const out = await cached('exa', since ? { q, n, since } : { q, n }, async () => {
       const r = await io.http({ method: 'POST', url: 'https://api.exa.ai/search', headers: { 'Content-Type': 'application/json', 'x-api-key': io.keys.exa },
-        body: { query: q, numResults: n, type: 'auto', contents: { text: { maxCharacters: 20000 } } }, timeout: 60000 });
+        body: { query: q, numResults: n, type: 'auto', contents: { text: { maxCharacters: 20000 } }, ...(since ? { startPublishedDate: since + 'T00:00:00.000Z' } : {}) }, timeout: 60000 });
       if (r.status !== 200) return { error: r.status + ' ' + JSON.stringify(r.body).slice(0, 200) };
       trace.spend.exa += (r.body.costDollars && r.body.costDollars.total) || 0.007;
       return { results: (r.body.results || []).map((x) => ({ url: x.url, title: x.title || '', date: (x.publishedDate || '').slice(0, 10), text: x.text || '' })) };
@@ -375,7 +390,7 @@ async function deepResearch(question, io) {
   const q1 = deepTemplates(plan, today);
   await progress(`searching (${q1.length} queries)`);
   const res1 = [];
-  for (const q of q1) res1.push(...(q.engine === 'exa' ? await exa(q.q) : await brave(q.q)));
+  for (const q of q1) res1.push(...(q.engine === 'exa' ? await exa(q.q, 8, q.since || '') : await brave(q.q)));
   const readSet = new Set(), pages = [];
   const repo = canonicalRepo(res1, names);
   const official = new Set(['github.com']);
@@ -401,7 +416,7 @@ async function deepResearch(question, io) {
   }
   trace.repo = repo; trace.queries = q1.map((q) => q.engine + ': ' + q.q);
   const penalty = (u) => lookalike(u, names, repo, official) ? 6 : 0;
-  for (const x of pickPages(res1, readSet, Math.max(6, 11 - pages.length), subjectRe, penalty)) { readSet.add(x.url); pages.push(await readPage(x)); }
+  for (const x of pickPages(res1, readSet, Math.max(6, 11 - pages.length), subjectRe, penalty, today)) { readSet.add(x.url); pages.push(await readPage(x)); }
   lap('search1', t);
 
   // ---------------- extract
@@ -456,7 +471,7 @@ async function deepResearch(question, io) {
   for (const q of q2) res2.push(...(q.engine === 'exa' ? await exa(q.q, 6) : await brave(q.q)));
   trace.queries2 = q2.map((q) => q.engine + ': ' + q.q);
   const before = pages.length;
-  for (const x of pickPages(res2, readSet, 5, subjectRe, penalty)) { readSet.add(x.url); pages.push(await readPage(x)); }
+  for (const x of pickPages(res2, readSet, 5, subjectRe, penalty, today)) { readSet.add(x.url); pages.push(await readPage(x)); }
   for (let i = before; i < pages.length; i++) await extractFrom(pages[i], i);
   lap('round2', t);
   log(`  round 2: ${q2.length} queries (${top.join(', ')}), ${pages.length - before} pages, ${findings.length} findings`);
@@ -526,7 +541,8 @@ async function deepResearch(question, io) {
       /\.gov|europa\.eu|\.int$|eur-lex/.test(hostOf(pages[p].url)); };
     const perPage = {};
     cand = factPool.filter((f) => { const k = dnorm(f.finding); if (seen.has(k)) return false; seen.add(k); return true; })
-      .map((f) => ({ f, s: (isOfficial(f.page) ? 4 : 0) + (f.candidate ? 2 : 0) + Math.min(numsIn(f.finding).length, 2) + Math.log2(1 + (efreq[dnorm(f.entity)] || 0)) }))
+      .map((f) => ({ f, s: (isOfficial(f.page) ? 4 : 0) + (f.candidate ? 2 : 0) + Math.min(numsIn(f.finding).length, 2) + Math.log2(1 + (efreq[dnorm(f.entity)] || 0)) +
+        recencyBoost(f.date || pages[f.page].date, today) }))
       .sort((a, b) => b.s - a.s).map((x) => x.f)
       .filter((f) => { perPage[f.page] = (perPage[f.page] || 0) + 1; return perPage[f.page] <= 4; }).slice(0, 30);
   }
@@ -547,7 +563,9 @@ async function deepResearch(question, io) {
   // ---------------- write
   t = Date.now();
   await progress('writing the answer');
-  const used = [...new Set(verified.map((f) => f.page))];
+  // newest first, undated last: source [1] is the most recent dated page
+  const pageDate = (p) => isoDate(pages[p].date) || isoDate((verified.find((f) => f.page === p && f.date) || {}).date) || '';
+  const used = [...new Set(verified.map((f) => f.page))].sort((a, b) => (pageDate(b) || '0').localeCompare(pageDate(a) || '0'));
   const sid = Object.fromEntries(used.map((p, i) => [p, i + 1]));
   const cut = cutoff(question, plan.since, today);
   const reg = regionOf(question, plan.region);
@@ -593,6 +611,8 @@ async function deepResearch(question, io) {
       if (old.length) problems.push(`these items are dated before ${cut}, outside the period the question asks about: ${old.join(', ')}; remove them from the items (you may mention them once in the limits)`);
       if (away.length) problems.push(`these items are outside ${reg.name}, the region the question asks about: ${away.join(', ')}; remove them`);
     }
+    const awayText = outOfRegionText(ans.headline + ' ' + ans.verdict, reg);
+    if (awayText.length && !last) problems.push(`the headline or verdict leads with places outside ${reg.name}: ${awayText.join(', ')}; answer for ${reg.name} only (you may mention them once in the limits)`);
     // every verdict sentence and every item against the evidence it cites (the figure
     // check passed "n8n is profitable": the numbers were real, the claim was not)
     if (!problems.length && !late()) {
@@ -617,6 +637,15 @@ async function deepResearch(question, io) {
     if (!problems.length) break;
   }
   trace.writeProblems = problems;
+  // a thin answer never gets a firm headline; say so when the newest source is old (shared/deep-checks.js)
+  if (ans) {
+    const before = ans.headline;
+    ans = hedgeHeadline(ans);
+    if (ans.headline !== before) trace.hedged = before;
+    const cites = new Set([...ans.items.flatMap((i) => i.sources), ...citesIn(ans.verdict)]);
+    const stale = staleLimit(used.filter((p) => cites.has(sid[p])).map(pageDate), today);
+    if (stale && !ans.limits.some((l) => /newest source|carried a date/i.test(l))) ans.limits = [...ans.limits, stale];
+  }
   lap('write', t);
 
   // ---------------- render

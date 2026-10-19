@@ -12,9 +12,11 @@ const crypto = require('crypto');
 const ROOT = path.join(__dirname, '..');
 const env = Object.fromEntries(fs.readFileSync(path.join(ROOT, '.env'), 'utf8').split(/\r?\n/)
   .filter((l) => /^[A-Z0-9_]+=/.test(l)).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1).trim()]));
-// in n8n both files are pasted into one Code node, so the checks are plain globals there
-Object.assign(global, require('../shared/deep-checks.js'));
-const { deepResearch } = require('../shared/deep-research.js');
+// in n8n both files are pasted into one Code node, so the checks are plain globals there.
+// DEEP_DIR=eval/deep-pipeline/v3-snapshot runs an older copy, for blind A/B grading.
+const DIR = process.env.DEEP_DIR ? path.resolve(process.env.DEEP_DIR) : path.join(ROOT, 'shared');
+Object.assign(global, require(path.join(DIR, 'deep-checks.js')));
+const { deepResearch } = require(path.join(DIR, 'deep-research.js'));
 
 const CACHE = path.join(ROOT, 'eval', 'deep-pipeline', 'cache');
 const cacheFile = (kind, req) => path.join(CACHE, kind === 'x9b'

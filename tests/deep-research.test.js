@@ -67,7 +67,8 @@ test('deepResearch runs end to end on a fake io and cites only real sources', as
   const progress = [];
   io.progress = async (s) => progress.push(s);
   const r = await D.deepResearch('top products built with REA', io);
-  assert.match(r.reply, /^\*\*One product built with REA\*\*/);
+  // the fake writer marks the evidence thin, so the headline must say so (shared/deep-checks.js hedgeHeadline)
+  assert.match(r.reply, /^\*\*Evidence is thin: one product built with REA\*\*/);
   assert.match(r.reply, /1\. \*\*Ledger Reborn\*\*/);
   assert.deepStrictEqual(r.sources.map((s) => s.n), [1]);
   assert.match(r.reply, /Sources:\n\[1\] Ledger Reborn - https:\/\/github\.com\/someone\/ledger-reborn\/discussions\/2198/);
