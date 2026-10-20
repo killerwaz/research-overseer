@@ -267,6 +267,13 @@ partner_or_member - ENTITY supports, joined, endorsed or partners on ${subject},
 demo_or_pilot - a demo, sample, pilot, hackathon or tutorial; vendor_claim - the vendor of ${subject} says so without detail from ENTITY;
 only_mentioned - named near ${subject} with no relationship stated. Quote the words that decide it.`;
 }
+// "Check these": does this one quote, on its own, prove the item's main point? (shared/deep-checks.js checkThese)
+const FIT_SYSTEM = `A reader will use QUOTE alone to check ITEM. Say whether QUOTE, on its own, states ITEM's main point about ITEM's subject.
+"supported" - the quote names ITEM's subject (or clearly refers to it) and states the point: the same relationship, number, date or event;
+"contradicted" - it says something incompatible; "not_mentioned" - anything else: it is about a different company or a total, a setting or
+feature that does not show the point, a listing without the date or deal, or it only shows the subject exists. If the point is that the subject was
+built with, runs on or uses something, the quote must state that relationship; a feature of the subject is not it ("Export to MP4 at 4K" does not show
+it was built with a tool). Be strict: when in doubt, not_mentioned.`;
 // myth guard (shared/deep-checks.js nearEachOther / originPages)
 const PARTOF_SYSTEM = `You read an excerpt and say whether PART is a part of WHOLE: one of its apps, products, editions, modules or tools,
 made by the same people as part of WHOLE. Use only the excerpt. "part_of" - the excerpt says or clearly shows it (e.g. "WHOLE now lists apps
@@ -718,7 +725,12 @@ async function deepResearch(question, io) {
   const cited = ans ? [...new Set([...ans.items.flatMap((i) => i.sources), ...citesIn(ans.verdict), ...outSrc])].filter((n) => used.some((p) => sid[p] === n)).sort((a, b) => a - b) : [];
   const sources = cited.map((n) => { const pg = pages[used.find((q) => sid[q] === n)]; return { n, title: pg.title || hostOf(pg.url), url: pg.url, date: pg.date || '' }; });
   const sourceLine = (n) => { const s = sources.find((x) => x.n === n); return `[${n}] ${s.title ? s.title.slice(0, 80) + ' - ' : ''}${s.url}${s.date ? ' (' + s.date + ')' : ''}`; };
-  const checks = ans ? checkThese(ans.items, verified.filter((f) => f.quote && sid[f.page]).map((f) => ({ entity: f.entity, quote: f.quote, n: sid[f.page], url: pages[f.page].url }))) : [];
+  const fits = async (it, quote) => {
+    const r = await llm('fit', FIT_SYSTEM, `ITEM: ${it.name}: ${it.point}\n\nQUOTE: ${quote}`, VERIFY_FORMAT, 300);
+    trace.calls.fit = (trace.calls.fit || 0) + 1;
+    return !!r && r.verdict === 'supported';
+  };
+  const checks = ans ? await checkThese(ans.items, verified.filter((f) => f.quote && sid[f.page]).map((f) => ({ entity: f.entity, quote: f.quote, n: sid[f.page], url: pages[f.page].url })), fits) : [];
   trace.checks = checks;
   const reply = renderDeep({ ans, outLines, sourceLine, cited, checks });
   trace.answer = ans;

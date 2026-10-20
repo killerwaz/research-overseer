@@ -137,13 +137,19 @@ test('shapeFromWords: build wording turns used_in_production into built_with; ot
   assert.equal(shapeFromWords('klarna fired 700 people for ai and rehired them', 'is_claim_true'), 'is_claim_true');
 });
 
-test('checkThese: one quote per item from a source it cites, preferring its own fact, no repeats', () => {
+test('checkThese: own fact first, a quote that does not fit is skipped, no fit -> no line', async () => {
   const { checkThese } = require('../shared/deep-checks.js');
   const facts = [
-    { entity: 'Other', quote: 'A long enough quote about something else entirely.', n: 1, url: 'u1' },
+    { entity: 'Other', quote: 'Bangladesh startups raised 6 million dollars in total this half.', n: 1, url: 'u1' },
     { entity: 'DX-Ball', quote: 'DX-Ball sound-pan calculation recovered with REA.', n: 1, url: 'u1' },
     { entity: 'TH04', quote: 'TH04 bullet ring recovered from 16-bit DOS code.', n: 2, url: 'u2' }];
-  const out = checkThese([{ name: 'DX-Ball', sources: [1] }, { name: 'TH04', sources: [2] }, { name: 'Nothing', sources: [9] }], facts);
-  assert.deepEqual(out.map((c) => [c.name, c.n]), [['DX-Ball', 1], ['TH04', 2]]);
-  assert.ok(out[0].quote.startsWith('DX-Ball'));
+  const items = [{ name: 'DX-Ball', sources: [1] }, { name: 'TH04', sources: [2] }, { name: 'Nothing', sources: [9] }];
+  const all = await checkThese(items, facts);
+  assert.deepEqual(all.map((c) => [c.name, c.n]), [['DX-Ball', 1], ['TH04', 2]]);
+  assert.ok(all[0].quote.startsWith('DX-Ball'));
+  // the fit check rejects DX-Ball's own quote: the next candidate (the total) is tried and rejected too
+  const seen = [];
+  const strict = await checkThese(items, facts, async (it, q) => { seen.push(it.name + ': ' + q.slice(0, 10)); return it.name === 'TH04'; });
+  assert.deepEqual(strict.map((c) => c.name), ['TH04']);
+  assert.equal(seen.filter((x) => x.startsWith('DX-Ball')).length, 2);
 });

@@ -205,18 +205,27 @@ function shapeFromWords(question, shape) {
 }
 
 // e. "Check these": a 2-minute check for the reader. For the first `max` items, one verbatim
-//    quote (already found on the page by the extract step) from a source the item cites,
-//    preferring a fact about that item. facts: [{entity, quote, n, url}].
-function checkThese(items, facts, max = 3) {
+//    quote (already found on the page by the extract step) from a source the item cites.
+//    Candidates: the item's own facts first, then others from its sources, up to 3 per item.
+//    `fits(item, quote)` (async; the 9B in the pipeline) must say the quote supports the item:
+//    blind round 3 found ~17/28 quotes real but proving something else (a national total for
+//    one startup's round, a timeout setting for "uses the SDK"). No fitting quote -> no line.
+//    facts: [{entity, quote, n, url}].
+const QUOTE_OK = (q) => q && q.length >= 20 && q.length <= 260 && !/https?:\/\/|^\W*#/.test(q) && q.split(/\s+/).length >= 6;
+async function checkThese(items, facts, fits = async () => true, max = 3, perItem = 3) {
   const used = new Set(), out = [];
   const key = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
   for (const it of (items || []).slice(0, max)) {
-    const ok = (facts || []).filter((f) => f.quote && f.quote.length >= 20 && f.quote.length <= 260 && !/https?:\/\/|^\W*#/.test(f.quote) && f.quote.split(/\s+/).length >= 6 && (it.sources || []).includes(f.n) && !used.has(f.quote));
     const k = key(it.name);
-    const pick = ok.find((f) => k && (key(f.entity).includes(k) || k.includes(key(f.entity)) || key(f.quote).includes(k))) || ok[0];
-    if (!pick) continue;
-    used.add(pick.quote);
-    out.push({ name: it.name, quote: pick.quote.replace(/\s+/g, ' ').trim(), n: pick.n, url: pick.url });
+    const own = (f) => k && (key(f.entity).includes(k) || k.includes(key(f.entity)) || key(f.quote).includes(k));
+    const ok = (facts || []).filter((f) => QUOTE_OK(f.quote) && (it.sources || []).includes(f.n) && !used.has(f.quote));
+    const cands = [...ok.filter(own), ...ok.filter((f) => !own(f))].slice(0, perItem);
+    for (const c of cands) {
+      if (!(await fits(it, c.quote))) continue;
+      used.add(c.quote);
+      out.push({ name: it.name, quote: c.quote.replace(/\s+/g, ' ').trim(), n: c.n, url: c.url });
+      break;
+    }
   }
   return out;
 }

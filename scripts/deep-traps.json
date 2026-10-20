@@ -1,5 +1,6 @@
 {
-  "note": "Deploy gate for wf46-deep-research (shared/deep-traps.js). Each case is a myth the bot has repeated or a known trap from eval/research-eval.json.",
+  "today": "2026-10-19",
+  "note": "today pins the date so searches replay from cache (eval/deep-pipeline/cache): the gate tests our code, not a changing web. Deploy gate for wf46-deep-research (shared/deep-traps.js). Each case is a myth the bot has repeated or a known trap from eval/research-eval.json.",
   "cases": [
     {
       "id": "rea-top5-built-with",

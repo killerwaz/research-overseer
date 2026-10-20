@@ -35,7 +35,8 @@ function main() {
     dir = path.join(ROOT, 'eval', 'deep-pipeline', 'gate-' + new Date().toISOString().replace(/[:.]/g, '-'));
     console.log(`deep gate: running ${TRAPS} -> ${dir} (several minutes per trap on a cold cache)`);
     const r = spawnSync(process.execPath, [path.join(__dirname, 'deep-research.js'), '--cases', TRAPS, '--out', dir],
-      { stdio: 'inherit', cwd: ROOT });
+      // pinned date: the 6-month search windows depend on it, so a new day missed the cache and re-tested the web (2026-10-20)
+      { stdio: 'inherit', cwd: ROOT, env: { ...process.env, TODAY: JSON.parse(fs.readFileSync(TRAPS, 'utf8')).today || process.env.TODAY || '' } });
     if (r.status !== 0) { console.log('deep gate: the pipeline run failed'); return false; }
   }
   return gate(dir);
