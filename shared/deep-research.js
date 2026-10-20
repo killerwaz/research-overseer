@@ -710,7 +710,7 @@ async function deepResearch(question, io) {
   // a thin answer never gets a firm headline; say so when the newest source is old (shared/deep-checks.js)
   if (ans) {
     const before = ans.headline;
-    ans = hedgeHeadline(ans);
+    ans = spreadHeadline(hedgeHeadline(ans), question, plan.shape);
     if (ans.headline !== before) trace.hedged = before;
     const cites = new Set([...ans.items.flatMap((i) => i.sources), ...citesIn(ans.verdict)]);
     const stale = staleLimit(used.filter((p) => cites.has(sid[p])).map(pageDate), today);

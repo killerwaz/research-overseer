@@ -153,3 +153,15 @@ test('checkThese: own fact first, a quote that does not fit is skipped, no fit -
   assert.deepEqual(strict.map((c) => c.name), ['TH04']);
   assert.equal(seen.filter((x) => x.startsWith('DX-Ball')).length, 2);
 });
+
+test('spreadHeadline: number question + items with different figures -> hedged headline', () => {
+  const { spreadHeadline } = require('../shared/deep-checks.js');
+  const ans = { headline: 'AI agents succeed only 56.6% of the time in production', items: [
+    { name: '52% failure rate', point: '52% reported a failure' }, { name: '56.6% success rate', point: 'succeed 56.6% of the time' }] };
+  const q = 'whats the actual failure rate of ai agents in production? need a real number';
+  assert.ok(spreadHeadline(ans, q, 'is_claim_true').headline.startsWith('No single measured number: AI agents'));
+  assert.equal(spreadHeadline({ ...ans, headline: 'There is no single rate' }, q, 'number').headline, 'There is no single rate');
+  assert.equal(spreadHeadline(ans, 'who uses a2a in production?', 'used_in_production').headline, ans.headline);
+  const close = { headline: 'About 8%', items: [{ name: 'a', point: '8.0% in June' }, { name: 'b', point: '7.8% in March' }] };
+  assert.equal(spreadHeadline(close, 'how many people use chatgpt', 'number').headline, 'About 8%');
+});

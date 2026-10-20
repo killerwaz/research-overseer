@@ -230,4 +230,21 @@ async function checkThese(items, facts, fits = async () => true, max = 3, perIte
   return out;
 }
 
-module.exports = { checkThese, shapeFromWords, nearEachOther, listMention, claimFigures, originPages, affirms, outOfRegionText, hedgeHeadline, daysAgo, recencyBoost, staleLimit, daysBetween, ruledOutLines, overclaims, soften, cutoff, isoDate, periodNote, outOfPeriod, regionOf, outOfRegion, REGIONS };
+// f. A number question whose items give different figures has no single measured number,
+//    and the headline must say so. Gate 2026-10-20: "whats the actual failure rate of ai agents
+//    in production?" led with "AI agents succeed only 56.6% of the time" over items of 52%,
+//    56.6%, one in three and 46.72%; evidence_thin was not set, so hedgeHeadline never fired.
+//    The question's words decide, not the 9B's shape (it parsed that one as is_claim_true).
+const NUMBER_Q = /\b(how (many|much)|what %|(a|one|real|actual) (single )?(number|figure|rate|percentage)|(actual|real) [\w ]{0,30}?(rate|number|share|percentage|count))\b/i;
+function figuresIn(text) {
+  return (String(text || '').match(/\d+(?:\.\d+)?\s?%/g) || []).map((x) => parseFloat(x));
+}
+function spreadHeadline(answer, question, shape) {
+  if (!answer || !(shape === 'number' || NUMBER_Q.test(String(question || '')))) return answer;
+  const figs = [...new Set((answer.items || []).flatMap((i) => figuresIn(i.name + ' ' + i.point)))];
+  if (figs.length < 2 || Math.max(...figs) < Math.min(...figs) * 1.08 || HEDGED.test(answer.headline || '')) return answer;
+  const h = String(answer.headline || '');
+  return { ...answer, headline: 'No single measured number: ' + (/^[A-Z][a-z]/.test(h) ? h.charAt(0).toLowerCase() + h.slice(1) : h) };
+}
+
+module.exports = { spreadHeadline, checkThese, shapeFromWords, nearEachOther, listMention, claimFigures, originPages, affirms, outOfRegionText, hedgeHeadline, daysAgo, recencyBoost, staleLimit, daysBetween, ruledOutLines, overclaims, soften, cutoff, isoDate, periodNote, outOfPeriod, regionOf, outOfRegion, REGIONS };
