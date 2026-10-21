@@ -69,3 +69,7 @@ test('an answer from the bot\'s own memory goes to the web (World Cup, 2026-10-1
   assert.strictEqual(needsWeb({ question: 'Who bought Langfuse?', reply: 'ClickHouse bought Langfuse in January 2026.' }).web, false);
   assert.strictEqual(needsWeb({ question: 'what feeds are you watching?', reply: 'These are not in your feed list yet.' }).web, false);   // about the bot
 });
+
+test('an own-knowledge answer that says "not in my feed" goes to the web (2026-10-21)', () => {
+  assert.equal(needsWeb({ question: 'Who won the 2022 FIFA World Cup?', reply: 'The 2022 FIFA World Cup winner is Argentina, who defeated France in the final. This information is not in my feed.' }).web, true);
+});

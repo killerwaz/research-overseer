@@ -9,7 +9,8 @@ const NO_ANSWER = /\b(the feed|your feed|feed's articles)\b[^.?!]{0,80}\b(doesn.
 const SMALL_TALK = /^\s*(hi|hey|hello|thanks?|thank you|ok(ay)?|cool|nice|great|bye|good (morning|night|evening))\b/i;
 const ABOUT_BOT = /\b(sources?|feeds? (are|you)|runs?|status|watching|subscri\w*|schedul\w*|scrape|transcribe|remember|forget)\b/i;
 
-const FROM_MEMORY = /\b(general knowledge|common knowledge|from (my )?(own )?(training|memory|knowledge)|not (found )?in (your|the) (current )?(rss )?feed|isn.t in (your|the) feed|outside (of )?(your|the) feed)\b/i;
+// "my feed" too (2026-10-21): "Argentina, who defeated France ... This information is not in my feed."
+const FROM_MEMORY = /\b(general knowledge|common knowledge|from (my )?(own )?(training|memory|knowledge)|not (found )?in (your|the|my) (current )?(rss )?feed|isn.t in (your|the|my) feed|outside (of )?(your|the|my) feed)\b/i;
 
 function needsWeb({ question, reply, alreadyWeb, feedItems }) {
   const q = String(question || '').trim(), r = String(reply || '');

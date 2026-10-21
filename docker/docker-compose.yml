@@ -29,8 +29,12 @@ services:
       - N8N_RUNNERS_ENABLED=true
       # deep research (WF-46) runs one ~6.5 min Code node; the default stops any Code node at 300 s
       - N8N_RUNNERS_TASK_TIMEOUT=900
+      # #17 "save #3" writes notes here, and nowhere else on disk
+      - N8N_RESTRICT_FILE_ACCESS_TO=/vault
     volumes:
       - n8n_data:/home/node/.n8n
+      # ONE folder of his Obsidian vault (.env OBSIDIAN_SAVES_DIR), not the whole vault
+      - ${OBSIDIAN_SAVES_DIR}:/vault
     networks:
       - overseer
 

@@ -101,3 +101,9 @@ test('topic brief pages: 6 rows asked, 5 shown, "more" shows 6-10 numbered on', 
   assert.equal(B.briefAsk('more', p0.output).topic_more, true);
   assert.equal(B.briefTopicReply('mcp', { items: mk(5) }, 1).output, 'That was everything on mcp.');
 });
+
+test('a bare "more" within 2 hours of a brief pages it, even after another message', () => {
+  assert.deepEqual(B.briefAsk('more', 'Saved to Obsidian (Research Overseer Saves):\n#2 X (550)', 'true'), { go: true, more: true, topic: '', days: '', topic_more: null });
+  assert.equal(B.briefAsk('more', 'Saved to Obsidian', 'false').go, false);
+  assert.equal(B.briefAsk('tell me more about it', 'x', 'true').go, false);
+});

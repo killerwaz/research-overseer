@@ -17,7 +17,10 @@ const MORE_WORDS = /^\s*(?:more|next|next (?:5|five|page)|show (?:me )?more|the 
 const WINDOW_WORDS = /\b(today|yesterday|this week|last week|past week|this month|last (\d{1,2}) days?|past (\d{1,2}) days?)\b/i;
 
 // { go, more, topic, days } — days = an explicit window in days ('' = since the last brief)
-function briefAsk(text, lastBot) {
+// recentBrief = a brief in the last 2 hours (WF-00 'Last bot msg'): "more" after
+// "save #2" still pages it — left to the agent it re-listed #2 and #3 as "6." and
+// "7." (2026-10-21), so "save #6" would have saved the wrong item.
+function briefAsk(text, lastBot, recentBrief) {
   const t = String(text || '').trim();
   // only after a brief this module wrote: the agent copied the layout, "Say 'more'"
   // included, into a "brief me on bangladesh" reply (end to end, 2026-10-21)
@@ -26,6 +29,8 @@ function briefAsk(text, lastBot) {
   // invented three "Kaggle - ..." articles (end to end, 2026-10-21)
   if (MORE_WORDS.test(t) && /^(\d+ new stor(?:y|ies) since|More since|Best on |More on )/.test(lb) && /Say "more" for the next \d+/.test(lb))
     return { go: true, more: true, topic: '', days: '', topic_more: /^(Best on |More on )/.test(lb) };
+  // the mode (topic or plain) then comes from the stored state
+  if (MORE_WORDS.test(t) && String(recentBrief) === 'true') return { go: true, more: true, topic: '', days: '', topic_more: null };
   const m = t.match(BRIEF_WORDS);
   if (!m) return { go: false };
   let rest = t.slice(m[0].length);

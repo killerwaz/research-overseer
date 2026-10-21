@@ -297,11 +297,13 @@ return $('Feed switch?').all(1).map(i => ({ json: { ...i.json, sources, runs, fi
         "(select floor(extract(epoch from now() - created_at) / 60)::int from chat_results where chat_id = $1::bigint) as list_age_min, " +
         "coalesce((select json_agg(json_build_object('title', f.title, 'url', f.canonical_url) order by u.k)::text from chat_results cr, unnest(cr.item_ids) with ordinality u(id, k) left join feed_items f on f.id = u.id where cr.chat_id = $1::bigint), '[]') as list_items, " +
         // his previous message, for "deep search on that" (shared/deep-trigger.js); this one is not written yet
-        "coalesce((select message->>'content' from n8n_chat_histories where session_id = $1::text and message->>'type' = 'human' order by id desc limit 1), '') as last_human",
+        "coalesce((select message->>'content' from n8n_chat_histories where session_id = $1::text and message->>'type' = 'human' order by id desc limit 1), '') as last_human, " +
+        // #16: a brief in the last 2 hours — a bare "more" pages it even after a "save #2" in between
+        "coalesce((select (updated_at > now() - interval '2 hours')::text from settings where key = 'brief:' || $1::text), 'false') as brief_recent",
       options: { queryReplacement: "={{ String($('Agent input').first().json.chat_id) }}" } },
     credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true, onError: 'continueRegularOutput' },
   { id: 'bigq', name: 'Big picture?', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1180, 160],
-    parameters: { mode: 'runOnceForAllItems', jsCode: inline('synth.js') + inline('sweep-confirm.js') + inline('answer-check.js') + inline('referent.js') + inline('search-gate.js') + inline('deep-trigger.js') + inline('brief.js') + `
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('synth.js') + inline('sweep-confirm.js') + inline('answer-check.js') + inline('referent.js') + inline('search-gate.js') + inline('deep-trigger.js') + inline('brief.js') + inline('obsidian.js') + `
 let lb = {};
 try { lb = $input.first().json || {}; } catch (e) {}
 const lastBot = lb.last_bot || '';
@@ -310,8 +312,10 @@ return $('Recall note').all().map(i => {
   const deep = deepAsk(i.json.text || '', String(lb.last_human || '').replace(/\\s*\\[live data, fetched just now:[\\s\\S]*$/, ''));
   if (deep.go) return { json: { ...i.json, deep_go: 'true', deep_q: deep.question, sweep: '', synth_go: 'false', ref_route: '', search_ok: 'false' } };
   const s = sweepDecision(i.json.text || '', lastBot);
+  // #17 "save #3" / "save it": a note in his vault, in code (shared/obsidian.js)
+  if (!s.sweep && saveAsk(i.json.text || '').go) return { json: { ...i.json, ...s, save_go: 'true', brief_go: 'false', synth_go: 'false', ref_route: '', search_ok: 'false' } };
   // #16 "brief me" / "what did I miss" / "more" after a brief: answered in code (shared/brief.js)
-  if (!s.sweep && briefAsk(i.json.text || '', lastBot).go) return { json: { ...i.json, ...s, brief_go: 'true', synth_go: 'false', ref_route: '', search_ok: 'false' } };
+  if (!s.sweep && briefAsk(i.json.text || '', lastBot, lb.brief_recent).go) return { json: { ...i.json, ...s, brief_go: 'true', synth_go: 'false', ref_route: '', search_ok: 'false' } };
   // a message that points at something already shown is answered about THAT,
   // before any keyword route ("summarize the video" is not an overview question)
   let items = [];
@@ -797,6 +801,66 @@ return [{ json: { sql: rememberSql(a.chat_id, a.text, m.output, vec) } }];`.trim
     parameters: { operation: 'executeQuery', query: '={{ $json.sql }}', options: {} },
     credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true, onError: 'continueRegularOutput' },
 
+  // ---- #17 save to Obsidian (2026-10-21, shared/obsidian.js, sql/018) ----
+  // "save #3" -> one markdown note per item in /vault (= his vault's "Research
+  // Overseer Saves" folder, the only path n8n may write). Never overwrites: the
+  // saves table answers "already in your vault". No model; own memory rows.
+  { id: 'saveif', name: 'Save?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1222, 200],
+    parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, combinator: 'and',
+      conditions: [{ id: 'sv1', leftValue: '={{ $json.save_go }}', rightValue: 'true', operator: { type: 'string', operation: 'equals' } }] } } },
+  { id: 'saveprep', name: 'Save prep', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1240, 260],
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('obsidian.js') + `
+const a = $('Agent input').first().json;
+let lb = {};
+try { lb = $('Last bot msg').first().json || {}; } catch (e) {}
+const pos = savePositions(saveAsk(a.text || ''), lb.list_n);
+return [{ json: { error: pos.error || '', sql: pos.error ? 'select null::text as rows' : saveFetchSql(a.chat_id, pos.nums) } }];`.trim() } },
+  { id: 'savefetch', name: 'Save fetch', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [1250, 260],
+    parameters: { operation: 'executeQuery', query: '={{ $json.sql }}', options: {} },
+    credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true, onError: 'continueRegularOutput' },
+  // one item per note to write (markdown as binary), or one item with nothing to write
+  { id: 'savenotes', name: 'Save notes', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1260, 260],
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('obsidian.js') + `
+const a = $('Agent input').first().json;
+let rows = [];
+try { rows = JSON.parse(($input.first().json || {}).rows || '[]') || []; } catch (e) {}
+const day = new Date(Date.now() + 6 * 3600e3).toISOString().slice(0, 10);   /* Dhaka date */
+const plan = savePlan(rows, a.chat_id, day);
+if (!plan.files.length) return [{ json: { has_file: 'false', plan } }];
+return plan.files.map((f) => ({ json: { has_file: 'true', plan, path: '/vault/' + f.file, file: f.file },
+  binary: { data: { data: Buffer.from(f.markdown, 'utf8').toString('base64'), mimeType: 'text/markdown', fileName: f.file } } }));`.trim() } },
+  { id: 'savenotesif', name: 'Notes?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1265, 260],
+    parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, combinator: 'and',
+      conditions: [{ id: 'nt1', leftValue: '={{ $json.has_file }}', rightValue: 'true', operator: { type: 'string', operation: 'equals' } }] } } },
+  { id: 'savewrite', name: 'Write note', type: 'n8n-nodes-base.readWriteFile', typeVersion: 1, position: [1270, 300],
+    parameters: { operation: 'write', fileName: '={{ $json.path }}', dataPropertyName: 'data', options: {} },
+    onError: 'continueRegularOutput' },
+  // reply + the saves rows (written notes only) + both memory rows, in one statement
+  { id: 'savereply', name: 'Save reply', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1280, 260],
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('obsidian.js') + `
+const a = $('Agent input').first().json;
+const prep = $('Save prep').first().json;
+const notes = $('Save notes').all().map((i) => i.json);
+const plan = (notes[0] || {}).plan || { files: [], already: [] };
+let written = [];
+try { written = $('Write note').all().map((i) => i.json); } catch (e) {}
+const failed = plan.files.filter((f, k) => !written[k] || written[k].error).map((f) => f.file);
+const r = (($('Save fetch').first() || {}).json) || {};
+const output = prep.error ? prep.error
+  : (r.rows == null && !plan.files.length && !plan.already.length) ? "I couldn't read that item just now. Try again in a minute."
+  : saveReply(plan, failed);
+const written_ok = plan.files.filter((f) => !failed.includes(f.file));
+const chat = String(a.chat_id).replace(/[^0-9-]/g, '');
+const txt = (s) => "convert_from(decode('" + Buffer.from(String(s || ''), 'utf8').toString('base64') + "', 'base64'), 'UTF8')";
+let sql = "insert into n8n_chat_histories (session_id, message) values ('" + chat + "', jsonb_build_object('type', 'human', 'content', " + txt(a.text) + ", 'additional_kwargs', '{}'::jsonb, 'response_metadata', '{}'::jsonb)), ('" + chat + "', jsonb_build_object('type', 'ai', 'content', " + txt(output) + ", 'tool_calls', '[]'::jsonb, 'invalid_tool_calls', '[]'::jsonb, 'additional_kwargs', '{}'::jsonb, 'response_metadata', '{}'::jsonb));";
+if (written_ok.length) sql += ' ' + saveRecordSql(written_ok, chat) + ';';
+return [{ json: { output, save_sql: sql } }];`.trim() } },
+  { id: 'saverecord', name: 'Save record', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [1290, 260],
+    parameters: { operation: 'executeQuery', query: '={{ $json.save_sql }}', options: {} },
+    credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true, onError: 'continueRegularOutput' },
+  { id: 'saveres', name: 'Save result', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1300, 260],
+    parameters: { mode: 'runOnceForAllItems', jsCode: "return [{ json: { output: $('Save reply').first().json.output, saved: true } }];" } },
+
   // ---- #16 "brief me" (2026-10-21, shared/brief.js) ----
   // Best 5 stories that ARRIVED since his last brief (first: 7 days), one row per
   // story, numbered (chat_results, so "#3" works), 👍/👎, "more" for the next 5.
@@ -812,18 +876,20 @@ return [{ json: { sql: rememberSql(a.chat_id, a.text, m.output, vec) } }];`.trim
     credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true, onError: 'continueRegularOutput' },
   { id: 'briefprep', name: 'Brief prep', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1250, 40],
     parameters: { mode: 'runOnceForAllItems', jsCode: inline('brief.js') + `
-let lastBot = '';
-try { lastBot = $('Last bot msg').first().json.last_bot || ''; } catch (e) {}
-const ask = briefAsk($('Agent input').first().json.text || '', lastBot);
+let lb = {};
+try { lb = $('Last bot msg').first().json || {}; } catch (e) {}
+const ask = briefAsk($('Agent input').first().json.text || '', lb.last_bot || '', lb.brief_recent);
 const st = parseState(($input.first().json || {}).state);
+// "more" with the brief not the last message: page whichever brief came last
+if (ask.more && ask.topic_more == null) ask.topic_more = st.mode === 'topic';
 // topic brief, or "more" after one: WF-31 pages it (ttopic/tpage kept beside the plain brief's state)
 if (ask.topic || ask.topic_more) {
   const tpage = ask.topic_more ? Number(st.tpage || 0) + 1 : 0;
   const topic = ask.topic_more ? String(st.ttopic || '') : ask.topic;
-  return [{ json: { plan: { topic, tpage, store: { ...st, ttopic: topic, tpage } }, topic_go: 'true', limit: briefTopicLimit(tpage) } }];
+  return [{ json: { plan: { topic, tpage, store: { ...st, ttopic: topic, tpage, mode: 'topic' } }, topic_go: 'true', limit: briefTopicLimit(tpage) } }];
 }
 const plan = briefPlan(ask, st, new Date().toISOString());
-plan.store = { ...plan.store, ttopic: st.ttopic || '', tpage: st.tpage || 0 };
+plan.store = { ...plan.store, ttopic: st.ttopic || '', tpage: st.tpage || 0, mode: 'plain' };
 return [{ json: { plan, topic_go: 'false', sql: briefSql({ since: plan.since, topic: '', page: plan.page }) } }];`.trim() } },
   { id: 'brieftopicif', name: 'Brief topic?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1255, 0],
     parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, combinator: 'and',
@@ -860,7 +926,8 @@ const ids = out.items.map((i) => Number(i.id)).filter((x) => Number.isInteger(x)
 let sql = "insert into n8n_chat_histories (session_id, message) values ('" + chat + "', jsonb_build_object('type', 'human', 'content', " + txt(a.text) + ", 'additional_kwargs', '{}'::jsonb, 'response_metadata', '{}'::jsonb)), ('" + chat + "', jsonb_build_object('type', 'ai', 'content', " + txt(out.output) + ", 'tool_calls', '[]'::jsonb, 'invalid_tool_calls', '[]'::jsonb, 'additional_kwargs', '{}'::jsonb, 'response_metadata', '{}'::jsonb));";
 if (!failed) sql += " insert into settings (key, value, updated_at) values ('brief:" + chat + "', " + txt(JSON.stringify(plan.store)) + ", now()) on conflict (key) do update set value = excluded.value, updated_at = now();";
 /* "more" keeps the earlier numbers: the stored list grows (n = position) */
-if (topic) { /* WF-31 already stored the list */ }
+/* WF-31 stored the list, plus the one extra row asked for to see if "more" exists: trim it to what he saw ("save #6" said "6 items") */
+if (topic) { if (!failed) sql += " update chat_results set item_ids = item_ids[1:" + (plan.tpage * 5 + out.items.length) + "] where chat_id = " + chat + ";"; }
 else if (ids.length && plan.page === 0) sql += " insert into chat_results (chat_id, item_ids, topic, created_at) values (" + chat + ", array[" + ids.join(',') + "]::bigint[], 'brief', now()) on conflict (chat_id) do update set item_ids = excluded.item_ids, topic = excluded.topic, created_at = excluded.created_at;";
 else if (ids.length) sql += " update chat_results set item_ids = item_ids[1:" + (plan.page * 5) + "] || array[" + ids.join(',') + "]::bigint[], created_at = now() where chat_id = " + chat + ";";
 return [{ json: { output: out.output, items: out.items, save_sql: sql } }];`.trim() } },
@@ -1038,7 +1105,16 @@ const connections = {
   'Big picture?': { main: [[{ node: 'Deep?', type: 'main', index: 0 }]] },
   'Deep?': { main: [[{ node: 'Deep research', type: 'main', index: 0 }], [{ node: 'Sweep?', type: 'main', index: 0 }]] },
   'Sweep?': { main: [[{ node: 'Run sweep', type: 'main', index: 0 }], [{ node: 'Sweep declined?', type: 'main', index: 0 }]] },
-  'Sweep declined?': { main: [[{ node: 'Sweep reply', type: 'main', index: 0 }], [{ node: 'Brief?', type: 'main', index: 0 }]] },
+  'Sweep declined?': { main: [[{ node: 'Sweep reply', type: 'main', index: 0 }], [{ node: 'Save?', type: 'main', index: 0 }]] },
+  'Save?': { main: [[{ node: 'Save prep', type: 'main', index: 0 }], [{ node: 'Brief?', type: 'main', index: 0 }]] },
+  'Save prep': { main: [[{ node: 'Save fetch', type: 'main', index: 0 }]] },
+  'Save fetch': { main: [[{ node: 'Save notes', type: 'main', index: 0 }]] },
+  'Save notes': { main: [[{ node: 'Notes?', type: 'main', index: 0 }]] },
+  'Notes?': { main: [[{ node: 'Write note', type: 'main', index: 0 }], [{ node: 'Save reply', type: 'main', index: 0 }]] },
+  'Write note': { main: [[{ node: 'Save reply', type: 'main', index: 0 }]] },
+  'Save reply': { main: [[{ node: 'Save record', type: 'main', index: 0 }]] },
+  'Save record': { main: [[{ node: 'Save result', type: 'main', index: 0 }]] },
+  'Save result': { main: [[{ node: 'Prep reply', type: 'main', index: 0 }, { node: 'Memory text', type: 'main', index: 0 }]] },
   'Brief?': { main: [[{ node: 'Brief state', type: 'main', index: 0 }], [{ node: 'Ref item?', type: 'main', index: 0 }]] },
   'Brief state': { main: [[{ node: 'Brief prep', type: 'main', index: 0 }]] },
   'Brief prep': { main: [[{ node: 'Brief topic?', type: 'main', index: 0 }]] },
