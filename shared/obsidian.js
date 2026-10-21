@@ -97,23 +97,36 @@ function savePlan(rows, chatId, savedDay) {
   return { files, already, record: saveRecordSql(files, chatId) };
 }
 
-// The saves rows for notes actually written (file names as base64).
+// CLAIM the saves rows BEFORE writing (file names as base64): only a note whose row
+// this statement inserted is written, so a note is never written unrecorded and a
+// later save can never overwrite it — the record used to come after the write, and a
+// failed record left a note the next "save" would rewrite (review 2026-10-21).
 function saveRecordSql(files, chatId) {
   const chat = String(chatId).replace(/[^0-9-]/g, '');
   const b64 = (s) => Buffer.from(String(s || ''), 'utf8').toString('base64');
   return files.length ? 'insert into saves (feed_item_id, chat_id, file_name) values ' +
     files.map((f) => '(' + Number(f.id) + ', ' + chat + ", convert_from(decode('" + b64(f.file) + "', 'base64'), 'UTF8'))").join(', ') +
-    ' on conflict (feed_item_id) do nothing' : 'select 1 as skipped';
+    ' on conflict (feed_item_id) do nothing returning feed_item_id' : 'select 1 as skipped';
 }
 
-function saveReply(plan, failedFiles) {
+// A claimed note whose write failed gives its claim back, so "save" can try again.
+function saveReleaseSql(ids) {
+  const list = (ids || []).map(Number).filter((x) => Number.isInteger(x) && x > 0);
+  return list.length ? 'delete from saves where feed_item_id in (' + list.join(',') + ')' : '';
+}
+
+// failedFiles = claimed but the write failed; unclaimedFiles = not recorded (database
+// error), so not written either.
+function saveReply(plan, failedFiles, unclaimedFiles) {
   const bad = new Set(failedFiles || []);
-  const ok = plan.files.filter((f) => !bad.has(f.file));
+  const unrec = new Set(unclaimedFiles || []);
+  const ok = plan.files.filter((f) => !bad.has(f.file) && !unrec.has(f.file));
   const out = [];
   if (ok.length) out.push('Saved to Obsidian (Research Overseer Saves):\n' + ok.map((f) => '#' + f.n + ' ' + f.file.replace(/\.md$/, '')).join('\n'));
   if (plan.already.length) out.push('Already in your vault:\n' + plan.already.map((a) => '#' + a.n + ' ' + String(a.file).replace(/\.md$/, '')).join('\n'));
   if (bad.size) out.push("Couldn't write: " + [...bad].join(', ') + '. Is Docker\'s access to the vault folder still there?');
+  if (unrec.size) out.push("Couldn't record " + [...unrec].join(', ') + ', so nothing was written. Try again in a minute.');
   return out.join('\n\n') || 'Nothing to save.';
 }
 
-module.exports = { saveAsk, savePositions, saveFetchSql, noteFileName, noteMarkdown, savePlan, saveRecordSql, saveReply, SAVE_MAX };
+module.exports = { saveAsk, savePositions, saveFetchSql, noteFileName, noteMarkdown, savePlan, saveRecordSql, saveReleaseSql, saveReply, SAVE_MAX };

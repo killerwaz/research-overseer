@@ -20,13 +20,6 @@ test('a window and a topic are pulled out', () => {
   assert.equal(B.briefAsk('what did I miss today?').days, '1');
 });
 
-test('"more" only right after a brief that offered more', () => {
-  assert.equal(B.briefAsk('more', '49 new stories since Wed 14 Oct 06:58, 14 scored 7+. Best 5:\n...\n\nSay "more" for the next 5.').more, true);
-  assert.equal(B.briefAsk('next 5', 'More since Wed 14 Oct 06:58 (6–10 of 49):\n...\n\nSay "more" for the next 5.').more, true);
-  assert.equal(B.briefAsk('more', 'Here are the items on Nvidia.').go, false);
-  // the agent copying the layout is not a brief
-  assert.equal(B.briefAsk('more', 'Here’s what your feeds have on Bangladesh right now:\n\nTop 5:\n...\n\nSay "more" for the next 5.').go, false);
-});
 
 test('first brief looks back 7 days and moves "last"; a later one starts there', () => {
   const p1 = B.briefPlan(B.briefAsk('brief me'), {}, NOW);
@@ -97,13 +90,27 @@ test('topic brief pages: 6 rows asked, 5 shown, "more" shows 6-10 numbered on', 
   assert.ok(p1.output.startsWith('More on mcp:'));
   assert.deepEqual(p1.items.map((i) => i.n), [6, 7, 8]);
   assert.ok(!p1.output.includes('Say "more"'));
-  // "more" after it is a topic page; the agent's copy of the layout is not
-  assert.equal(B.briefAsk('more', p0.output).topic_more, true);
   assert.equal(B.briefTopicReply('mcp', { items: mk(5) }, 1).output, 'That was everything on mcp.');
 });
 
-test('a bare "more" within 2 hours of a brief pages it, even after another message', () => {
-  assert.deepEqual(B.briefAsk('more', 'Saved to Obsidian (Research Overseer Saves):\n#2 X (550)', 'true'), { go: true, more: true, topic: '', days: '', topic_more: null });
-  assert.equal(B.briefAsk('more', 'Saved to Obsidian', 'false').go, false);
-  assert.equal(B.briefAsk('tell me more about it', 'x', 'true').go, false);
+
+test('"more" pages a brief only while its list is the one shown (review 2026-10-21)', () => {
+  assert.deepEqual(B.briefAsk('more', 'anything', 'brief'), { go: true, more: true, topic: '', days: '', topic_more: false });
+  assert.equal(B.briefAsk('next 5', '', 'brief-topic').topic_more, true);
+  // after "anything on nvidia?" the list is WF-31's (topic null): not the brief's
+  assert.equal(B.briefAsk('more', '49 new stories since Wed 14 Oct 06:58 ... Say "more" for the next 5.', '').go, false);
+  assert.equal(B.briefAsk('tell me more about it', '', 'brief').go, false);
+});
+
+test('questions that merely use brief/recap words are not briefs (review 2026-10-21)', () => {
+  for (const q of ['Brief history of the EU AI Act?', 'a brief overview of agent evals', 'recap of the Langfuse deal', 'brief description of MCP please'])
+    assert.equal(B.briefAsk(q).go, false, q);
+  for (const q of ['brief me', 'brief me, please', 'give me a brief', 'recap', 'catch me up!', 'brief me on pathao', 'catch me up on this week', 'what did I miss today?'])
+    assert.equal(B.briefAsk(q).go, true, q);
+});
+
+test('a topic brief keeps its window in the reply', () => {
+  const r = B.briefTopicReply('funding', { items: [{ n: 1, id: 1, title: 'Modal $16B', score: 7 }] }, 0, '7');
+  assert.ok(r.output.startsWith('Best on funding (this week):'));
+  assert.equal(B.briefTopicReply('funding', { items: [] }, 0, '1').output, 'Your feed has nothing on funding (today) yet.');
 });

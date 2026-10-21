@@ -62,3 +62,14 @@ test('fetch SQL keeps to his chat and the asked positions', () => {
   assert.ok(s.includes('cr.chat_id = 42'));
   assert.ok(s.includes('u.k = any(array[3,4]::bigint[])'));
 });
+
+test('claim before write: the record returns what it claimed; failed writes give it back (review 2026-10-21)', () => {
+  const p = O.savePlan([{ k: 1, id: 5, title: 'A', canonical_url: 'u', summary: 's' }, { k: 2, id: 6, title: 'B', canonical_url: 'u', summary: 's' }], 42, '2026-10-21');
+  assert.ok(p.record.endsWith('on conflict (feed_item_id) do nothing returning feed_item_id'));
+  assert.equal(O.saveReleaseSql([5, 'x', 0]), 'delete from saves where feed_item_id in (5)');
+  assert.equal(O.saveReleaseSql([]), '');
+  const r = O.saveReply(p, ['A (5).md'], ['B (6).md']);
+  assert.ok(r.includes("Couldn't write: A (5).md"));
+  assert.ok(r.includes("Couldn't record B (6).md, so nothing was written"));
+  assert.ok(!r.startsWith('Saved'));
+});

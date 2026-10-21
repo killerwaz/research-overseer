@@ -16,24 +16,28 @@ const BRIEF_WORDS = /^\s*(?:hey |ok |so |please )?(?:(?:can you |could you )?(?:
 const MORE_WORDS = /^\s*(?:more|next|next (?:5|five|page)|show (?:me )?more|the next (?:5|five)|keep going)\s*[.!?]*\s*$/i;
 const WINDOW_WORDS = /\b(today|yesterday|this week|last week|past week|this month|last (\d{1,2}) days?|past (\d{1,2}) days?)\b/i;
 
+// What may follow the brief words for it to BE a brief request: nothing, a topic
+// after on/about/for, or a time window. "Brief history of the EU AI Act?", "a brief
+// overview of agent evals", "recap of the Langfuse deal" are questions (review 2026-10-21).
+const BRIEF_TAIL = /^\s*(?:[,:;!.?]+\s*)?(?:$|(?:please\b|on|about|for|regarding|re|with|from|since|today|yesterday|this|last|past|everything|all)\b)/i;
+
+// The numbered list chat_results holds was written by a brief (chat_results.topic,
+// WF-00 'Last bot msg' list_topic): 'brief' = plain, 'brief-topic' = "brief me on X".
+const BRIEF_LISTS = ['brief', 'brief-topic'];
+
 // { go, more, topic, days } — days = an explicit window in days ('' = since the last brief)
-// recentBrief = a brief in the last 2 hours (WF-00 'Last bot msg'): "more" after
-// "save #2" still pages it — left to the agent it re-listed #2 and #3 as "6." and
-// "7." (2026-10-21), so "save #6" would have saved the wrong item.
-function briefAsk(text, lastBot, recentBrief) {
+// "more" pages a brief only while the brief's list is the one he has: left to the
+// agent it invented three "Kaggle - ..." articles, and re-listed #2/#3 as "6."/"7."
+// (2026-10-21). After another list ("anything on nvidia?") "more" is not the brief's:
+// paging then mixed the brief's items into Nvidia's numbers (review 2026-10-21).
+function briefAsk(text, lastBot, listTopic) {
   const t = String(text || '').trim();
-  // only after a brief this module wrote: the agent copied the layout, "Say 'more'"
-  // included, into a "brief me on bangladesh" reply (end to end, 2026-10-21)
-  const lb = String(lastBot || '');
-  // "more" after a topic brief pages that topic in code too: left to the agent it
-  // invented three "Kaggle - ..." articles (end to end, 2026-10-21)
-  if (MORE_WORDS.test(t) && /^(\d+ new stor(?:y|ies) since|More since|Best on |More on )/.test(lb) && /Say "more" for the next \d+/.test(lb))
-    return { go: true, more: true, topic: '', days: '', topic_more: /^(Best on |More on )/.test(lb) };
-  // the mode (topic or plain) then comes from the stored state
-  if (MORE_WORDS.test(t) && String(recentBrief) === 'true') return { go: true, more: true, topic: '', days: '', topic_more: null };
+  const lt = String(listTopic || '');
+  if (MORE_WORDS.test(t) && BRIEF_LISTS.includes(lt)) return { go: true, more: true, topic: '', days: '', topic_more: lt === 'brief-topic' };
   const m = t.match(BRIEF_WORDS);
   if (!m) return { go: false };
   let rest = t.slice(m[0].length);
+  if (!BRIEF_TAIL.test(rest)) return { go: false };
   let days = '';
   const w = rest.match(WINDOW_WORDS);
   if (w) {
@@ -130,11 +134,19 @@ function briefReply(plan, rows, total, good) {
 // "#7" works after "more".
 function briefTopicLimit(page) { return String((Number(page) + 1) * BRIEF_PAGE + 1); }
 
-function briefTopicReply(topic, result, page) {
+// days = the window he asked for ("catch me up on funding this week" = 7), passed to
+// WF-31 as max_age_days by publish date: it was parsed and then dropped (review 2026-10-21).
+function windowLabel(days) {
+  const d = Number(days) || 0;
+  return !d ? '' : d === 1 ? ' (today)' : d === 2 ? ' (since yesterday)' : d === 7 ? ' (this week)' : ' (last ' + d + ' days)';
+}
+
+function briefTopicReply(topic, result, page, days) {
   const r = result || {};
   const p = Number(page) || 0;
   const all = Array.isArray(r.items) ? r.items : [];
   const items = all.slice(p * BRIEF_PAGE, (p + 1) * BRIEF_PAGE);
+  topic = topic + windowLabel(days);
   if (!all.length) return { output: 'Your feed has nothing on ' + topic + ' yet.', items: [], empty: true };
   if (!items.length) return { output: 'That was everything on ' + topic + '.', items: [] };
   const lines = items.map((it) => it.n + '. ' + String(it.title || it.canonical_url || '').trim() +
@@ -146,4 +158,4 @@ function briefTopicReply(topic, result, page) {
     items: items.map((it) => ({ n: it.n, id: Number(it.id), title: it.title, canonical_url: it.canonical_url })) };
 }
 
-module.exports = { BRIEF_PAGE, BRIEF_FIRST_DAYS, briefAsk, briefKey, parseState, briefPlan, briefSql, briefReply, briefTopicReply, briefTopicLimit, fmtWhen };
+module.exports = { BRIEF_PAGE, BRIEF_FIRST_DAYS, BRIEF_LISTS, briefAsk, briefKey, parseState, briefPlan, briefSql, briefReply, briefTopicReply, briefTopicLimit, windowLabel, fmtWhen };

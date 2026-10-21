@@ -91,6 +91,18 @@ function plainText(html) {
 // while an answer is being written), and, when it showed items, the chat's
 // numbered list, so "#1" / "the video" resolve to it. base64 keeps web text out
 // of the SQL (CLAUDE.md: '$785606.5' breaks the Postgres node).
+// His message + the reply, as the two memory rows the agent's memory node would have
+// written, for replies made in code (brief, save, PDF, synth). One helper instead of
+// four hand-built copies (review 2026-10-21). Text as base64; no trailing ';'.
+function exchangeSql(chatId, human, ai) {
+  const chat = String(chatId == null ? '' : chatId).trim();
+  if (!/^-?\d+$/.test(chat)) return 'select 1 as skipped';
+  const t = (s) => "convert_from(decode('" + Buffer.from(String(s == null ? '' : s), 'utf8').toString('base64') + "', 'base64'), 'UTF8')";
+  return "insert into n8n_chat_histories (session_id, message) values ('" + chat + "', jsonb_build_object('type', 'human', 'content', " + t(human) +
+    ", 'additional_kwargs', '{}'::jsonb, 'response_metadata', '{}'::jsonb)), ('" + chat + "', jsonb_build_object('type', 'ai', 'content', " + t(ai) +
+    ", 'tool_calls', '[]'::jsonb, 'invalid_tool_calls', '[]'::jsonb, 'additional_kwargs', '{}'::jsonb, 'response_metadata', '{}'::jsonb))";
+}
+
 function botSaidSql(chatId, html, itemIds, source) {
   const chat = String(chatId || '').trim();
   const text = plainText(html);
@@ -164,4 +176,4 @@ function answerMessage(item, answer) {
   return ('\u{1F3AC} <b>' + esc((item || {}).title) + '</b>\n\n' + esc(answer)).slice(0, 4000);
 }
 
-module.exports = { itemLookupSql, answerMessage, referentKind, refRoute, refNote, REF_WINDOW_MIN, plainText, botSaidSql, AGENT_ROWS, itemText, itemBody, plainSummary, itemAnswer };
+module.exports = { exchangeSql, itemLookupSql, answerMessage, referentKind, refRoute, refNote, REF_WINDOW_MIN, plainText, botSaidSql, AGENT_ROWS, itemText, itemBody, plainSummary, itemAnswer };

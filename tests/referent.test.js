@@ -106,3 +106,12 @@ test('a link instruction looks its item up with both texts base64, never as lite
 test('the answer message carries the title and escapes the answer', () => {
   assert.strictEqual(answerMessage({ title: 'A & B' }, 'x < y'), '\u{1F3AC} <b>A &amp; B</b>\n\nx &lt; y');
 });
+
+test('exchangeSql: both memory rows, text as base64, bad chat id refused', () => {
+  const { exchangeSql } = require('../shared/referent.js');
+  const s = exchangeSql(-42, 'save #3', 'Saved $785606.5 note');
+  assert.ok(s.startsWith("insert into n8n_chat_histories (session_id, message) values ('-42', jsonb_build_object('type', 'human'"));
+  assert.ok(s.includes("'type', 'ai'"));
+  assert.ok(!s.includes('785606'));
+  assert.equal(exchangeSql('1; drop', 'a', 'b'), 'select 1 as skipped');
+});

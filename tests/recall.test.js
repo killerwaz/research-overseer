@@ -72,6 +72,7 @@ test('a question about past chats with nothing recalled says there is no record'
 test('questions about this chat are recognised (never sent to the web)', () => {
   for (const q of ['what did you tell me about openai funding?', 'what did we discuss about nvidia earnings?', 'remind me what you said about the Paystack acquisition', 'did I ask about Pathao?'])
     assert.equal(R.asksHistory(q), true, q);
-  for (const q of ['who bought langfuse?', 'what is the capital of Peru?', 'tell me about #3'])
+  for (const q of ['who bought langfuse?', 'what is the capital of Peru?', 'tell me about #3', 'can you tell me how tall Everest is?',
+    'could you tell me who bought langfuse?', 'what have you found on nvidia?', 'what did you find on bangladesh bank?'])
     assert.equal(R.asksHistory(q), false, q);
 });

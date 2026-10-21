@@ -65,7 +65,10 @@ function parseRows(rows) {
 // A question about what was said before, with nothing recalled: the 9B mirrored
 // "what did we discuss about nvidia earnings?" with "We discussed NVIDIA earnings
 // in this chat" and then listed feed items (end to end, 2026-10-13).
-const ASKS_HISTORY = /\b(we (discuss|discussed|talk|talked|spoke)|you (told|tell|said|say|found|gave|showed|mentioned)|did (i|we) (ask|discuss|talk)|i asked( you)?|remind me what|last time)\b/i;
+// Past tense only: "can you tell me how tall Everest is?" and "what have you found on
+// nvidia?" are ordinary questions — the first version matched "you tell"/"you found"
+// and kept them from the web, with a "say you have no record" note (review 2026-10-21).
+const ASKS_HISTORY = /\b(we (discussed|talked|spoke)|did (we|i) (discuss|talk|ask)|did you (tell|say|mention|show|give)|you (told|said|mentioned|showed|gave) me|i asked( you)?|remind me what|last time (we|you|i))\b/i;
 const NO_HISTORY = '[earlier chats with this user: none match this message. If they ask what was said before, say plainly you have no record of discussing it, then answer from the feed if it helps.]';
 
 // A question about what was said in this chat is never sent to the web: the web
