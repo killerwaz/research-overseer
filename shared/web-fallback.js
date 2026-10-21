@@ -130,4 +130,23 @@ function formatWebReply(answer, results, checkMissing) {
   return 'From the web (not your feed):\n' + a + '\n\nSources:\n' + show.map((n) => '[' + n + '] ' + res[n - 1].title + ' ' + res[n - 1].url).join('\n');
 }
 
-module.exports = { needsWeb, judgeBody, readJudge, offersSearch, saysLack, judgeNeeded, standaloneBody, readStandalone, tavilyBody, webAnswerBody, formatWebReply };
+// How many feed items the tools returned this turn (agent steps, the redo's
+// prefetch). A reply that says "the feed doesn't ..." AFTER answering from them
+// ("The feed doesn't have more granular utilization metrics, but the 40-60% range
+// is the production baseline", Q6, 2026-10-21) went to the web on that wording
+// and lost a right answer, about 1 run in 3. With items, the 9B judge decides.
+function itemsReturned(...sources) {
+  let n = 0;
+  const visit = (x, d) => {
+    if (x == null || d > 8) return;
+    if (typeof x === 'string') { const s = x.trim(); if (s[0] === '{' || s[0] === '[') { try { visit(JSON.parse(s), d + 1); } catch (e) {} } return; }
+    if (Array.isArray(x)) { x.forEach((y) => visit(y, d + 1)); return; }
+    if (typeof x !== 'object') return;
+    if (Array.isArray(x.items)) n += x.items.filter((i) => i && Number(i.id) > 0).length;
+    else for (const k of Object.keys(x)) if (k !== 'structured' && k !== 'evidence') visit(x[k], d + 1);
+  };
+  sources.forEach((s) => visit(s, 0));
+  return n;
+}
+
+module.exports = { itemsReturned, needsWeb, judgeBody, readJudge, offersSearch, saysLack, judgeNeeded, standaloneBody, readStandalone, tavilyBody, webAnswerBody, formatWebReply };

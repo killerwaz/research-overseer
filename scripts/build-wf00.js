@@ -679,6 +679,18 @@ try { rc = $('Recall note').first().json || {}; } catch (e) {}
 if (n.web && !a.synth && !bareReply(ctx.text) && answeredFromRecall(a.output || '', rc.recall_rows, (r) => needsWeb({ question: r.question, reply: r.answer }).web)) {
   n = { web: false, reason: 'earlier chat: the judge decides' }; judge = true;
 }
+// the reply answered from feed items but also says "the feed doesn't ..." about a
+// detail (Q6: "doesn't have more granular metrics, but the 40-60% range is the
+// baseline" went to the web ~1 run in 3). With items returned and the fit check
+// not objecting, the 9B judges. Measured on 7 such replies x2: it kept 2 of the 3
+// answers the rule threw away and sent all 4 real non-answers to the web.
+let pf = null;
+try { pf = $('Prefetch').first().json; } catch (e) {}
+if (n.web && n.reason === 'the feed has no answer' && !a.synth && a.fit_miss !== 'true' && !bareReply(ctx.text) && itemsReturned(a.intermediateSteps, pf) > 0) {
+  n = { web: false, reason: 'answer with a gap: the judge decides' }; judge = true;
+}
+// "what did you tell me about X?" is about this chat: never the web (shared/recall.js asksHistory)
+if (asksHistory(ctx.text)) { n = { web: false, reason: 'about earlier chats' }; judge = false; }
 return [{ json: { ...a, web_go: String(n.web), web_reason: n.reason, judge_go: String(judge),
   llm_body: judge ? JSON.stringify(judgeBody('qwen/qwen3.5-9b', ctx.text || '', a.output || '', n.reason === 'earlier chat: the judge decides')) : '' } }];`.trim() } },
   { id: 'judgeif', name: 'Judge?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [2060, 220],

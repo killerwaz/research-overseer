@@ -68,7 +68,11 @@ const cases = [...SET.questions, ...SET.absent.filter((a) => !a.near), ...(WEB ?
     const searched = (await maxRun()) > runBefore;
     let pass;
     const fromWeb = /^(From the web|Not in your feed)/.test(reply.trim());
-    if (c.expect) pass = new RegExp(c.expect, 'i').test(reply) && (!WEB || (c.id >= 200) === fromWeb);
+    // A right answer passes wherever it came from; the PATH is reported on its own
+    // (feed_answered / web_where_feed_has_it), so a retrieval miss stays visible
+    // without being scored as a wrong answer (2026-10-21: 3 of 4 "failures" were
+    // right answers taken from the web).
+    if (c.expect) pass = new RegExp(c.expect, 'i').test(reply);
     else if (WEB) pass = fromWeb;
     else pass = /nothing|\bno\b[^.]{0,30}\b(items?|results?|matches|coverage|articles?|news|stor(y|ies)|information|info|details|data)\b|doesn.t (have|mention|cover|say)|not (find|found|in the feed|covered)|couldn.t find/i.test(reply);
     if (searched) pass = false;
@@ -79,7 +83,9 @@ const cases = [...SET.questions, ...SET.absent.filter((a) => !a.near), ...(WEB ?
   }
   const q = results.filter((r) => r.expect !== '(nothing found)' && r.id < 200), a = results.filter((r) => r.expect === '(nothing found)'), g = results.filter((r) => r.id >= 200);
   const summary = { answered: q.filter((r) => r.pass).length + '/' + q.length, absent_ok: a.filter((r) => r.pass).length + '/' + a.length,
-    runs_started: results.filter((r) => r.searched).length, ...(WEB ? { general_ok: g.filter((r) => r.pass).length + '/' + g.length, web_answers: results.filter((r) => r.web).length } : {}) };
+    runs_started: results.filter((r) => r.searched).length, ...(WEB ? { general_ok: g.filter((r) => r.pass).length + '/' + g.length, web_answers: results.filter((r) => r.web).length,
+      feed_answered: q.filter((r) => r.pass && !r.web).length + '/' + q.length, web_where_feed_has_it: q.filter((r) => r.web).map((r) => r.id).join(',') || 'none',
+      general_from_web: g.filter((r) => r.web).length + '/' + g.length } : {}) };
   console.log(JSON.stringify(summary));
   fs.mkdirSync(path.join(ROOT, 'workbench', 'data'), { recursive: true });
   fs.writeFileSync(path.join(ROOT, 'workbench', 'data', 'answers' + (process.env.EVAL_LABEL ? '-' + process.env.EVAL_LABEL : '') + '.json'), JSON.stringify({ generated_at: new Date().toISOString(), summary, results }));

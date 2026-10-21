@@ -68,6 +68,12 @@ function parseRows(rows) {
 const ASKS_HISTORY = /\b(we (discuss|discussed|talk|talked|spoke)|you (told|tell|said|say|found|gave|showed|mentioned)|did (i|we) (ask|discuss|talk)|i asked( you)?|remind me what|last time)\b/i;
 const NO_HISTORY = '[earlier chats with this user: none match this message. If they ask what was said before, say plainly you have no record of discussing it, then answer from the feed if it helps.]';
 
+// A question about what was said in this chat is never sent to the web: the web
+// cannot know, and the web answer took on the question's framing — "I told you
+// that OpenAI closed a ... $122 billion round" for "what did you tell me about
+// openai funding?", a conversation that never happened (2026-10-21).
+function asksHistory(question) { return ASKS_HISTORY.test(String(question || '')); }
+
 function recallNote(rows, question) {
   const list = parseRows(rows);
   if (!list.length) return ASKS_HISTORY.test(String(question || '')) ? NO_HISTORY : '';
@@ -98,4 +104,4 @@ function answeredFromRecall(reply, rows, wasNoAnswer) {
   return list.some((r) => /^\s*From the web\b/i.test(String(r.answer || '')) || !wasNoAnswer(r));
 }
 
-module.exports = { RECALL_CUTOFF, RECALL_LIMIT, memoryDoc, shouldRemember, rememberSql, recallSql, parseRows, recallNote, usesRecall, answeredFromRecall };
+module.exports = { RECALL_CUTOFF, RECALL_LIMIT, memoryDoc, shouldRemember, rememberSql, recallSql, parseRows, recallNote, usesRecall, answeredFromRecall, asksHistory };

@@ -73,3 +73,12 @@ test('an answer from the bot\'s own memory goes to the web (World Cup, 2026-10-1
 test('an own-knowledge answer that says "not in my feed" goes to the web (2026-10-21)', () => {
   assert.equal(needsWeb({ question: 'Who won the 2022 FIFA World Cup?', reply: 'The 2022 FIFA World Cup winner is Argentina, who defeated France in the final. This information is not in my feed.' }).web, true);
 });
+
+test('itemsReturned counts feed items in agent steps and the prefetch (Q6, 2026-10-21)', () => {
+  const { itemsReturned } = require('../shared/web-fallback.js');
+  const steps = [{ action: { tool: 'query_feed' }, observation: JSON.stringify([{ response: { count: 2, items: [{ n: 1, id: 5, title: 'a' }, { n: 2, id: 6, title: 'b' }] } }]) }];
+  assert.equal(itemsReturned(steps, null), 2);
+  assert.equal(itemsReturned([], { count: 1, items: [{ n: 1, id: 9, title: 'x' }] }), 1);
+  assert.equal(itemsReturned([{ action: { tool: 'run_status' }, observation: '{"runs":[]}' }], null), 0);
+  assert.equal(itemsReturned(undefined, undefined), 0);
+});

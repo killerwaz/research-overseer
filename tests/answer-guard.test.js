@@ -87,3 +87,13 @@ test('prefetch keeps whole questions up to 20 words', () => {
   assert.strictEqual(prefetchFor('How long is the context Anthropic adds to each chunk in contextual retrieval?').tag,
     'How long is the context Anthropic adds to each chunk in contextual retrieval');
 });
+
+test('a bare topic answered with figures and no lookup is redone (2026-10-21)', () => {
+  const { needsFreshLookup } = require('../shared/answer-guard.js');
+  const g = needsFreshLookup({ question: 'Formula One team budget cap', reply: 'The F1 budget cap for the 2026 season is set at $142 million (approximately €135.7 million), a slight increase from $135 million.', toolsUsed: [] });
+  assert.equal(g.retry, true);
+  assert.equal(g.reason, 'figures without a lookup');
+  // small talk and replies without figures are left alone
+  assert.equal(needsFreshLookup({ question: 'thanks!', reply: 'You are welcome — 2 things to try next.', toolsUsed: [] }).retry, false);
+  assert.equal(needsFreshLookup({ question: 'ok cool', reply: 'Great, let me know what you need.', toolsUsed: [] }).retry, false);
+});

@@ -65,6 +65,12 @@ function needsFreshLookup({ question, reply, toolsUsed }) {
   const factQuestion = /\?\s*$|^\s*(who|what|which|when|where|why|how|is|are|was|were|does|do|did|can|could|has|have|should|tell me)\b/i.test(q);
   if (factQuestion && !smallTalk && !aboutSourcesQ && !aboutRunsQ) return { retry: true, reason: 'question answered without a lookup' };
 
+  // A bare topic is not a question, but a reply full of figures with no lookup is
+  // the 9B's own memory (2026-10-21, end to end: "Formula One team budget cap" ->
+  // "set at $142 million (approximately €135.7 million) ..." with no tool, sent as is).
+  const figures = (r.match(/[$€£৳]\s?\d|\d[\d,.]*\s?(%|percent|million|billion|bn|m\b|k\b)|\b(19|20)\d\d\b/gi) || []).length;
+  if (figures >= 2 && !smallTalk && !aboutSourcesQ && !aboutRunsQ) return { retry: true, reason: 'figures without a lookup' };
+
   const claimsFindings = /\b(found|items?|articles?|stor(y|ies)|findings?|coverage|headlines?|i checked|in the feed|the feed (has|shows)|nothing (on|about|new)|no (recent |new |fresh )?(items|news|coverage|results|stories))\b/i.test(r);
   if (!claimsFindings) return { retry: false, reason: 'no feed claims' };
 
