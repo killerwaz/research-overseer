@@ -49,6 +49,7 @@ const WF = {
   web_answer: I.workflows['wf44-web-answer'],
   synth_answer: I.workflows['wf45-synth-answer'],
   deep_research: I.workflows['wf46-deep-research'],
+  process_urls: I.workflows['wf20-process-urls'],
   run_status: I.workflows['wf32-run-status'],
   manage_sources: I.workflows['wf34-manage-sources']
 };
@@ -114,7 +115,7 @@ const nodes = [
     retryOnFail: false, onError: 'continueRegularOutput' },
 
   { id: 'extract', name: 'Extract messages', type: 'n8n-nodes-base.code', typeVersion: 2, position: [540, 0],
-    parameters: { mode: 'runOnceForAllItems', jsCode: `
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('upload.js') + `
 const j = $input.first().json;
 if (!j.ok || !Array.isArray(j.result)) return [];
 const out = [];
@@ -130,10 +131,14 @@ for (const u of j.result) {
     continue;
   }
   const m = u.message || u.edited_message || {};
+  // #18: a file becomes "[file] name — caption"; the file itself is read later by
+  // 'PDF gate' via this item (Record update keeps only the text)
+  const doc = uploadInfo(m);
   out.push({ json: {
     update_id: u.update_id,
     chat_id: (m.chat && m.chat.id) || 0,
-    text: (m.text || '').slice(0, 4000)
+    text: (doc ? uploadText(doc) : (m.text || '')).slice(0, 4000),
+    doc
   } });
 }
 return out;`.trim() } },
@@ -159,9 +164,11 @@ return out;`.trim() } },
     parameters: { httpMethod: 'POST', path: 'overseer-router-test-__ZZ_SECRET__', responseMode: 'lastNode', options: {} } },
 
   { id: 'testnorm', name: 'Test normalize', type: 'n8n-nodes-base.code', typeVersion: 2, position: [900, 200],
-    parameters: { mode: 'runOnceForAllItems', jsCode: `
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('upload.js') + `
 const b = $input.first().json.body || {};
-return [{ json: { chat_id: Number(b.chat_id) || ${CHAT_ID}, text: String(b.text || ''), test: true } }];`.trim() } },
+// #18 tests send { document: {...}, test_url } — a public PDF stands in for Telegram's file download
+const doc = b.document ? { ...uploadInfo({ document: { file_id: 'test', ...b.document }, caption: b.caption }), test_url: String(b.test_url || '') } : null;
+return [{ json: { chat_id: Number(b.chat_id) || ${CHAT_ID}, text: doc ? uploadText(doc) : String(b.text || ''), test: true, doc } }];`.trim() } },
 
   // ---- 👍/👎 taps (sql/013, shared/feedback.js) — no model involved ----
   { id: 'istap', name: 'Feedback tap?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1000, 300],
@@ -270,7 +277,11 @@ return [{ json: { chat_id, output: text } }];
     parameters: { mode: 'runOnceForAllItems', jsCode: `
 const ctx = $('Agent context').first().json;
 const sources = ctx.sources || 'none', runs = ctx.runs || 'unknown', fix_check = ctx.fix_check || '', fix_web = ctx.fix_web || '', fix_synth = ctx.fix_synth || 'off', fix_verify = ctx.fix_verify || 'false', fix_recall = ctx.fix_recall || 'true', fix_fit = ctx.fix_fit || 'true';
-return $('Feed switch?').all(1).map(i => ({ json: { ...i.json, sources, runs, fix_check, fix_web, fix_synth, fix_verify, fix_recall, fix_fit } }));`.trim() } },
+// #18: the file a message carried (Record update keeps only its text)
+const docs = {};
+try { $('Extract messages').all().forEach((x) => { if (x.json.doc) docs[String(x.json.update_id)] = x.json.doc; }); } catch (e) {}
+return $('Feed switch?').all(1).map(i => ({ json: { ...i.json, sources, runs, fix_check, fix_web, fix_synth, fix_verify, fix_recall, fix_fit,
+  doc: i.json.doc || docs[String(i.json.update_id)] || null } }));`.trim() } },
 
   // Links are ingested deterministically, BEFORE the model runs (2026-10-11):
   // the 9B answered a two-link message with "I've ingested both YouTube links"
@@ -801,6 +812,67 @@ return [{ json: { sql: rememberSql(a.chat_id, a.text, m.output, vec) } }];`.trim
     parameters: { operation: 'executeQuery', query: '={{ $json.sql }}', options: {} },
     credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true, onError: 'continueRegularOutput' },
 
+  // ---- #18 a PDF sent as a file (2026-10-21, shared/upload.js) ----
+  // Downloaded INSIDE n8n (the file URL carries the bot token: never to a third
+  // party, never stored), read by n8n's own PDF extraction, then handed to WF-20
+  // as a pre-read document (not waited for: WF-20 sends the summary itself).
+  { id: 'uploadif', name: 'Upload?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1070, 180],
+    parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, combinator: 'and',
+      conditions: [{ id: 'up1', leftValue: '={{ Boolean($json.doc) }}', rightValue: true, operator: { type: 'boolean', operation: 'equals' } }] } } },
+  { id: 'pdfgate', name: 'PDF gate', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1080, 260],
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('upload.js') + `
+const doc = $('Agent input').first().json.doc || {};
+const g = uploadGate(doc);
+return [{ json: { ok: String(g.ok), reply: g.reply || '', file_id: doc.file_id || '', test_url: doc.test_url || '' } }];`.trim() } },
+  { id: 'pdfgateif', name: 'PDF ok?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1085, 260],
+    parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, combinator: 'and',
+      conditions: [{ id: 'po1', leftValue: '={{ $json.ok }}', rightValue: 'true', operator: { type: 'string', operation: 'equals' } }] } } },
+  { id: 'pdfgetfile', name: 'Get file', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [1090, 300],
+    parameters: { method: 'GET', url: "={{ 'https://api.telegram.org/bot__TG_TOKEN__/getFile?file_id=' + encodeURIComponent($json.file_id) }}", options: { timeout: 15000 } },
+    retryOnFail: false, onError: 'continueRegularOutput', alwaysOutputData: true },
+  { id: 'pdfdownload', name: 'PDF download', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [1095, 300],
+    parameters: { method: 'GET',
+      url: "={{ $('PDF gate').first().json.test_url || ('https://api.telegram.org/file/bot__TG_TOKEN__/' + (($json.result || {}).file_path || 'missing')) }}",
+      options: { timeout: 60000, response: { response: { responseFormat: 'file', outputPropertyName: 'data' } } } },
+    retryOnFail: false, onError: 'continueRegularOutput', alwaysOutputData: true },
+  { id: 'pdftext', name: 'PDF text', type: 'n8n-nodes-base.extractFromFile', typeVersion: 1, position: [1100, 300],
+    parameters: { operation: 'pdf', binaryPropertyName: 'data', options: {} },
+    onError: 'continueRegularOutput', alwaysOutputData: true },
+  { id: 'pdfprep', name: 'PDF prep', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1105, 300],
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('upload.js') + `
+const a = $('Agent input').first().json;
+const x = $input.first().json || {};
+const p = x.error || !x.text ? { ok: false, reply: "I couldn't open \\"" + ((a.doc || {}).name || 'that file') + "\\" just now. Send it again in a minute, or paste a link to it." } : uploadPrep(a.doc, x);
+return [{ json: { ok: String(p.ok), reply: p.reply, urls: p.urls || [], trigger: a.test ? 'test' : 'agent' } }];`.trim() } },
+  { id: 'pdfingestif', name: 'PDF readable?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1110, 300],
+    parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, combinator: 'and',
+      conditions: [{ id: 'pr1', leftValue: '={{ $json.ok }}', rightValue: 'true', operator: { type: 'string', operation: 'equals' } }] } } },
+  { id: 'pdfingest', name: 'PDF ingest', type: 'n8n-nodes-base.executeWorkflow', typeVersion: 1.2, position: [1115, 340],
+    parameters: { workflowId: { __rl: true, value: WF.process_urls, mode: 'id' },
+      workflowInputs: { mappingMode: 'defineBelow', value: { urls: '={{ $json.urls }}', trigger: '={{ $json.trigger }}', scope: 'upload', query: '' },
+        matchingColumns: [], schema: [
+          { id: 'urls', displayName: 'urls', required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: 'array' },
+          ...['trigger', 'scope', 'query'].map((id) => ({ id, displayName: id, required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: 'string' }))] },
+      options: { waitForSubWorkflow: false } },
+    executeOnce: true, onError: 'continueRegularOutput' },
+  // the reply now (the summary follows from WF-20) + both memory rows
+  { id: 'pdfreply', name: 'PDF reply', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1120, 300],
+    parameters: { mode: 'runOnceForAllItems', jsCode: `
+const a = $('Agent input').first().json;
+let output = '';
+try { output = $('PDF prep').first().json.reply; } catch (e) {}
+if (!output) { try { output = $('PDF gate').first().json.reply; } catch (e) {} }
+output = output || "I couldn't read that file.";
+const chat = String(a.chat_id).replace(/[^0-9-]/g, '');
+const txt = (s) => "convert_from(decode('" + Buffer.from(String(s || ''), 'utf8').toString('base64') + "', 'base64'), 'UTF8')";
+const sql = "insert into n8n_chat_histories (session_id, message) values ('" + chat + "', jsonb_build_object('type', 'human', 'content', " + txt(a.text) + ", 'additional_kwargs', '{}'::jsonb, 'response_metadata', '{}'::jsonb)), ('" + chat + "', jsonb_build_object('type', 'ai', 'content', " + txt(output) + ", 'tool_calls', '[]'::jsonb, 'invalid_tool_calls', '[]'::jsonb, 'additional_kwargs', '{}'::jsonb, 'response_metadata', '{}'::jsonb))";
+return [{ json: { output, sql } }];`.trim() } },
+  { id: 'pdfmemory', name: 'PDF memory', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [1125, 300],
+    parameters: { operation: 'executeQuery', query: '={{ $json.sql }}', options: {} },
+    credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true, onError: 'continueRegularOutput' },
+  { id: 'pdfresult', name: 'PDF result', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1130, 300],
+    parameters: { mode: 'runOnceForAllItems', jsCode: "return [{ json: { output: $('PDF reply').first().json.output, upload: true } }];" } },
+
   // ---- #17 save to Obsidian (2026-10-21, shared/obsidian.js, sql/018) ----
   // "save #3" -> one markdown note per item in /vault (= his vault's "Research
   // Overseer Saves" folder, the only path n8n may write). Never overwrites: the
@@ -1094,7 +1166,19 @@ const connections = {
   'run_status': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }, { node: 'Guarded agent', type: 'ai_tool', index: 0 }]] },
   'manage_sources': { ai_tool: [[{ node: 'Overseer Agent', type: 'ai_tool', index: 0 }, { node: 'Guarded agent', type: 'ai_tool', index: 0 }]] },
   'Agent context': { main: [[{ node: 'Agent input', type: 'main', index: 0 }]] },
-  'Agent input': { main: [[{ node: 'Has link?', type: 'main', index: 0 }]] },
+  'Agent input': { main: [[{ node: 'Upload?', type: 'main', index: 0 }]] },
+  'Upload?': { main: [[{ node: 'PDF gate', type: 'main', index: 0 }], [{ node: 'Has link?', type: 'main', index: 0 }]] },
+  'PDF gate': { main: [[{ node: 'PDF ok?', type: 'main', index: 0 }]] },
+  'PDF ok?': { main: [[{ node: 'Get file', type: 'main', index: 0 }], [{ node: 'PDF reply', type: 'main', index: 0 }]] },
+  'Get file': { main: [[{ node: 'PDF download', type: 'main', index: 0 }]] },
+  'PDF download': { main: [[{ node: 'PDF text', type: 'main', index: 0 }]] },
+  'PDF text': { main: [[{ node: 'PDF prep', type: 'main', index: 0 }]] },
+  'PDF prep': { main: [[{ node: 'PDF readable?', type: 'main', index: 0 }]] },
+  'PDF readable?': { main: [[{ node: 'PDF ingest', type: 'main', index: 0 }], [{ node: 'PDF reply', type: 'main', index: 0 }]] },
+  'PDF ingest': { main: [[{ node: 'PDF reply', type: 'main', index: 0 }]] },
+  'PDF reply': { main: [[{ node: 'PDF memory', type: 'main', index: 0 }]] },
+  'PDF memory': { main: [[{ node: 'PDF result', type: 'main', index: 0 }]] },
+  'PDF result': { main: [[{ node: 'Prep reply', type: 'main', index: 0 }, { node: 'Memory text', type: 'main', index: 0 }]] },
   'Has link?': { main: [[{ node: 'Ingest links', type: 'main', index: 0 }], [{ node: 'Recall prep', type: 'main', index: 0 }]] },
   'Recall prep': { main: [[{ node: 'Recall embed', type: 'main', index: 0 }]] },
   'Recall embed': { main: [[{ node: 'Recall sql', type: 'main', index: 0 }]] },

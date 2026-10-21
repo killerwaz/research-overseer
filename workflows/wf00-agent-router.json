@@ -74,7 +74,7 @@
       ],
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const j = $input.first().json;\nif (!j.ok || !Array.isArray(j.result)) return [];\nconst out = [];\nfor (const u of j.result) {\n  // A 👍/👎 tap (shared/feedback.js) arrives as a callback_query; it becomes\n  // text \"cb:<data>\" so the dedupe table and allowlist treat it like a message.\n  const cq = u.callback_query;\n  if (cq) {\n    const cm = cq.message || {};\n    out.push({ json: { update_id: u.update_id, chat_id: (cm.chat && cm.chat.id) || 0,\n      text: ('cb:' + (cq.data || '')).slice(0, 200), callback_id: cq.id || '', message_id: cm.message_id || 0,\n      reply_markup: cm.reply_markup || null } });\n    continue;\n  }\n  const m = u.message || u.edited_message || {};\n  out.push({ json: {\n    update_id: u.update_id,\n    chat_id: (m.chat && m.chat.id) || 0,\n    text: (m.text || '').slice(0, 4000)\n  } });\n}\nreturn out;"
+        "jsCode": "// #18 PDFs sent as files in Telegram (2026-10-21). Inlined into WF-00 ('Extract\n// messages', 'PDF prep', 'PDF reply') and read by WF-20 (pre-read documents).\n//\n// Pasted PDF LINKS already worked (WF-20 'Is PDF?' -> Firecrawl). A FILE is\n// different: its download URL carries the bot token, so it must never reach a\n// third party or the database. WF-00 downloads it inside n8n, n8n's own PDF\n// extraction reads the text, and WF-20 takes the text as a pre-read document\n// (no scraper), then the usual saved page -> triage -> passages -> summary.\n\nconst UPLOAD_MAX_BYTES = 20 * 1024 * 1024;   // Telegram bots can download up to 20 MB\nconst UPLOAD_MIN_CHARS = 300;                 // less = a scanned PDF with no text layer\nconst UPLOAD_MAX_CHARS = 400000;              // a ~150-page report; triage reads the opening anyway\n\n// The document in a Telegram message, or null.\nfunction uploadInfo(message) {\n  const d = (message || {}).document;\n  if (!d || !d.file_id) return null;\n  const name = String(d.file_name || 'document').slice(0, 200);\n  const pdf = /pdf/i.test(String(d.mime_type || '')) || /\\.pdf$/i.test(name);\n  return { kind: pdf ? 'pdf' : 'other', file_id: String(d.file_id), unique_id: String(d.file_unique_id || d.file_id),\n    name, size: Number(d.file_size) || 0, caption: String((message || {}).caption || '').slice(0, 1000) };\n}\n\n// What the message \"says\" for dedupe, the allowlist and memory: the file is visible\n// in the chat history as \"[file] name — caption\".\nfunction uploadText(info) {\n  return '[file] ' + info.name + (info.caption ? ' — ' + info.caption : '');\n}\n\n// A stable identity for dedupe (same file sent twice = same page). Not a link.\nfunction uploadCanonical(info) {\n  const slug = String(info.name).toLowerCase().replace(/\\.pdf$/i, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || 'document';\n  return 'upload://telegram/' + String(info.unique_id).replace(/[^A-Za-z0-9_-]/g, '') + '/' + slug + '.pdf';\n}\n\n// Refuse before downloading: not a PDF, or too big for a bot.\nfunction uploadGate(info) {\n  if (!info) return { ok: false, reply: '' };\n  if (info.kind !== 'pdf') return { ok: false, reply: 'I can only read PDFs for now — \"' + info.name + '\" is not one. Send it as a PDF, or paste a link to it.' };\n  if (info.size > UPLOAD_MAX_BYTES) return { ok: false, reply: '\"' + info.name + '\" is ' + Math.round(info.size / 1048576) + ' MB; Telegram lets bots download files up to 20 MB. Paste a link to it instead and I will read it from there.' };\n  return { ok: true };\n}\n\n// Collapses the PDF text extraction's line-per-line output into paragraphs.\nfunction cleanPdfText(text) {\n  return String(text || '')\n    .replace(/\\r/g, '')\n    .replace(/[ \\t]+\\n/g, '\\n')\n    .replace(/-\\n(?=[a-z])/g, '')            // words hyphenated across lines\n    .replace(/([^\\n.!?:;])\\n(?=[a-z(])/g, '$1 ')  // a sentence broken across lines\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .trim()\n    .slice(0, UPLOAD_MAX_CHARS);\n}\n\n// The PDF's title: its metadata title when it looks like one; else a title-like\n// line near the top when the file name is thin (\"attention.pdf\" is \"Attention Is\n// All You Need\" on its first page, after a licence line); else the file name.\nfunction uploadTitle(info, meta) {\n  const t = String(((meta || {}).info || {}).Title || (meta || {}).title || '').trim();\n  if (t.length >= 6 && !/^(untitled|microsoft word|document\\d*|slide \\d+)/i.test(t) && !/\\.(docx?|pptx?|indd)$/i.test(t)) return t.slice(0, 200);\n  const fromName = String(info.name).replace(/\\.pdf$/i, '').replace(/[_]+/g, ' ').trim();\n  if (fromName.split(/\\s+/).length <= 2) {\n    const lines = String((meta || {}).text || '').slice(0, 1500).split(/\\n+/).map((l) => l.trim());\n    const line = lines.find((l) => {\n      const w = l.split(/\\s+/).length;\n      return w >= 3 && w <= 16 && l.length <= 140 && !/[.;,]$/.test(l) && /^[A-Z0-9]/.test(l) &&\n        !/(copyright|©|permission|licen[cs]e|arxiv|https?:|doi|preprint|draft|confidential|page \\d|\\d{4}-\\d{2}-\\d{2}|@)/i.test(l);\n    });\n    if (line) return line;\n  }\n  return fromName;\n}\n\n// After extraction: the WF-20 input, or why not. pages from the extractor.\nfunction uploadPrep(info, extracted) {\n  const e = extracted || {};\n  const text = cleanPdfText(e.text);\n  const pages = Number(e.numpages || e.numPages || 0);\n  if (text.length < UPLOAD_MIN_CHARS) {\n    return { ok: false, reply: '\"' + info.name + '\" has no readable text' + (pages ? ' (' + pages + ' page' + (pages === 1 ? '' : 's') + ')' : '') +\n      ' — it looks like a scan. I cannot read scanned PDFs yet; a link to a text version would work.' };\n  }\n  const title = uploadTitle(info, e);\n  const markdown = '# ' + title + '\\n\\n' + (info.caption ? 'Sent with the note: ' + info.caption + '\\n\\n' : '') + text;\n  return { ok: true, pages, title,\n    urls: [{ url: uploadCanonical(info), title, markdown, scraper: 'upload:pdf', source: 'upload' }],\n    reply: '\\u{1F4C4} Reading \"' + title + '\"' + (pages ? ' (' + pages + ' page' + (pages === 1 ? '' : 's') + ')' : '') +\n      '. The summary arrives in about a minute.' };\n}\n\nconst j = $input.first().json;\nif (!j.ok || !Array.isArray(j.result)) return [];\nconst out = [];\nfor (const u of j.result) {\n  // A 👍/👎 tap (shared/feedback.js) arrives as a callback_query; it becomes\n  // text \"cb:<data>\" so the dedupe table and allowlist treat it like a message.\n  const cq = u.callback_query;\n  if (cq) {\n    const cm = cq.message || {};\n    out.push({ json: { update_id: u.update_id, chat_id: (cm.chat && cm.chat.id) || 0,\n      text: ('cb:' + (cq.data || '')).slice(0, 200), callback_id: cq.id || '', message_id: cm.message_id || 0,\n      reply_markup: cm.reply_markup || null } });\n    continue;\n  }\n  const m = u.message || u.edited_message || {};\n  // #18: a file becomes \"[file] name — caption\"; the file itself is read later by\n  // 'PDF gate' via this item (Record update keeps only the text)\n  const doc = uploadInfo(m);\n  out.push({ json: {\n    update_id: u.update_id,\n    chat_id: (m.chat && m.chat.id) || 0,\n    text: (doc ? uploadText(doc) : (m.text || '')).slice(0, 4000),\n    doc\n  } });\n}\nreturn out;"
       }
     },
     {
@@ -168,7 +168,7 @@
       ],
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const b = $input.first().json.body || {};\nreturn [{ json: { chat_id: Number(b.chat_id) || __TG_CHAT__, text: String(b.text || ''), test: true } }];"
+        "jsCode": "// #18 PDFs sent as files in Telegram (2026-10-21). Inlined into WF-00 ('Extract\n// messages', 'PDF prep', 'PDF reply') and read by WF-20 (pre-read documents).\n//\n// Pasted PDF LINKS already worked (WF-20 'Is PDF?' -> Firecrawl). A FILE is\n// different: its download URL carries the bot token, so it must never reach a\n// third party or the database. WF-00 downloads it inside n8n, n8n's own PDF\n// extraction reads the text, and WF-20 takes the text as a pre-read document\n// (no scraper), then the usual saved page -> triage -> passages -> summary.\n\nconst UPLOAD_MAX_BYTES = 20 * 1024 * 1024;   // Telegram bots can download up to 20 MB\nconst UPLOAD_MIN_CHARS = 300;                 // less = a scanned PDF with no text layer\nconst UPLOAD_MAX_CHARS = 400000;              // a ~150-page report; triage reads the opening anyway\n\n// The document in a Telegram message, or null.\nfunction uploadInfo(message) {\n  const d = (message || {}).document;\n  if (!d || !d.file_id) return null;\n  const name = String(d.file_name || 'document').slice(0, 200);\n  const pdf = /pdf/i.test(String(d.mime_type || '')) || /\\.pdf$/i.test(name);\n  return { kind: pdf ? 'pdf' : 'other', file_id: String(d.file_id), unique_id: String(d.file_unique_id || d.file_id),\n    name, size: Number(d.file_size) || 0, caption: String((message || {}).caption || '').slice(0, 1000) };\n}\n\n// What the message \"says\" for dedupe, the allowlist and memory: the file is visible\n// in the chat history as \"[file] name — caption\".\nfunction uploadText(info) {\n  return '[file] ' + info.name + (info.caption ? ' — ' + info.caption : '');\n}\n\n// A stable identity for dedupe (same file sent twice = same page). Not a link.\nfunction uploadCanonical(info) {\n  const slug = String(info.name).toLowerCase().replace(/\\.pdf$/i, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || 'document';\n  return 'upload://telegram/' + String(info.unique_id).replace(/[^A-Za-z0-9_-]/g, '') + '/' + slug + '.pdf';\n}\n\n// Refuse before downloading: not a PDF, or too big for a bot.\nfunction uploadGate(info) {\n  if (!info) return { ok: false, reply: '' };\n  if (info.kind !== 'pdf') return { ok: false, reply: 'I can only read PDFs for now — \"' + info.name + '\" is not one. Send it as a PDF, or paste a link to it.' };\n  if (info.size > UPLOAD_MAX_BYTES) return { ok: false, reply: '\"' + info.name + '\" is ' + Math.round(info.size / 1048576) + ' MB; Telegram lets bots download files up to 20 MB. Paste a link to it instead and I will read it from there.' };\n  return { ok: true };\n}\n\n// Collapses the PDF text extraction's line-per-line output into paragraphs.\nfunction cleanPdfText(text) {\n  return String(text || '')\n    .replace(/\\r/g, '')\n    .replace(/[ \\t]+\\n/g, '\\n')\n    .replace(/-\\n(?=[a-z])/g, '')            // words hyphenated across lines\n    .replace(/([^\\n.!?:;])\\n(?=[a-z(])/g, '$1 ')  // a sentence broken across lines\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .trim()\n    .slice(0, UPLOAD_MAX_CHARS);\n}\n\n// The PDF's title: its metadata title when it looks like one; else a title-like\n// line near the top when the file name is thin (\"attention.pdf\" is \"Attention Is\n// All You Need\" on its first page, after a licence line); else the file name.\nfunction uploadTitle(info, meta) {\n  const t = String(((meta || {}).info || {}).Title || (meta || {}).title || '').trim();\n  if (t.length >= 6 && !/^(untitled|microsoft word|document\\d*|slide \\d+)/i.test(t) && !/\\.(docx?|pptx?|indd)$/i.test(t)) return t.slice(0, 200);\n  const fromName = String(info.name).replace(/\\.pdf$/i, '').replace(/[_]+/g, ' ').trim();\n  if (fromName.split(/\\s+/).length <= 2) {\n    const lines = String((meta || {}).text || '').slice(0, 1500).split(/\\n+/).map((l) => l.trim());\n    const line = lines.find((l) => {\n      const w = l.split(/\\s+/).length;\n      return w >= 3 && w <= 16 && l.length <= 140 && !/[.;,]$/.test(l) && /^[A-Z0-9]/.test(l) &&\n        !/(copyright|©|permission|licen[cs]e|arxiv|https?:|doi|preprint|draft|confidential|page \\d|\\d{4}-\\d{2}-\\d{2}|@)/i.test(l);\n    });\n    if (line) return line;\n  }\n  return fromName;\n}\n\n// After extraction: the WF-20 input, or why not. pages from the extractor.\nfunction uploadPrep(info, extracted) {\n  const e = extracted || {};\n  const text = cleanPdfText(e.text);\n  const pages = Number(e.numpages || e.numPages || 0);\n  if (text.length < UPLOAD_MIN_CHARS) {\n    return { ok: false, reply: '\"' + info.name + '\" has no readable text' + (pages ? ' (' + pages + ' page' + (pages === 1 ? '' : 's') + ')' : '') +\n      ' — it looks like a scan. I cannot read scanned PDFs yet; a link to a text version would work.' };\n  }\n  const title = uploadTitle(info, e);\n  const markdown = '# ' + title + '\\n\\n' + (info.caption ? 'Sent with the note: ' + info.caption + '\\n\\n' : '') + text;\n  return { ok: true, pages, title,\n    urls: [{ url: uploadCanonical(info), title, markdown, scraper: 'upload:pdf', source: 'upload' }],\n    reply: '\\u{1F4C4} Reading \"' + title + '\"' + (pages ? ' (' + pages + ' page' + (pages === 1 ? '' : 's') + ')' : '') +\n      '. The summary arrives in about a minute.' };\n}\n\nconst b = $input.first().json.body || {};\n// #18 tests send { document: {...}, test_url } — a public PDF stands in for Telegram's file download\nconst doc = b.document ? { ...uploadInfo({ document: { file_id: 'test', ...b.document }, caption: b.caption }), test_url: String(b.test_url || '') } : null;\nreturn [{ json: { chat_id: Number(b.chat_id) || __TG_CHAT__, text: doc ? uploadText(doc) : String(b.text || ''), test: true, doc } }];"
       }
     },
     {
@@ -403,7 +403,7 @@
       ],
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const ctx = $('Agent context').first().json;\nconst sources = ctx.sources || 'none', runs = ctx.runs || 'unknown', fix_check = ctx.fix_check || '', fix_web = ctx.fix_web || '', fix_synth = ctx.fix_synth || 'off', fix_verify = ctx.fix_verify || 'false', fix_recall = ctx.fix_recall || 'true', fix_fit = ctx.fix_fit || 'true';\nreturn $('Feed switch?').all(1).map(i => ({ json: { ...i.json, sources, runs, fix_check, fix_web, fix_synth, fix_verify, fix_recall, fix_fit } }));"
+        "jsCode": "const ctx = $('Agent context').first().json;\nconst sources = ctx.sources || 'none', runs = ctx.runs || 'unknown', fix_check = ctx.fix_check || '', fix_web = ctx.fix_web || '', fix_synth = ctx.fix_synth || 'off', fix_verify = ctx.fix_verify || 'false', fix_recall = ctx.fix_recall || 'true', fix_fit = ctx.fix_fit || 'true';\n// #18: the file a message carried (Record update keeps only its text)\nconst docs = {};\ntry { $('Extract messages').all().forEach((x) => { if (x.json.doc) docs[String(x.json.update_id)] = x.json.doc; }); } catch (e) {}\nreturn $('Feed switch?').all(1).map(i => ({ json: { ...i.json, sources, runs, fix_check, fix_web, fix_synth, fix_verify, fix_recall, fix_fit,\n  doc: i.json.doc || docs[String(i.json.update_id)] || null } }));"
       }
     },
     {
@@ -2221,6 +2221,315 @@
       "onError": "continueRegularOutput"
     },
     {
+      "id": "uploadif",
+      "name": "Upload?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1070,
+        180
+      ],
+      "parameters": {
+        "options": {},
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "up1",
+              "leftValue": "={{ Boolean($json.doc) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "pdfgate",
+      "name": "PDF gate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        260
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// #18 PDFs sent as files in Telegram (2026-10-21). Inlined into WF-00 ('Extract\n// messages', 'PDF prep', 'PDF reply') and read by WF-20 (pre-read documents).\n//\n// Pasted PDF LINKS already worked (WF-20 'Is PDF?' -> Firecrawl). A FILE is\n// different: its download URL carries the bot token, so it must never reach a\n// third party or the database. WF-00 downloads it inside n8n, n8n's own PDF\n// extraction reads the text, and WF-20 takes the text as a pre-read document\n// (no scraper), then the usual saved page -> triage -> passages -> summary.\n\nconst UPLOAD_MAX_BYTES = 20 * 1024 * 1024;   // Telegram bots can download up to 20 MB\nconst UPLOAD_MIN_CHARS = 300;                 // less = a scanned PDF with no text layer\nconst UPLOAD_MAX_CHARS = 400000;              // a ~150-page report; triage reads the opening anyway\n\n// The document in a Telegram message, or null.\nfunction uploadInfo(message) {\n  const d = (message || {}).document;\n  if (!d || !d.file_id) return null;\n  const name = String(d.file_name || 'document').slice(0, 200);\n  const pdf = /pdf/i.test(String(d.mime_type || '')) || /\\.pdf$/i.test(name);\n  return { kind: pdf ? 'pdf' : 'other', file_id: String(d.file_id), unique_id: String(d.file_unique_id || d.file_id),\n    name, size: Number(d.file_size) || 0, caption: String((message || {}).caption || '').slice(0, 1000) };\n}\n\n// What the message \"says\" for dedupe, the allowlist and memory: the file is visible\n// in the chat history as \"[file] name — caption\".\nfunction uploadText(info) {\n  return '[file] ' + info.name + (info.caption ? ' — ' + info.caption : '');\n}\n\n// A stable identity for dedupe (same file sent twice = same page). Not a link.\nfunction uploadCanonical(info) {\n  const slug = String(info.name).toLowerCase().replace(/\\.pdf$/i, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || 'document';\n  return 'upload://telegram/' + String(info.unique_id).replace(/[^A-Za-z0-9_-]/g, '') + '/' + slug + '.pdf';\n}\n\n// Refuse before downloading: not a PDF, or too big for a bot.\nfunction uploadGate(info) {\n  if (!info) return { ok: false, reply: '' };\n  if (info.kind !== 'pdf') return { ok: false, reply: 'I can only read PDFs for now — \"' + info.name + '\" is not one. Send it as a PDF, or paste a link to it.' };\n  if (info.size > UPLOAD_MAX_BYTES) return { ok: false, reply: '\"' + info.name + '\" is ' + Math.round(info.size / 1048576) + ' MB; Telegram lets bots download files up to 20 MB. Paste a link to it instead and I will read it from there.' };\n  return { ok: true };\n}\n\n// Collapses the PDF text extraction's line-per-line output into paragraphs.\nfunction cleanPdfText(text) {\n  return String(text || '')\n    .replace(/\\r/g, '')\n    .replace(/[ \\t]+\\n/g, '\\n')\n    .replace(/-\\n(?=[a-z])/g, '')            // words hyphenated across lines\n    .replace(/([^\\n.!?:;])\\n(?=[a-z(])/g, '$1 ')  // a sentence broken across lines\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .trim()\n    .slice(0, UPLOAD_MAX_CHARS);\n}\n\n// The PDF's title: its metadata title when it looks like one; else a title-like\n// line near the top when the file name is thin (\"attention.pdf\" is \"Attention Is\n// All You Need\" on its first page, after a licence line); else the file name.\nfunction uploadTitle(info, meta) {\n  const t = String(((meta || {}).info || {}).Title || (meta || {}).title || '').trim();\n  if (t.length >= 6 && !/^(untitled|microsoft word|document\\d*|slide \\d+)/i.test(t) && !/\\.(docx?|pptx?|indd)$/i.test(t)) return t.slice(0, 200);\n  const fromName = String(info.name).replace(/\\.pdf$/i, '').replace(/[_]+/g, ' ').trim();\n  if (fromName.split(/\\s+/).length <= 2) {\n    const lines = String((meta || {}).text || '').slice(0, 1500).split(/\\n+/).map((l) => l.trim());\n    const line = lines.find((l) => {\n      const w = l.split(/\\s+/).length;\n      return w >= 3 && w <= 16 && l.length <= 140 && !/[.;,]$/.test(l) && /^[A-Z0-9]/.test(l) &&\n        !/(copyright|©|permission|licen[cs]e|arxiv|https?:|doi|preprint|draft|confidential|page \\d|\\d{4}-\\d{2}-\\d{2}|@)/i.test(l);\n    });\n    if (line) return line;\n  }\n  return fromName;\n}\n\n// After extraction: the WF-20 input, or why not. pages from the extractor.\nfunction uploadPrep(info, extracted) {\n  const e = extracted || {};\n  const text = cleanPdfText(e.text);\n  const pages = Number(e.numpages || e.numPages || 0);\n  if (text.length < UPLOAD_MIN_CHARS) {\n    return { ok: false, reply: '\"' + info.name + '\" has no readable text' + (pages ? ' (' + pages + ' page' + (pages === 1 ? '' : 's') + ')' : '') +\n      ' — it looks like a scan. I cannot read scanned PDFs yet; a link to a text version would work.' };\n  }\n  const title = uploadTitle(info, e);\n  const markdown = '# ' + title + '\\n\\n' + (info.caption ? 'Sent with the note: ' + info.caption + '\\n\\n' : '') + text;\n  return { ok: true, pages, title,\n    urls: [{ url: uploadCanonical(info), title, markdown, scraper: 'upload:pdf', source: 'upload' }],\n    reply: '\\u{1F4C4} Reading \"' + title + '\"' + (pages ? ' (' + pages + ' page' + (pages === 1 ? '' : 's') + ')' : '') +\n      '. The summary arrives in about a minute.' };\n}\n\nconst doc = $('Agent input').first().json.doc || {};\nconst g = uploadGate(doc);\nreturn [{ json: { ok: String(g.ok), reply: g.reply || '', file_id: doc.file_id || '', test_url: doc.test_url || '' } }];"
+      }
+    },
+    {
+      "id": "pdfgateif",
+      "name": "PDF ok?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1085,
+        260
+      ],
+      "parameters": {
+        "options": {},
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "po1",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "pdfgetfile",
+      "name": "Get file",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1090,
+        300
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'https://api.telegram.org/bot__TG_TOKEN__/getFile?file_id=' + encodeURIComponent($json.file_id) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "retryOnFail": false,
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "id": "pdfdownload",
+      "name": "PDF download",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1095,
+        300
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('PDF gate').first().json.test_url || ('https://api.telegram.org/file/bot__TG_TOKEN__/' + (($json.result || {}).file_path || 'missing')) }}",
+        "options": {
+          "timeout": 60000,
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          }
+        }
+      },
+      "retryOnFail": false,
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "id": "pdftext",
+      "name": "PDF text",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        300
+      ],
+      "parameters": {
+        "operation": "pdf",
+        "binaryPropertyName": "data",
+        "options": {}
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "id": "pdfprep",
+      "name": "PDF prep",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1105,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// #18 PDFs sent as files in Telegram (2026-10-21). Inlined into WF-00 ('Extract\n// messages', 'PDF prep', 'PDF reply') and read by WF-20 (pre-read documents).\n//\n// Pasted PDF LINKS already worked (WF-20 'Is PDF?' -> Firecrawl). A FILE is\n// different: its download URL carries the bot token, so it must never reach a\n// third party or the database. WF-00 downloads it inside n8n, n8n's own PDF\n// extraction reads the text, and WF-20 takes the text as a pre-read document\n// (no scraper), then the usual saved page -> triage -> passages -> summary.\n\nconst UPLOAD_MAX_BYTES = 20 * 1024 * 1024;   // Telegram bots can download up to 20 MB\nconst UPLOAD_MIN_CHARS = 300;                 // less = a scanned PDF with no text layer\nconst UPLOAD_MAX_CHARS = 400000;              // a ~150-page report; triage reads the opening anyway\n\n// The document in a Telegram message, or null.\nfunction uploadInfo(message) {\n  const d = (message || {}).document;\n  if (!d || !d.file_id) return null;\n  const name = String(d.file_name || 'document').slice(0, 200);\n  const pdf = /pdf/i.test(String(d.mime_type || '')) || /\\.pdf$/i.test(name);\n  return { kind: pdf ? 'pdf' : 'other', file_id: String(d.file_id), unique_id: String(d.file_unique_id || d.file_id),\n    name, size: Number(d.file_size) || 0, caption: String((message || {}).caption || '').slice(0, 1000) };\n}\n\n// What the message \"says\" for dedupe, the allowlist and memory: the file is visible\n// in the chat history as \"[file] name — caption\".\nfunction uploadText(info) {\n  return '[file] ' + info.name + (info.caption ? ' — ' + info.caption : '');\n}\n\n// A stable identity for dedupe (same file sent twice = same page). Not a link.\nfunction uploadCanonical(info) {\n  const slug = String(info.name).toLowerCase().replace(/\\.pdf$/i, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || 'document';\n  return 'upload://telegram/' + String(info.unique_id).replace(/[^A-Za-z0-9_-]/g, '') + '/' + slug + '.pdf';\n}\n\n// Refuse before downloading: not a PDF, or too big for a bot.\nfunction uploadGate(info) {\n  if (!info) return { ok: false, reply: '' };\n  if (info.kind !== 'pdf') return { ok: false, reply: 'I can only read PDFs for now — \"' + info.name + '\" is not one. Send it as a PDF, or paste a link to it.' };\n  if (info.size > UPLOAD_MAX_BYTES) return { ok: false, reply: '\"' + info.name + '\" is ' + Math.round(info.size / 1048576) + ' MB; Telegram lets bots download files up to 20 MB. Paste a link to it instead and I will read it from there.' };\n  return { ok: true };\n}\n\n// Collapses the PDF text extraction's line-per-line output into paragraphs.\nfunction cleanPdfText(text) {\n  return String(text || '')\n    .replace(/\\r/g, '')\n    .replace(/[ \\t]+\\n/g, '\\n')\n    .replace(/-\\n(?=[a-z])/g, '')            // words hyphenated across lines\n    .replace(/([^\\n.!?:;])\\n(?=[a-z(])/g, '$1 ')  // a sentence broken across lines\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .trim()\n    .slice(0, UPLOAD_MAX_CHARS);\n}\n\n// The PDF's title: its metadata title when it looks like one; else a title-like\n// line near the top when the file name is thin (\"attention.pdf\" is \"Attention Is\n// All You Need\" on its first page, after a licence line); else the file name.\nfunction uploadTitle(info, meta) {\n  const t = String(((meta || {}).info || {}).Title || (meta || {}).title || '').trim();\n  if (t.length >= 6 && !/^(untitled|microsoft word|document\\d*|slide \\d+)/i.test(t) && !/\\.(docx?|pptx?|indd)$/i.test(t)) return t.slice(0, 200);\n  const fromName = String(info.name).replace(/\\.pdf$/i, '').replace(/[_]+/g, ' ').trim();\n  if (fromName.split(/\\s+/).length <= 2) {\n    const lines = String((meta || {}).text || '').slice(0, 1500).split(/\\n+/).map((l) => l.trim());\n    const line = lines.find((l) => {\n      const w = l.split(/\\s+/).length;\n      return w >= 3 && w <= 16 && l.length <= 140 && !/[.;,]$/.test(l) && /^[A-Z0-9]/.test(l) &&\n        !/(copyright|©|permission|licen[cs]e|arxiv|https?:|doi|preprint|draft|confidential|page \\d|\\d{4}-\\d{2}-\\d{2}|@)/i.test(l);\n    });\n    if (line) return line;\n  }\n  return fromName;\n}\n\n// After extraction: the WF-20 input, or why not. pages from the extractor.\nfunction uploadPrep(info, extracted) {\n  const e = extracted || {};\n  const text = cleanPdfText(e.text);\n  const pages = Number(e.numpages || e.numPages || 0);\n  if (text.length < UPLOAD_MIN_CHARS) {\n    return { ok: false, reply: '\"' + info.name + '\" has no readable text' + (pages ? ' (' + pages + ' page' + (pages === 1 ? '' : 's') + ')' : '') +\n      ' — it looks like a scan. I cannot read scanned PDFs yet; a link to a text version would work.' };\n  }\n  const title = uploadTitle(info, e);\n  const markdown = '# ' + title + '\\n\\n' + (info.caption ? 'Sent with the note: ' + info.caption + '\\n\\n' : '') + text;\n  return { ok: true, pages, title,\n    urls: [{ url: uploadCanonical(info), title, markdown, scraper: 'upload:pdf', source: 'upload' }],\n    reply: '\\u{1F4C4} Reading \"' + title + '\"' + (pages ? ' (' + pages + ' page' + (pages === 1 ? '' : 's') + ')' : '') +\n      '. The summary arrives in about a minute.' };\n}\n\nconst a = $('Agent input').first().json;\nconst x = $input.first().json || {};\nconst p = x.error || !x.text ? { ok: false, reply: \"I couldn't open \\\"\" + ((a.doc || {}).name || 'that file') + \"\\\" just now. Send it again in a minute, or paste a link to it.\" } : uploadPrep(a.doc, x);\nreturn [{ json: { ok: String(p.ok), reply: p.reply, urls: p.urls || [], trigger: a.test ? 'test' : 'agent' } }];"
+      }
+    },
+    {
+      "id": "pdfingestif",
+      "name": "PDF readable?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1110,
+        300
+      ],
+      "parameters": {
+        "options": {},
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "pr1",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "pdfingest",
+      "name": "PDF ingest",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1115,
+        340
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "NXWu2wqU6ifrFIpd",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "urls": "={{ $json.urls }}",
+            "trigger": "={{ $json.trigger }}",
+            "scope": "upload",
+            "query": ""
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "urls",
+              "displayName": "urls",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "array"
+            },
+            {
+              "id": "trigger",
+              "displayName": "trigger",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "scope",
+              "displayName": "scope",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "query",
+              "displayName": "query",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ]
+        },
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "executeOnce": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "pdfreply",
+      "name": "PDF reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const a = $('Agent input').first().json;\nlet output = '';\ntry { output = $('PDF prep').first().json.reply; } catch (e) {}\nif (!output) { try { output = $('PDF gate').first().json.reply; } catch (e) {} }\noutput = output || \"I couldn't read that file.\";\nconst chat = String(a.chat_id).replace(/[^0-9-]/g, '');\nconst txt = (s) => \"convert_from(decode('\" + Buffer.from(String(s || ''), 'utf8').toString('base64') + \"', 'base64'), 'UTF8')\";\nconst sql = \"insert into n8n_chat_histories (session_id, message) values ('\" + chat + \"', jsonb_build_object('type', 'human', 'content', \" + txt(a.text) + \", 'additional_kwargs', '{}'::jsonb, 'response_metadata', '{}'::jsonb)), ('\" + chat + \"', jsonb_build_object('type', 'ai', 'content', \" + txt(output) + \", 'tool_calls', '[]'::jsonb, 'invalid_tool_calls', '[]'::jsonb, 'additional_kwargs', '{}'::jsonb, 'response_metadata', '{}'::jsonb))\";\nreturn [{ json: { output, sql } }];"
+      }
+    },
+    {
+      "id": "pdfmemory",
+      "name": "PDF memory",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        1125,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.sql }}",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "tzBuhu9KEXlaRRfW",
+          "name": "Postgres account"
+        }
+      },
+      "executeOnce": true,
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "pdfresult",
+      "name": "PDF result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1130,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{ json: { output: $('PDF reply').first().json.output, upload: true } }];"
+      }
+    },
+    {
       "id": "saveif",
       "name": "Save?",
       "type": "n8n-nodes-base.if",
@@ -3700,7 +4009,165 @@
       "main": [
         [
           {
+            "node": "Upload?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload?": {
+      "main": [
+        [
+          {
+            "node": "PDF gate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
             "node": "Has link?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PDF gate": {
+      "main": [
+        [
+          {
+            "node": "PDF ok?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PDF ok?": {
+      "main": [
+        [
+          {
+            "node": "Get file",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "PDF reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get file": {
+      "main": [
+        [
+          {
+            "node": "PDF download",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PDF download": {
+      "main": [
+        [
+          {
+            "node": "PDF text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PDF text": {
+      "main": [
+        [
+          {
+            "node": "PDF prep",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PDF prep": {
+      "main": [
+        [
+          {
+            "node": "PDF readable?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PDF readable?": {
+      "main": [
+        [
+          {
+            "node": "PDF ingest",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "PDF reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PDF ingest": {
+      "main": [
+        [
+          {
+            "node": "PDF reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PDF reply": {
+      "main": [
+        [
+          {
+            "node": "PDF memory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PDF memory": {
+      "main": [
+        [
+          {
+            "node": "PDF result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PDF result": {
+      "main": [
+        [
+          {
+            "node": "Prep reply",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Memory text",
             "type": "main",
             "index": 0
           }

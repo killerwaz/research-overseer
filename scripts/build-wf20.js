@@ -33,7 +33,9 @@ for (const item of urls) {
   if (!c) continue;
   out.push({ json: { url: obj.url, title: obj.title || null, source: obj.source || null,
     published_at: obj.published_at || null, canonical_url: c, run_id: runId,
-    slides: Boolean(obj.slides), transcribe: Boolean(obj.transcribe) } });
+    slides: Boolean(obj.slides), transcribe: Boolean(obj.transcribe),
+    // #18: a document whose text is already read (an uploaded PDF) skips the scrapers
+    markdown: typeof obj.markdown === 'string' ? obj.markdown : '', scraper: obj.scraper || '' } });
 }
 if (!out.length) return [{ json: { __no_new: true, run_id: runId, debug: lastErr } }];
 return out;
@@ -61,7 +63,7 @@ const wantsMore = (c) => isMediaUrl(c.canonical_url) && (c.slides || c.transcrib
 for (const c of candidates) if ((!seen.has(c.canonical_url) || wantsMore(c)) && !byCanon.has(c.canonical_url)) byCanon.set(c.canonical_url, c);
 const fresh = [...byCanon.values()];
 if (!fresh.length) return [{ json: { __no_new: true, run_id: runId } }];
-return fresh.map(j => ({ json: { ...j, is_media: isMediaUrl(j.canonical_url), replace: seen.has(j.canonical_url) } }));
+return fresh.map(j => ({ json: { ...j, is_media: !j.markdown && isMediaUrl(j.canonical_url), pre_read: Boolean(j.markdown), replace: seen.has(j.canonical_url) } }));
 `.trim();
 
 const LOG_FAILURE = `
@@ -87,7 +89,12 @@ const orig = $('Filter new').item.json;
 let markdown = '';
 let title = '';
 let scraper = 'crawl4ai';
-if ($json.results) {
+if (orig.pre_read) {
+  // #18: text already read (an uploaded PDF, extracted inside WF-00)
+  markdown = orig.markdown || '';
+  title = orig.title || '';
+  scraper = orig.scraper || 'upload';
+} else if ($json.results) {
   const r = ($json.results && $json.results[0]) || {};
   const md = r.markdown || {};
   const fit = (typeof md === 'object' ? md.fit_markdown : md) || '';
@@ -364,6 +371,12 @@ const nodes = [
 
   codeNode('Prep media', 'prepmedia', [1800, -400], 'runOnceForEachItem', PREP_MEDIA),
 
+  // #18: a document that arrived with its text (an uploaded PDF) needs no scraper
+  { id: 'preread', name: 'Pre-read?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1275, -200],
+    parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' },
+      combinator: 'and', conditions: [ { id: 'c1', leftValue: '={{ Boolean($json.pre_read) }}', rightValue: true,
+        operator: { type: 'boolean', operation: 'equals' } } ] } } },
+
   // PDFs skip Crawl4AI (a headless browser can't markdown them) and go straight here
   { id: 'ispdf', name: 'Is PDF?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1300, -100],
     parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' },
@@ -438,7 +451,7 @@ const nodes = [
   codeNode('Collect stats', 'stats', [3800, 0], 'runOnceForAllItems', COLLECT_STATS),
 
   pgNode('Finalize run', 'finalize', [4000, 0],
-    "update runs set finished_at = now(), urls_new = $2::int, urls_scraped = (select count(*) from raw_docs where run_id = $1::bigint), items_created = (select count(*) from feed_items where run_id = $1::bigint), error = nullif($3,''), status = case when $2::int = 0 and $3 = '' then 'ok' when (select count(*) from raw_docs where run_id = $1::bigint) = 0 and $2::int > 0 then 'failed' when (select count(*) from raw_docs where run_id = $1::bigint) < $2::int then 'partial' when (select count(*) from feed_items where run_id = $1::bigint) < (select count(*) from raw_docs where run_id = $1::bigint) then 'partial' else 'ok' end where id = $1::bigint returning id as run_id, status, scope, urls_found, urls_new, urls_scraped, items_created, error, (select title from feed_items where run_id = $1::bigint order by score desc, relevance desc nulls last, id desc limit 1) as top_title, (select json_build_object('id', f.id, 'title', f.title, 'summary', f.summary, 'score', f.score, 'canonical_url', f.canonical_url, 'key_points', f.structured->'key_points', 'transcript_source', substr(d.scraper, 7), 'screen', split_part(substring(d.markdown from 'Screen: (.*)'), chr(10), 1))::text from feed_items f join raw_docs d on d.id = f.raw_doc_id where f.run_id = $1::bigint and d.scraper like 'media:%' order by f.id desc limit 1) as media, (select string_agg(id::text, ',' order by score desc nulls last, id) from feed_items where run_id = $1::bigint) as run_item_ids",
+    "update runs set finished_at = now(), urls_new = $2::int, urls_scraped = (select count(*) from raw_docs where run_id = $1::bigint), items_created = (select count(*) from feed_items where run_id = $1::bigint), error = nullif($3,''), status = case when $2::int = 0 and $3 = '' then 'ok' when (select count(*) from raw_docs where run_id = $1::bigint) = 0 and $2::int > 0 then 'failed' when (select count(*) from raw_docs where run_id = $1::bigint) < $2::int then 'partial' when (select count(*) from feed_items where run_id = $1::bigint) < (select count(*) from raw_docs where run_id = $1::bigint) then 'partial' else 'ok' end where id = $1::bigint returning id as run_id, status, scope, urls_found, urls_new, urls_scraped, items_created, error, (select title from feed_items where run_id = $1::bigint order by score desc, relevance desc nulls last, id desc limit 1) as top_title, (select json_build_object('id', f.id, 'title', f.title, 'summary', f.summary, 'score', f.score, 'canonical_url', f.canonical_url, 'key_points', f.structured->'key_points', 'transcript_source', substr(d.scraper, 7), 'screen', split_part(substring(d.markdown from 'Screen: (.*)'), chr(10), 1))::text from feed_items f join raw_docs d on d.id = f.raw_doc_id where f.run_id = $1::bigint and d.scraper like 'media:%' order by f.id desc limit 1) as media, (select json_build_object('id', f.id, 'title', f.title, 'summary', f.summary, 'angle', f.angle, 'score', f.score)::text from feed_items f join raw_docs d on d.id = f.raw_doc_id where f.run_id = $1::bigint and d.scraper like 'upload:%' order by f.id desc limit 1) as upload, (select string_agg(id::text, ',' order by score desc nulls last, id) from feed_items where run_id = $1::bigint) as run_item_ids",
     "={{ $json.run_id }},{{ $json.urls_new }},{{ $json.error }}",
     { executeOnce: true }),
 
@@ -457,6 +470,14 @@ if (r.scope === 'url' && !(Number(r.items_created) > 0)) {
   const noCap = fails.find((x) => x.reason === 'media_no_captions');
   if (noCap) return [{ json: { text: '\u{1F3AC} <b>' + escT(noCap.media_title || noCap.url) + '</b> has no captions.\\n' +
     'Reply "transcribe" and I will listen to it (about 1 minute per 20 minutes of video), or "transcribe slides" to read the screen too.', remember: noCap.canonical_url } }];
+}
+// #18: an uploaded PDF gets its own summary, with 👍/👎 (shared/upload.js)
+const escU = (x) => String(x || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+if (r.scope === 'upload') {
+  let u = null; try { u = JSON.parse(r.upload || 'null'); } catch (e) {}
+  if (u) return [{ json: { text: '\u{1F4C4} <b>' + escU(u.title) + '</b>' + (u.score != null ? ' [' + u.score + ']' : '') + '\\n\\n' + escU(u.summary) +
+    (u.angle ? '\\n\\n<i>' + escU(u.angle) + '</i>' : '') + '\\n\\nIn your feed now: ask about it, or say "save #1".', reply_markup: itemKeyboard(u.id) } }];
+  return [{ json: { text: Number(r.urls_new) === 0 ? '\u{1F4C4} That PDF is already in your feed.' : "\u{1F4C4} I read the PDF but couldn't summarise it. Try sending it again in a minute." } }];
 }
 if (r.media && r.scope === 'url') {
 
@@ -493,6 +514,12 @@ return [{ json: { text } }];
     "insert into settings (key, value, updated_at) select 'last_no_captions_url', $1, now() where $1 <> '' on conflict (key) do update set value = excluded.value, updated_at = now()",
     "={{ $json.remember || '' }}", { executeOnce: true, alwaysOutputData: true, onError: 'continueRegularOutput' }),
 
+  // trigger 'test' (WF-00's test webhook) does everything but message his real chat
+  { id: 'sendq', name: 'Send?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [4330, 0],
+    parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' },
+      combinator: 'and', conditions: [ { id: 'c1', leftValue: "={{ $('WF Input').first().json.trigger }}", rightValue: 'test',
+        operator: { type: 'string', operation: 'notEquals' } } ] } } },
+
   // HTTP rather than the Telegram node: a media summary carries 👍/👎 buttons
   // for its own feed item, which the node's fixed keyboard cannot express.
   { id: 'tgsummary', name: 'Telegram summary', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [4380, 0],
@@ -511,7 +538,7 @@ const r = $('Finalize run').first().json;
 const c = $('Compose summary').first().json;
 let sent = false;
 try { sent = $('Telegram summary').first().json.ok === true; } catch (e) {}
-const ids = r.scope === 'url' ? String(r.run_item_ids || '').split(',').map(Number).filter((x) => x > 0) : [];
+const ids = (r.scope === 'url' || r.scope === 'upload') ? String(r.run_item_ids || '').split(',').map(Number).filter((x) => x > 0) : [];
 return [{ json: { sql: sent ? botSaidSql('__TG_CHAT__', c.text, ids, r.media ? 'media' : 'pipeline') : 'select 1 as skipped' } }];`.trim()),
   pgNode('Record send', 'recordsend', [4395, -120], '={{ $json.sql }}', null,
     { executeOnce: true, alwaysOutputData: true, onError: 'continueRegularOutput' }),
@@ -533,6 +560,10 @@ const connections = {
   ] },
   'Is media?': { main: [
     [{ node: 'Fetch media', type: 'main', index: 0 }],
+    [{ node: 'Pre-read?', type: 'main', index: 0 }]
+  ] },
+  'Pre-read?': { main: [
+    [{ node: 'Prep doc', type: 'main', index: 0 }],
     [{ node: 'Is PDF?', type: 'main', index: 0 }]
   ] },
   'Fetch media': { main: [[{ node: 'Media OK?', type: 'main', index: 0 }]] },
@@ -563,7 +594,8 @@ const connections = {
   'Collect stats': { main: [[{ node: 'Finalize run', type: 'main', index: 0 }]] },
   'Finalize run': { main: [[{ node: 'Compose summary', type: 'main', index: 0 }]] },
   'Compose summary': { main: [[{ node: 'Remember no-captions', type: 'main', index: 0 }]] },
-  'Remember no-captions': { main: [[{ node: 'Telegram summary', type: 'main', index: 0 }]] },
+  'Remember no-captions': { main: [[{ node: 'Send?', type: 'main', index: 0 }]] },
+  'Send?': { main: [[{ node: 'Telegram summary', type: 'main', index: 0 }], [{ node: 'Record prep', type: 'main', index: 0 }]] },
   'Telegram summary': { main: [[{ node: 'Record prep', type: 'main', index: 0 }]] },
   'Record prep': { main: [[{ node: 'Record send', type: 'main', index: 0 }]] },
   'Record send': { main: [[{ node: 'Return summary', type: 'main', index: 0 }]] }
