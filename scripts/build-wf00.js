@@ -301,7 +301,7 @@ return $('Feed switch?').all(1).map(i => ({ json: { ...i.json, sources, runs, fi
       options: { queryReplacement: "={{ String($('Agent input').first().json.chat_id) }}" } },
     credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true, onError: 'continueRegularOutput' },
   { id: 'bigq', name: 'Big picture?', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1180, 160],
-    parameters: { mode: 'runOnceForAllItems', jsCode: inline('synth.js') + inline('sweep-confirm.js') + inline('answer-check.js') + inline('referent.js') + inline('search-gate.js') + inline('deep-trigger.js') + `
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('synth.js') + inline('sweep-confirm.js') + inline('answer-check.js') + inline('referent.js') + inline('search-gate.js') + inline('deep-trigger.js') + inline('brief.js') + `
 let lb = {};
 try { lb = $input.first().json || {}; } catch (e) {}
 const lastBot = lb.last_bot || '';
@@ -310,6 +310,8 @@ return $('Recall note').all().map(i => {
   const deep = deepAsk(i.json.text || '', String(lb.last_human || '').replace(/\\s*\\[live data, fetched just now:[\\s\\S]*$/, ''));
   if (deep.go) return { json: { ...i.json, deep_go: 'true', deep_q: deep.question, sweep: '', synth_go: 'false', ref_route: '', search_ok: 'false' } };
   const s = sweepDecision(i.json.text || '', lastBot);
+  // #16 "brief me" / "what did I miss" / "more" after a brief: answered in code (shared/brief.js)
+  if (!s.sweep && briefAsk(i.json.text || '', lastBot).go) return { json: { ...i.json, ...s, brief_go: 'true', synth_go: 'false', ref_route: '', search_ok: 'false' } };
   // a message that points at something already shown is answered about THAT,
   // before any keyword route ("summarize the video" is not an overview question)
   let items = [];
@@ -795,6 +797,82 @@ return [{ json: { sql: rememberSql(a.chat_id, a.text, m.output, vec) } }];`.trim
     parameters: { operation: 'executeQuery', query: '={{ $json.sql }}', options: {} },
     credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true, onError: 'continueRegularOutput' },
 
+  // ---- #16 "brief me" (2026-10-21, shared/brief.js) ----
+  // Best 5 stories that ARRIVED since his last brief (first: 7 days), one row per
+  // story, numbered (chat_results, so "#3" works), 👍/👎, "more" for the next 5.
+  // No model; never sent to the web (an empty brief is an answer). Writes its own
+  // memory rows (the agent never ran); state in settings key brief:<chat>.
+  { id: 'briefif', name: 'Brief?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1225, 120],
+    parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, combinator: 'and',
+      conditions: [{ id: 'bf1', leftValue: '={{ $json.brief_go }}', rightValue: 'true', operator: { type: 'string', operation: 'equals' } }] } } },
+  { id: 'briefstate', name: 'Brief state', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [1240, 40],
+    parameters: { operation: 'executeQuery',
+      query: "select coalesce((select value from settings where key = 'brief:' || $1::text), '') as state",
+      options: { queryReplacement: "={{ String($('Agent input').first().json.chat_id) }}" } },
+    credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true, onError: 'continueRegularOutput' },
+  { id: 'briefprep', name: 'Brief prep', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1250, 40],
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('brief.js') + `
+let lastBot = '';
+try { lastBot = $('Last bot msg').first().json.last_bot || ''; } catch (e) {}
+const ask = briefAsk($('Agent input').first().json.text || '', lastBot);
+const st = parseState(($input.first().json || {}).state);
+// topic brief, or "more" after one: WF-31 pages it (ttopic/tpage kept beside the plain brief's state)
+if (ask.topic || ask.topic_more) {
+  const tpage = ask.topic_more ? Number(st.tpage || 0) + 1 : 0;
+  const topic = ask.topic_more ? String(st.ttopic || '') : ask.topic;
+  return [{ json: { plan: { topic, tpage, store: { ...st, ttopic: topic, tpage } }, topic_go: 'true', limit: briefTopicLimit(tpage) } }];
+}
+const plan = briefPlan(ask, st, new Date().toISOString());
+plan.store = { ...plan.store, ttopic: st.ttopic || '', tpage: st.tpage || 0 };
+return [{ json: { plan, topic_go: 'false', sql: briefSql({ since: plan.since, topic: '', page: plan.page }) } }];`.trim() } },
+  { id: 'brieftopicif', name: 'Brief topic?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1255, 0],
+    parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, combinator: 'and',
+      conditions: [{ id: 'bt1', leftValue: '={{ $json.topic_go }}', rightValue: 'true', operator: { type: 'string', operation: 'equals' } }] } } },
+  // WF-31 writes chat_results itself, so "#3" works after a topic brief too
+  { id: 'brieffeed', name: 'Brief feed', type: 'n8n-nodes-base.executeWorkflow', typeVersion: 1.2, position: [1260, -40],
+    parameters: { workflowId: { __rl: true, value: WF.query_feed, mode: 'id' },
+      workflowInputs: { mappingMode: 'defineBelow', value: {
+        tag: '={{ $json.plan.topic }}', limit: '={{ $json.limit }}', chat_id: "={{ String($('Agent input').first().json.chat_id) }}",
+        item: '', since: '', min_relevance: '', min_score: '', max_age_days: '', group_stories: '', user_text: '' },
+        matchingColumns: [], schema: ['item', 'tag', 'limit', 'chat_id', 'since', 'min_relevance', 'min_score', 'max_age_days', 'group_stories', 'user_text']
+          .map((id) => ({ id, displayName: id, required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: 'string' })) },
+      options: { waitForSubWorkflow: true } },
+    onError: 'continueRegularOutput', alwaysOutputData: true },
+  { id: 'briefquery', name: 'Brief query', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [1260, 40],
+    parameters: { operation: 'executeQuery', query: '={{ $json.sql }}', options: {} },
+    credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true, onError: 'continueRegularOutput' },
+  // state + the numbered list + both memory rows, in one statement (text as base64)
+  { id: 'briefreply', name: 'Brief reply', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1270, 40],
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('brief.js') + `
+const a = $('Agent input').first().json;
+const plan = $('Brief prep').first().json.plan;
+const r = $input.first().json || {};
+let rows = [];
+try { rows = JSON.parse(r.rows || '[]') || []; } catch (e) {}
+const topic = plan.tpage != null;   /* "brief me on X" or "more" after it: WF-31's result */
+const failed = topic ? !Array.isArray(r.items) : r.total == null;
+const out = failed ? { output: "I couldn't read the feed for your brief just now. Try again in a minute.", items: [] }
+  : topic ? briefTopicReply(plan.topic, r, plan.tpage) : briefReply(plan, rows, r.total, r.good);
+const chat = String(a.chat_id).replace(/[^0-9-]/g, '');
+const b64 = (s) => Buffer.from(String(s || ''), 'utf8').toString('base64');
+const txt = (s) => "convert_from(decode('" + b64(s) + "', 'base64'), 'UTF8')";
+const ids = out.items.map((i) => Number(i.id)).filter((x) => Number.isInteger(x) && x > 0);
+let sql = "insert into n8n_chat_histories (session_id, message) values ('" + chat + "', jsonb_build_object('type', 'human', 'content', " + txt(a.text) + ", 'additional_kwargs', '{}'::jsonb, 'response_metadata', '{}'::jsonb)), ('" + chat + "', jsonb_build_object('type', 'ai', 'content', " + txt(out.output) + ", 'tool_calls', '[]'::jsonb, 'invalid_tool_calls', '[]'::jsonb, 'additional_kwargs', '{}'::jsonb, 'response_metadata', '{}'::jsonb));";
+if (!failed) sql += " insert into settings (key, value, updated_at) values ('brief:" + chat + "', " + txt(JSON.stringify(plan.store)) + ", now()) on conflict (key) do update set value = excluded.value, updated_at = now();";
+/* "more" keeps the earlier numbers: the stored list grows (n = position) */
+if (topic) { /* WF-31 already stored the list */ }
+else if (ids.length && plan.page === 0) sql += " insert into chat_results (chat_id, item_ids, topic, created_at) values (" + chat + ", array[" + ids.join(',') + "]::bigint[], 'brief', now()) on conflict (chat_id) do update set item_ids = excluded.item_ids, topic = excluded.topic, created_at = excluded.created_at;";
+else if (ids.length) sql += " update chat_results set item_ids = item_ids[1:" + (plan.page * 5) + "] || array[" + ids.join(',') + "]::bigint[], created_at = now() where chat_id = " + chat + ";";
+return [{ json: { output: out.output, items: out.items, save_sql: sql } }];`.trim() } },
+  { id: 'briefsave', name: 'Brief save', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [1280, 40],
+    parameters: { operation: 'executeQuery', query: '={{ $json.save_sql }}', options: {} },
+    credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true, onError: 'continueRegularOutput' },
+  // items go out as a tool step, which is where Prep reply finds them for 👍/👎
+  { id: 'briefres', name: 'Brief result', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1290, 40],
+    parameters: { mode: 'runOnceForAllItems', jsCode: `
+const b = $('Brief reply').first().json;
+return [{ json: { output: b.output, brief: true, intermediateSteps: [{ action: { tool: 'brief' }, observation: { items: b.items } }] } }];`.trim() } },
+
   MODEL_NODE,
 
   { id: 'memory', name: 'Chat memory', type: '@n8n/n8n-nodes-langchain.memoryPostgresChat', typeVersion: 1.3, position: [1160, 320],
@@ -960,7 +1038,16 @@ const connections = {
   'Big picture?': { main: [[{ node: 'Deep?', type: 'main', index: 0 }]] },
   'Deep?': { main: [[{ node: 'Deep research', type: 'main', index: 0 }], [{ node: 'Sweep?', type: 'main', index: 0 }]] },
   'Sweep?': { main: [[{ node: 'Run sweep', type: 'main', index: 0 }], [{ node: 'Sweep declined?', type: 'main', index: 0 }]] },
-  'Sweep declined?': { main: [[{ node: 'Sweep reply', type: 'main', index: 0 }], [{ node: 'Ref item?', type: 'main', index: 0 }]] },
+  'Sweep declined?': { main: [[{ node: 'Sweep reply', type: 'main', index: 0 }], [{ node: 'Brief?', type: 'main', index: 0 }]] },
+  'Brief?': { main: [[{ node: 'Brief state', type: 'main', index: 0 }], [{ node: 'Ref item?', type: 'main', index: 0 }]] },
+  'Brief state': { main: [[{ node: 'Brief prep', type: 'main', index: 0 }]] },
+  'Brief prep': { main: [[{ node: 'Brief topic?', type: 'main', index: 0 }]] },
+  'Brief topic?': { main: [[{ node: 'Brief feed', type: 'main', index: 0 }], [{ node: 'Brief query', type: 'main', index: 0 }]] },
+  'Brief feed': { main: [[{ node: 'Brief reply', type: 'main', index: 0 }]] },
+  'Brief query': { main: [[{ node: 'Brief reply', type: 'main', index: 0 }]] },
+  'Brief reply': { main: [[{ node: 'Brief save', type: 'main', index: 0 }]] },
+  'Brief save': { main: [[{ node: 'Brief result', type: 'main', index: 0 }]] },
+  'Brief result': { main: [[{ node: 'Prep reply', type: 'main', index: 0 }, { node: 'Memory text', type: 'main', index: 0 }]] },
   'Ref item?': { main: [[{ node: 'Ref fetch', type: 'main', index: 0 }], [{ node: 'Synth?', type: 'main', index: 0 }]] },
   'Ref fetch': { main: [[{ node: 'Ref prep', type: 'main', index: 0 }]] },
   'Ref prep': { main: [[{ node: 'Ref model', type: 'main', index: 0 }]] },

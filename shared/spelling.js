@@ -6,8 +6,9 @@
 // A fixer with no model cannot tell a typo from a real name the feed lacks:
 // nearest-spelling fixed 154/165 typos but "fixed" 10/23 absent names
 // (paystack -> haystack, kaggle -> toggle); pg_trgm was worse (pathoa -> path).
-// So: a word that is NOT in vocab_words (sql/016: article text, feed titles and
-// summaries, his chats) gets its one-edit neighbours that ARE, and the 9B
+// So: a word that is NOT in vocab_words (article text, feed titles and summaries;
+// his chats were dropped by sql/017 — they taught it his typos) gets its one-edit
+// neighbours that ARE, and the 9B
 // (thinking off, ~0.2 s) says which one he meant, or none. Measured: 138/165
 // typos fixed, 4 changed to another real name (rahhat -> rahman), 22/23 absent
 // names left alone.
