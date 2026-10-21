@@ -305,9 +305,14 @@ const outsideTotal = rows.length ? Number(rows[0].outside_total || 0) : 0;
 const items = rows.filter((r) => r.outside !== true).map((r, i) => clean(r, i + 1));
 const chat = String(p.chat_id || '').trim();
 const ids = items.map((i) => Number(i.id)).filter((x) => Number.isInteger(x) && x > 0);
+// the search itself goes with the list, so "more" can fetch its next page (sql/019;
+// filters as applied, after userFilters and the spelling fix; base64 like all text)
+const searchQ = Buffer.from(JSON.stringify({ tag: (p.topics || []).join(' | '), since: p.since || '', min_score: p.min_score || '',
+  max_age_days: p.max_age_days || '', min_relevance: p.min_relevance || '', group_stories: p.group_stories || '' }), 'utf8').toString('base64');
 const remember = /^-?\\d+$/.test(chat) && ids.length === items.length && ids.length
-  ? 'insert into chat_results (chat_id, item_ids, topic, created_at) values (' + chat + ', array[' + ids.join(',') + ']::bigint[], null, now()) ' +
-    'on conflict (chat_id) do update set item_ids = excluded.item_ids, topic = excluded.topic, created_at = excluded.created_at'
+  ? 'insert into chat_results (chat_id, item_ids, topic, query, created_at) values (' + chat + ', array[' + ids.join(',') + ']::bigint[], null, ' +
+    "convert_from(decode('" + searchQ + "', 'base64'), 'UTF8')::jsonb, now()) " +
+    'on conflict (chat_id) do update set item_ids = excluded.item_ids, topic = excluded.topic, query = excluded.query, created_at = excluded.created_at'
   : 'select 1 as skipped';
 const out = { count: items.length, items };
 if (p.filters_dropped) out.filters_ignored = p.filters_dropped + ' (the user did not ask for them; never add filters they did not ask for)';

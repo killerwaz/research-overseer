@@ -311,11 +311,14 @@ return $('Feed switch?').all(1).map(i => ({ json: { ...i.json, sources, runs, fi
         "coalesce((select message->>'content' from n8n_chat_histories where session_id = $1::text and message->>'type' = 'human' order by id desc limit 1), '') as last_human, " +
         // #16: who wrote the list he has — a bare "more" pages a brief only while it is the brief's
         // ('brief' | 'brief-topic'); a save in between leaves it, another list replaces it
-        "coalesce((select topic from chat_results where chat_id = $1::bigint), '') as list_topic",
+        "coalesce((select topic from chat_results where chat_id = $1::bigint), '') as list_topic, " +
+        // "more" after a feed list: the search behind it and the ids already shown (shared/more.js)
+        "(select query::text from chat_results where chat_id = $1::bigint) as list_query, " +
+        "coalesce((select array_to_json(item_ids)::text from chat_results where chat_id = $1::bigint), '[]') as list_ids",
       options: { queryReplacement: "={{ String($('Agent input').first().json.chat_id) }}" } },
     credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true, onError: 'continueRegularOutput' },
   { id: 'bigq', name: 'Big picture?', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1180, 160],
-    parameters: { mode: 'runOnceForAllItems', jsCode: inline('synth.js') + inline('sweep-confirm.js') + inline('answer-check.js') + inline('referent.js') + inline('search-gate.js') + inline('deep-trigger.js') + inline('brief.js') + inline('obsidian.js') + `
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('synth.js') + inline('sweep-confirm.js') + inline('answer-check.js') + inline('referent.js') + inline('search-gate.js') + inline('deep-trigger.js') + inline('brief.js') + inline('obsidian.js') + inline('more.js') + `
 let lb = {};
 try { lb = $input.first().json || {}; } catch (e) {}
 const lastBot = lb.last_bot || '';
@@ -326,6 +329,9 @@ return $('Recall note').all().map(i => {
   const s = sweepDecision(i.json.text || '', lastBot);
   // #17 "save #3" / "save it": a note in his vault, in code (shared/obsidian.js)
   if (!s.sweep && saveAsk(i.json.text || '').go) return { json: { ...i.json, ...s, save_go: 'true', brief_go: 'false', synth_go: 'false', ref_route: '', search_ok: 'false' } };
+  // a bare "more" not after a brief: the next page of his feed list, or "nothing more" (shared/more.js)
+  const mr = s.sweep ? '' : moreRoute(i.json.text || '', lb.list_topic, lb.list_query, lb.list_n);
+  if (mr === 'feed' || mr === 'none') return { json: { ...i.json, ...s, more_go: mr, brief_go: 'false', save_go: 'false', synth_go: 'false', ref_route: '', search_ok: 'false' } };
   // #16 "brief me" / "what did I miss" / "more" after a brief: answered in code (shared/brief.js)
   if (!s.sweep && briefAsk(i.json.text || '', lastBot, lb.list_topic).go) return { json: { ...i.json, ...s, brief_go: 'true', synth_go: 'false', ref_route: '', search_ok: 'false' } };
   // a message that points at something already shown is answered about THAT,
@@ -776,10 +782,10 @@ return [{ json: { output: w.output, web: true, web_sources: w.sources || [], web
   // finished exchange is stored after Memory text (the reply he actually saw).
   // Switch fix_recall (default on). A failed embedding = no recall, never a failed reply.
   { id: 'recallprep', name: 'Recall prep', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1120, 200],
-    parameters: { mode: 'runOnceForAllItems', jsCode: inline('embed.js') + inline('brief.js') + inline('obsidian.js') + `
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('embed.js') + inline('brief.js') + inline('obsidian.js') + inline('more.js') + `
 const a = $('Agent input').first().json;
 // a command answered in code ("save #3", "brief me") needs no earlier chats (review 2026-10-21)
-const routed = saveAsk(a.text || '').go || briefAsk(a.text || '').go;
+const routed = saveAsk(a.text || '').go || briefAsk(a.text || '').go || isMore(a.text || '');
 return [{ json: { routed, embed_body: JSON.stringify({ model: EMBED_MODEL, input: [routed ? '-' : queryText(a.text || '-')] }) } }];`.trim() } },
   { id: 'recallembed', name: 'Recall embed', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [1140, 200],
     parameters: { method: 'POST', url: 'http://host.docker.internal:1234/v1/embeddings',
@@ -811,7 +817,7 @@ if (!shouldRemember(a.text, m.output)) return [];
 // lists come back as "earlier chats" (review 2026-10-21)
 let bp = {};
 try { bp = $('Big picture?').first().json || {}; } catch (e) {}
-if (a.doc || bp.brief_go === 'true' || bp.save_go === 'true') return [];
+if (a.doc || bp.brief_go === 'true' || bp.save_go === 'true' || bp.more_go) return [];
 return [{ json: { embed_body: JSON.stringify({ model: EMBED_MODEL, input: [memoryDoc(a.text, m.output)] }) } }];`.trim() } },
   { id: 'rememberembed', name: 'Remember embed', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [1980, -180],
     parameters: { method: 'POST', url: 'http://host.docker.internal:1234/v1/embeddings',
@@ -894,7 +900,7 @@ if (!output && String(seen.seen) === 'true') {
   const id = Number(seen.item_id) || 0;
   output = '\u{1F4C4} That PDF is already in your feed' + (seen.title ? ': "' + seen.title + '"' : '') + '.' + (id ? ' Ask about it, or say "save #1".' : '');
   /* the list he has is now that one item, so "#1" / "save #1" mean it */
-  if (id) sql = 'insert into chat_results (chat_id, item_ids, topic, created_at) values (' + String(a.chat_id).replace(/[^0-9-]/g, '') + ', array[' + id + ']::bigint[], null, now()) on conflict (chat_id) do update set item_ids = excluded.item_ids, topic = excluded.topic, created_at = excluded.created_at';
+  if (id) sql = 'insert into chat_results (chat_id, item_ids, topic, created_at) values (' + String(a.chat_id).replace(/[^0-9-]/g, '') + ', array[' + id + ']::bigint[], null, now()) on conflict (chat_id) do update set item_ids = excluded.item_ids, topic = excluded.topic, query = null, created_at = excluded.created_at';
 }
 if (!output) { try { output = $('PDF gate').first().json.reply; } catch (e) {} }
 output = output || "I couldn't read that file.";
@@ -974,6 +980,53 @@ return [{ json: { output, save_sql: exchangeSql(a.chat_id, a.text, output) + (re
   { id: 'saveres', name: 'Save result', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1300, 260],
     parameters: { mode: 'runOnceForAllItems', jsCode: "return [{ json: { output: $('Save reply').first().json.output, saved: true } }];" } },
 
+  // ---- a bare "more" after a feed list (2026-10-22, shared/more.js, sql/019) ----
+  // The same search again with room to skip what he saw; the next 5 he has NOT seen,
+  // numbered on. No list to page: "nothing more to show". No model, no web.
+  { id: 'moreif', name: 'More?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1226, 120],
+    parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, combinator: 'and',
+      conditions: [{ id: 'mo1', leftValue: "={{ $json.more_go || '' }}", rightValue: '', operator: { type: 'string', operation: 'notEquals' } }] } } },
+  { id: 'moreprep', name: 'More prep', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1240, 120],
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('more.js') + `
+const a = $input.first().json;
+let lb = {};
+try { lb = $('Last bot msg').first().json || {}; } catch (e) {}
+return [{ json: { route: a.more_go, query: lb.list_query || '', ids: lb.list_ids || '[]', ...(a.more_go === 'feed' ? moreInputs(lb.list_query, lb.list_n) : {}) } }];`.trim() } },
+  { id: 'morefeedif', name: 'More feed?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1245, 120],
+    parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, combinator: 'and',
+      conditions: [{ id: 'mf1', leftValue: '={{ $json.route }}', rightValue: 'feed', operator: { type: 'string', operation: 'equals' } }] } } },
+  { id: 'morefeed', name: 'More feed', type: 'n8n-nodes-base.executeWorkflow', typeVersion: 1.2, position: [1250, 160],
+    parameters: { workflowId: { __rl: true, value: WF.query_feed, mode: 'id' },
+      workflowInputs: { mappingMode: 'defineBelow', value: {
+        tag: '={{ $json.tag }}', limit: '={{ $json.limit }}', chat_id: "={{ String($('Agent input').first().json.chat_id) }}",
+        since: '={{ $json.since }}', min_score: '={{ $json.min_score }}', max_age_days: '={{ $json.max_age_days }}',
+        min_relevance: '={{ $json.min_relevance }}', group_stories: '={{ $json.group_stories }}', item: '', user_text: '' },
+        matchingColumns: [], schema: ['item', 'tag', 'limit', 'chat_id', 'since', 'min_relevance', 'min_score', 'max_age_days', 'group_stories', 'user_text']
+          .map((id) => ({ id, displayName: id, required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: 'string' })) },
+      options: { waitForSubWorkflow: true } },
+    onError: 'continueRegularOutput', alwaysOutputData: true },
+  // reply + both memory rows + his list = what he had + the new page (WF-31 wrote its bigger page over it)
+  { id: 'morereply', name: 'More reply', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1260, 120],
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('more.js') + inline('referent.js') + `
+const a = $('Agent input').first().json;
+const prep = $('More prep').first().json;
+let out = { output: NOTHING_MORE, items: [], ids: [] };
+if (prep.route === 'feed') {
+  const r = $input.first().json || {};
+  let shown = [];
+  try { shown = JSON.parse(prep.ids || '[]') || []; } catch (e) {}
+  out = Array.isArray(r.items) ? moreReply(shown, r, prep.query) : { output: "I couldn't fetch more just now. Try again in a minute.", items: [], ids: shown };
+}
+const list = prep.route === 'feed' ? moreListSql(a.chat_id, out.ids) : '';
+return [{ json: { output: out.output, items: out.items, save_sql: exchangeSql(a.chat_id, a.text, out.output) + (list ? '; ' + list : '') } }];`.trim() } },
+  { id: 'moresave', name: 'More save', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [1270, 120],
+    parameters: { operation: 'executeQuery', query: '={{ $json.save_sql }}', options: {} },
+    credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true, onError: 'continueRegularOutput' },
+  { id: 'moreres', name: 'More result', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1280, 120],
+    parameters: { mode: 'runOnceForAllItems', jsCode: `
+const b = $('More reply').first().json;
+return [{ json: { output: b.output, more: true, intermediateSteps: [{ action: { tool: 'more' }, observation: { items: b.items } }] } }];`.trim() } },
+
   // ---- #16 "brief me" (2026-10-21, shared/brief.js) ----
   // Best 5 stories that ARRIVED since his last brief (first: 7 days), one row per
   // story, numbered (chat_results, so "#3" works), 👍/👎, "more" for the next 5.
@@ -1040,7 +1093,7 @@ if (!failed) sql += " insert into settings (key, value, updated_at) values ('bri
    still the list he has ('brief' | 'brief-topic'; WF-31 and others write null).
    WF-31 stored the topic list plus the one look-ahead row: trim it to what he saw. */
 if (topic) { if (!failed) sql += " update chat_results set item_ids = item_ids[1:" + (plan.tpage * 5 + out.items.length) + "], topic = 'brief-topic' where chat_id = " + chat + ";"; }
-else if (ids.length && plan.page === 0) sql += " insert into chat_results (chat_id, item_ids, topic, created_at) values (" + chat + ", array[" + ids.join(',') + "]::bigint[], 'brief', now()) on conflict (chat_id) do update set item_ids = excluded.item_ids, topic = excluded.topic, created_at = excluded.created_at;";
+else if (ids.length && plan.page === 0) sql += " insert into chat_results (chat_id, item_ids, topic, created_at) values (" + chat + ", array[" + ids.join(',') + "]::bigint[], 'brief', now()) on conflict (chat_id) do update set item_ids = excluded.item_ids, topic = excluded.topic, query = null, created_at = excluded.created_at;";
 /* "more" keeps the earlier numbers: the brief's own list grows (n = position) */
 else if (ids.length) sql += " update chat_results set item_ids = item_ids[1:" + (plan.page * 5) + "] || array[" + ids.join(',') + "]::bigint[], created_at = now() where chat_id = " + chat + " and topic = 'brief';";
 return [{ json: { output: out.output, items: out.items, save_sql: sql } }];`.trim() } },
@@ -1243,7 +1296,14 @@ const connections = {
   'Save reply': { main: [[{ node: 'Save record', type: 'main', index: 0 }]] },
   'Save record': { main: [[{ node: 'Save result', type: 'main', index: 0 }]] },
   'Save result': { main: [[{ node: 'Prep reply', type: 'main', index: 0 }, { node: 'Memory text', type: 'main', index: 0 }]] },
-  'Brief?': { main: [[{ node: 'Brief state', type: 'main', index: 0 }], [{ node: 'Ref item?', type: 'main', index: 0 }]] },
+  'Brief?': { main: [[{ node: 'Brief state', type: 'main', index: 0 }], [{ node: 'More?', type: 'main', index: 0 }]] },
+  'More?': { main: [[{ node: 'More prep', type: 'main', index: 0 }], [{ node: 'Ref item?', type: 'main', index: 0 }]] },
+  'More prep': { main: [[{ node: 'More feed?', type: 'main', index: 0 }]] },
+  'More feed?': { main: [[{ node: 'More feed', type: 'main', index: 0 }], [{ node: 'More reply', type: 'main', index: 0 }]] },
+  'More feed': { main: [[{ node: 'More reply', type: 'main', index: 0 }]] },
+  'More reply': { main: [[{ node: 'More save', type: 'main', index: 0 }]] },
+  'More save': { main: [[{ node: 'More result', type: 'main', index: 0 }]] },
+  'More result': { main: [[{ node: 'Prep reply', type: 'main', index: 0 }, { node: 'Memory text', type: 'main', index: 0 }]] },
   'Brief state': { main: [[{ node: 'Brief prep', type: 'main', index: 0 }]] },
   'Brief prep': { main: [[{ node: 'Brief topic?', type: 'main', index: 0 }]] },
   'Brief topic?': { main: [[{ node: 'Brief feed', type: 'main', index: 0 }], [{ node: 'Brief query', type: 'main', index: 0 }]] },

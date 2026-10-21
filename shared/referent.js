@@ -116,7 +116,7 @@ function botSaidSql(chatId, html, itemIds, source) {
   if (!ids.length) return mem + ' returning id';
   return 'with m as (' + mem + ' returning id) ' +
     'insert into chat_results (chat_id, item_ids, topic, created_at) values (' + chat + ', array[' + ids.join(',') + ']::bigint[], null, now()) ' +
-    'on conflict (chat_id) do update set item_ids = excluded.item_ids, topic = excluded.topic, created_at = excluded.created_at returning (select id from m) as id';
+    'on conflict (chat_id) do update set item_ids = excluded.item_ids, topic = excluded.topic, query = null, created_at = excluded.created_at returning (select id from m) as id';
 }
 
 // SQL filter for "rows the agent wrote" (untagged)
