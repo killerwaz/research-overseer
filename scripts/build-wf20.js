@@ -7,6 +7,9 @@ const path = require('path');
 // deploy time by scripts/deploy.js so it never lands in committed JSON.
 const I = require('./instance.json');
 const { TASTE_SQL } = require('../shared/feedback.js');
+const { FAILED } = require('../shared/triage-state.js');
+// a feed row that holds a real summary (a failed triage stores FAILED, shared/triage-state.js)
+const OK_ROW = "summary <> '" + FAILED + "'";
 const CRED_PG = I.credentials.postgres;
 const CRED_CRAWL = I.credentials.crawl4ai;
 const CRED_LM = I.credentials.lmstudio;
@@ -452,13 +455,17 @@ const nodes = [
   codeNode('Collect stats', 'stats', [3800, 0], 'runOnceForAllItems', COLLECT_STATS),
 
   pgNode('Finalize run', 'finalize', [4000, 0],
-    "update runs set finished_at = now(), urls_new = $2::int, urls_scraped = (select count(*) from raw_docs where run_id = $1::bigint), items_created = (select count(*) from feed_items where run_id = $1::bigint), error = nullif($3,''), status = case when $2::int = 0 and $3 = '' then 'ok' when (select count(*) from raw_docs where run_id = $1::bigint) = 0 and $2::int > 0 then 'failed' when (select count(*) from raw_docs where run_id = $1::bigint) < $2::int then 'partial' when (select count(*) from feed_items where run_id = $1::bigint) < (select count(*) from raw_docs where run_id = $1::bigint) then 'partial' else 'ok' end where id = $1::bigint returning id as run_id, status, scope, urls_found, urls_new, urls_scraped, items_created, error, (select title from feed_items where run_id = $1::bigint order by score desc, relevance desc nulls last, id desc limit 1) as top_title, (select json_build_object('id', f.id, 'title', f.title, 'summary', f.summary, 'score', f.score, 'canonical_url', f.canonical_url, 'key_points', f.structured->'key_points', 'transcript_source', substr(d.scraper, 7), 'screen', split_part(substring(d.markdown from 'Screen: (.*)'), chr(10), 1))::text from feed_items f join raw_docs d on d.id = f.raw_doc_id where f.run_id = $1::bigint and d.scraper like 'media:%' order by f.id desc limit 1) as media, (select json_build_object('id', f.id, 'title', f.title, 'summary', f.summary, 'angle', f.angle, 'score', f.score)::text from feed_items f join raw_docs d on d.id = f.raw_doc_id where f.run_id = $1::bigint and d.scraper like 'upload:%' order by f.id desc limit 1) as upload, (select string_agg(id::text, ',' order by score desc nulls last, id) from feed_items where run_id = $1::bigint) as run_item_ids",
+    // items_created counts summarized rows only; a failed triage is items_unsummarized
+    // (it used to count as created, and the message said "all summarized").
+    "update runs set finished_at = now(), urls_new = $2::int, urls_scraped = (select count(*) from raw_docs where run_id = $1::bigint), items_created = (select count(*) from feed_items where run_id = $1::bigint and " + OK_ROW + "), error = nullif($3,''), status = case when $2::int = 0 and $3 = '' then 'ok' when (select count(*) from raw_docs where run_id = $1::bigint) = 0 and $2::int > 0 then 'failed' when (select count(*) from raw_docs where run_id = $1::bigint) < $2::int then 'partial' when (select count(*) from feed_items where run_id = $1::bigint and " + OK_ROW + ") < (select count(*) from raw_docs where run_id = $1::bigint) then 'partial' else 'ok' end where id = $1::bigint returning id as run_id, status, scope, urls_found, urls_new, urls_scraped, items_created, error, " +
+    "(select count(*) from feed_items where run_id = $1::bigint and summary = '" + FAILED + "') as items_unsummarized, coalesce((select value = 'true' from settings where key = 'drain_enabled'), false) as drain_on, " +
+    "(select title from feed_items where run_id = $1::bigint and " + OK_ROW + " order by score desc, relevance desc nulls last, id desc limit 1) as top_title, (select json_build_object('id', f.id, 'title', f.title, 'summary', f.summary, 'score', f.score, 'canonical_url', f.canonical_url, 'key_points', f.structured->'key_points', 'transcript_source', substr(d.scraper, 7), 'screen', split_part(substring(d.markdown from 'Screen: (.*)'), chr(10), 1))::text from feed_items f join raw_docs d on d.id = f.raw_doc_id where f.run_id = $1::bigint and f." + OK_ROW + " and d.scraper like 'media:%' order by f.id desc limit 1) as media, (select json_build_object('id', f.id, 'title', f.title, 'summary', f.summary, 'angle', f.angle, 'score', f.score)::text from feed_items f join raw_docs d on d.id = f.raw_doc_id where f.run_id = $1::bigint and f." + OK_ROW + " and d.scraper like 'upload:%' order by f.id desc limit 1) as upload, (select string_agg(id::text, ',' order by score desc nulls last, id) from feed_items where run_id = $1::bigint and " + OK_ROW + ") as run_item_ids",
     "={{ $json.run_id }},{{ $json.urls_new }},{{ $json.error }}",
     { executeOnce: true }),
 
   // Plain-language summary. No run numbers, no "items", no scope codes — those
   // are for run_status when something actually needs looking at.
-  codeNode('Compose summary', 'compose', [4180, 0], 'runOnceForAllItems', inline('media.js') + inline('feedback.js') + `
+  codeNode('Compose summary', 'compose', [4180, 0], 'runOnceForAllItems', inline('media.js') + inline('feedback.js') + inline('triage-state.js') + `
 const r = $('Finalize run').first().json;
 // Media outcomes the bot must explain (pasted links only).
 let fails = [];
@@ -478,7 +485,9 @@ if (r.scope === 'upload') {
   let u = null; try { u = JSON.parse(r.upload || 'null'); } catch (e) {}
   if (u) return [{ json: { text: '\u{1F4C4} <b>' + escU(u.title) + '</b>' + (u.score != null ? ' [' + u.score + ']' : '') + '\\n\\n' + escU(u.summary) +
     (u.angle ? '\\n\\n<i>' + escU(u.angle) + '</i>' : '') + '\\n\\nIn your feed now: ask about it, or say "save #1".', reply_markup: itemKeyboard(u.id) } }];
-  return [{ json: { text: Number(r.urls_new) === 0 ? '\u{1F4C4} That PDF is already in your feed.' : "\u{1F4C4} I read the PDF but couldn't summarise it. Try sending it again in a minute." } }];
+  // sending it again would only hit "already in your feed": a failed triage is retried by the drain
+  const again = (r.drain_on === true || r.drain_on === 'true') ? 'I will retry automatically.' : 'Say "fix feed" and I will retry.';
+  return [{ json: { text: Number(r.urls_new) === 0 ? '\u{1F4C4} That PDF is already in your feed.' : "\u{1F4C4} I read the PDF but couldn't summarise it. " + again } }];
 }
 if (r.media && r.scope === 'url') {
 
@@ -488,19 +497,8 @@ if (r.media && r.scope === 'url') {
 let brief = '';
 try { brief = $('Collect stats').first().json.error_brief || ''; } catch (e) {}
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-const made = Number(r.items_created) || 0;
-const failed = Number((brief.match(/^(\\d+) failed/) || [])[1] || 0);
-const plural = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
-
-let text;
-if (made === 0 && failed === 0) {
-  text = '\u{1F52D} Nothing new — everything found was already in your feed.';
-} else if (made === 0) {
-  text = '\u{1F52D} Nothing added. ' + plural(failed, 'page') + " couldn't be read.";
-} else {
-  text = '\u{1F52D} Found ' + plural(made, 'new page') + ', all summarized.';
-  if (failed) text += ' ' + plural(failed, 'other') + " couldn't be read.";
-}
+let text = runSummaryText({ made: Number(r.items_created) || 0, unsummarized: Number(r.items_unsummarized) || 0,
+  unread: Number((brief.match(/^(\\d+) failed/) || [])[1] || 0), retry: r.drain_on === true || r.drain_on === 'true' });
 if (r.top_title) text += '\\nTop: ' + esc(r.top_title);
 if (brief) {
   const hosts = brief.replace(/^\\d+ failed: /, '');
@@ -693,8 +691,10 @@ return $input.all();
     // Atomic replace: clears any prior rows for this doc, then inserts the fresh
     // one. No-op on the normal path (new docs have none) and makes re-triage
     // idempotent, so the WF-30 drain never needs a separate delete step.
+    // A failed triage bumps raw_docs.triage_failures: the drain retries it until 3 (sql/020).
     pgNode('Insert feed', 'insertfeed', [1400, 0],
-      "with del as (delete from feed_items where raw_doc_id = $1::bigint) insert into feed_items (raw_doc_id, canonical_url, title, summary, angle, relevance, tags, run_id, published_at, specificity, angle_strength, structured) values ($1::bigint, $2, nullif($3,''), $4, nullif($5,''), nullif($6::text,'')::int, $7::text[], $8::bigint, nullif($9,'')::timestamptz, nullif($10::text,'')::int, nullif($11::text,'')::int, nullif($12,'')::jsonb) returning id as feed_item_id",
+      "with del as (delete from feed_items where raw_doc_id = $1::bigint), " +
+      "bump as (update raw_docs set triage_failures = triage_failures + 1 where id = $1::bigint and $4 = '" + FAILED + "') insert into feed_items (raw_doc_id, canonical_url, title, summary, angle, relevance, tags, run_id, published_at, specificity, angle_strength, structured) values ($1::bigint, $2, nullif($3,''), $4, nullif($5,''), nullif($6::text,'')::int, $7::text[], $8::bigint, nullif($9,'')::timestamptz, nullif($10::text,'')::int, nullif($11::text,'')::int, nullif($12,'')::jsonb) returning id as feed_item_id",
       "={{ $json.raw_doc_id }},{{ $json.canonical_url }},{{ $json.title }},{{ $json.summary }},{{ $json.angle }},{{ $json.relevance }},{{ $json.tags_pg }},{{ $json.run_id }},{{ $json.published_at }},{{ $json.specificity }},{{ $json.angle_strength }},{{ $json.structured_json }}"),
 
     codeNode('Build embed', 'buildembed', [1600, 0], 'runOnceForAllItems', BUILD_EMBED),

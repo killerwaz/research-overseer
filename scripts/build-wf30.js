@@ -18,9 +18,12 @@ const CHAT_ID = '__TG_CHAT__';
 
 const { TRIAGE_SYSTEM, TRIAGE_SCHEMA, TRIAGE_MODEL } = require('../shared/triage-config.js');
 const { TASTE_SQL } = require('../shared/feedback.js');
+const { backlogHaving } = require('../shared/triage-state.js');
 
 // Backlog = any scraped doc that does not have exactly one feed_item: either it
-// was never triaged, or it carries stale rows from the mode:'once' fan-out bug.
+// was never triaged, or it carries stale rows from the mode:'once' fan-out bug —
+// or its one row is a failed triage with tries left (shared/triage-state.js; a
+// failed doc has exactly one row, so it was never retried before 2026-10-22).
 // Yields entirely while a run is in flight so live triage never queues behind it.
 const FIND_BACKLOG = `
 with backlog as (
@@ -28,7 +31,7 @@ with backlog as (
   from raw_docs rd
   left join feed_items f on f.raw_doc_id = rd.id
   group by rd.id
-  having count(f.id) <> 1
+  having ${backlogHaving()}
 )
 select rd.id as raw_doc_id,
        rd.canonical_url,
@@ -64,7 +67,7 @@ const FIND_IDLE_BACKLOG = `
 select (select count(*) from (
           select rd.id from raw_docs rd
           left join feed_items f on f.raw_doc_id = rd.id
-          group by rd.id having count(f.id) <> 1
+          group by rd.id having ${backlogHaving()}
         ) a) as backlog_total,
        (select value from settings where key = 'drain_enabled') as drain_enabled,
        coalesce(

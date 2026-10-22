@@ -2,7 +2,7 @@
 
 # Research Overseer
 
-![Orchestration n8n · triage qwen3.5-9b local · routing qwen3.5-9b local · storage Supabase Postgres · interface Telegram · 279 tests passing](docs/stack.svg)
+![Orchestration n8n · triage qwen3.5-9b local · routing qwen3.5-9b local · storage Supabase Postgres · interface Telegram · 283 tests passing](docs/stack.svg)
 
 A research discovery pipeline that runs on my own hardware. It searches (Exa, Tavily, Brave), watches RSS, scrapes what it finds, scores every document against a defined beat using a local 9B model, stores the results in Postgres, and answers questions about them over Telegram.
 
@@ -65,7 +65,7 @@ Numbers from the running system.
 
 ## Current state
 
-409 documents triaged across 109 runs (3,122 searchable passages), 10 active RSS sources, 279 tests running in about 250ms with no dependencies (as of 2026-10-22).
+409 documents triaged across 109 runs (3,122 searchable passages), 10 active RSS sources, 283 tests running in about 250ms with no dependencies (as of 2026-10-22).
 
 ![Telegram reply listing five recent runs with per-run outcomes, one of them failed, followed by a backlog notice](docs/run-status.png)
 
@@ -124,7 +124,7 @@ The beat itself is untracked. It is the editorial definition of what the model s
 1. **Containers.** One-time: `docker volume create n8n_data`, `docker network create overseer`, then `docker compose -f docker/docker-compose.yml --env-file .env up -d`.
 2. **LM Studio.** Native install, not a container. Enable the server with auth, then `lms server start && lms load qwen/qwen3.5-9b -y`. Needs about 7 GB of VRAM. Feed search also needs the embedding model: `lms get https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF` (Q8, 640 MB). It loads on demand; load it with `-c 2048`, since a larger context costs VRAM the 9B needs.
 2b. **Media service** (YouTube and podcast links). Add `MEDIA_TOKEN` (any long random string) to `.env`. It is the `media` container in `docker/docker-compose.yml` and starts with the others; the first transcription downloads Parakeet TDT 0.6B v3 (about 650 MB) into the `media_data` volume.
-3. **Database.** Create a Supabase project and run every file in `sql/` (`001` through `019`) in order, one statement per call, then `node scripts/backfill-embeddings.js` once the workflows are up.
+3. **Database.** Create a Supabase project and run every file in `sql/` (`001` through `020`) in order, one statement per call, then `node scripts/backfill-embeddings.js` once the workflows are up.
 4. **Secrets and beat.** Copy `.env.example` to `.env` and fill it. Copy `beat.example.md` to `beat.md`.
 5. **n8n credentials.** Create the Postgres, Telegram, OpenRouter, Crawl4AI, LM Studio, and Firecrawl credentials in the n8n UI, then put their ids in `scripts/instance.json`.
 6. **Workflows.** Import from `workflows/`, put the resulting ids in `scripts/instance.json`, then `node scripts/deploy.js --all`. Publish everything: the error workflow has to stay published or it never fires.
