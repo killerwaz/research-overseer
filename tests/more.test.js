@@ -34,3 +34,18 @@ test('nothing left; two topics read naturally; list SQL is numbers only', () => 
   assert.ok(!M.moreListSql('42; drop', [1]).includes('drop'));
   assert.equal(M.moreListSql('abc', [1]), '');
 });
+
+test('fit check on a more page: unseen candidates, verdicts, rejects dropped (2026-10-23)', () => {
+  const items = [1, 2, 3, 4, 5, 6, 7].map((id) => ({ id, title: 'T' + id, summary: 's', evidence: { text: 'passage ' + id } }));
+  const c = M.moreCandidates([1, 2], { items });
+  assert.equal(c.fresh, 5);
+  assert.deepEqual(c.items.map((i) => [i.n, i.id]), [[1, 3], [2, 4], [3, 5], [4, 6], [5, 7]]);
+  assert.equal(c.items[0].evidence, 'passage 3');
+  assert.equal(M.fitQuestion(JSON.stringify({ tag: 'mcp security | a2a' })), 'anything on mcp security and a2a?');
+  const v = M.readFitVerdicts('{"items":[{"n":1,"fits":"yes"},{"n":2,"fits":"no"},{"n":3,"fits":"partly"}],"gap":""}');
+  assert.deepEqual(M.keepFitting(c.items, v).map((i) => i.id), [3, 5, 6, 7]);
+  assert.equal(M.readFitVerdicts('garbage'), null);
+  assert.equal(M.keepFitting(c.items, null).length, 5, 'unreadable verdict keeps everything');
+  // items beyond the checked ones still offer "more"
+  assert.ok(M.moreReply([1, 2], { items: [items[2]] }, Q, true).output.endsWith('Say "more" for the next 5.'));
+});

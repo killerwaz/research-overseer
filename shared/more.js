@@ -36,8 +36,9 @@ function moreInputs(listQuery, listN) {
     min_relevance: s(q.min_relevance), group_stories: s(q.group_stories), limit: String(Number(listN) + MORE_PAGE * 2) };
 }
 
-// shownIds = the ids in his list now (in order). result = WF-31's output.
-function moreReply(shownIds, result, query) {
+// shownIds = the ids in his list now (in order). result = WF-31's output (or the
+// candidates the fit check kept). beyond = unseen items past the checked ones exist.
+function moreReply(shownIds, result, query, beyond) {
   const shown = (shownIds || []).map(Number);
   const seen = new Set(shown);
   const r = result || {};
@@ -50,12 +51,47 @@ function moreReply(shownIds, result, query) {
   const lines = page.map((it, k) => (shown.length + k + 1) + '. ' + String(it.title || it.canonical_url || '').trim() +
     (Number(it.articles) > 1 ? ' (' + it.articles + ' sources)' : '') + ' [' + (it.score == null ? '–' : it.score) + ']' +
     (it.angle ? '\n   ' + String(it.angle).replace(/\s+/g, ' ').trim().slice(0, 220) : ''));
-  const left = fresh.length > MORE_PAGE;
+  const left = fresh.length > MORE_PAGE || Boolean(beyond);
   return { output: 'More' + on + ':\n\n' + lines.join('\n') + (left ? '\n\nSay "more" for the next 5.' : ''),
     items, ids: shown.concat(items.map((i) => i.id)) };
 }
 
-const NOTHING_MORE = 'Nothing more to show. Say "brief me", or ask about a topic.';
+// ---- fit check on a "more" page (2026-10-23) ----
+// Past ~20 results the search reaches passing mentions: #26-30 for "mcp security"
+// included "Best practices for Claude Code" and "What Is Responsible AI?". The
+// unseen items (up to MORE_CANDIDATES) go through the feed-fit 9B call (feed-fit.js
+// fitBody, thinking off); 'no' = it only shares words with the topic, dropped.
+const MORE_CANDIDATES = 10;
+function moreCandidates(shownIds, result) {
+  const seen = new Set((shownIds || []).map(Number));
+  const ev = (e) => (e == null ? '' : typeof e === 'string' ? e : String(e.text || ''));
+  const fresh = ((result || {}).items || []).filter((i) => Number(i.id) > 0 && !seen.has(Number(i.id)));
+  return { fresh: fresh.length, items: fresh.slice(0, MORE_CANDIDATES).map((i, k) => ({ ...i, n: k + 1, title: String(i.title || ''),
+    summary: String(i.summary || ''), evidence: ev(i.evidence) })) };
+}
+
+function fitQuestion(query) {
+  const tag = String((parseQuery(query) || {}).tag || '').replace(/\s*\|\s*/g, ' and ').trim();
+  return tag ? 'anything on ' + tag + '?' : 'show me the best items in my feed';
+}
+
+// n -> 'yes' | 'partly' | 'no', or null when the verdict cannot be read (keep all)
+function readFitVerdicts(content) {
+  try {
+    const j = JSON.parse(String(content || '').replace(/^```(json)?|```$/g, '').trim());
+    if (!j || !Array.isArray(j.items) || !j.items.length) return null;
+    const m = new Map();
+    for (const i of j.items) if (i && Number.isInteger(Number(i.n))) m.set(Number(i.n), String(i.fits));
+    return m;
+  } catch (e) { return null; }
+}
+
+// the candidates the check did not reject, in order
+function keepFitting(cands, verdicts) {
+  return (cands || []).filter((c) => !verdicts || verdicts.get(c.n) !== 'no');
+}
+
+const NOTHING_MORE ='Nothing more to show. Say "brief me", or ask about a topic.';
 
 // His list after a page: the shown ids plus the new ones, the search kept (WF-31
 // wrote its bigger page over it). One statement, numbers only.
@@ -66,4 +102,4 @@ function moreListSql(chatId, ids) {
   return 'update chat_results set item_ids = array[' + list.join(',') + ']::bigint[], topic = null, created_at = now() where chat_id = ' + chat;
 }
 
-module.exports = { MORE_PAGE, NOTHING_MORE, isMore, moreRoute, parseQuery, moreInputs, moreReply, moreListSql };
+module.exports = { MORE_PAGE, MORE_CANDIDATES, NOTHING_MORE, isMore, moreRoute, parseQuery, moreInputs, moreReply, moreListSql, moreCandidates, fitQuestion, readFitVerdicts, keepFitting };

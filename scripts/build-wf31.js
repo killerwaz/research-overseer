@@ -34,6 +34,10 @@ const { EMBED_DIM } = require('../shared/embed.js');
 // 2026-10-12 (scripts/eval-passages.js): answers found 25/26 vs 7/13 from
 // summaries alone, absent topics 4/4 clean.
 const { passageCtes, KW_WEIGHT } = require('../shared/passage-search.js');
+// A failed triage keeps a feed row (summary FAILED, score 0) so the page is not lost and
+// can be retried; it is not a result: it was listed with its real title and summary
+// 'TRIAGE_FAILED' (review finding 3, 2026-10-22).
+const { FAILED } = require('../shared/triage-state.js');
 // Fix 1 switches (settings table) and the 9B reranker: shared/rerank.js.
 
 // Spelling fixer (#14, shared/spelling.js): a topic word that is in no article,
@@ -146,13 +150,13 @@ lim as (select coalesce(nullif($4, '')::int, 20) as n),
 c0 as (
   select f.id, f.canonical_url, f.title, f.summary, f.angle, f.relevance, f.specificity, f.angle_strength, f.score,
          f.tags, f.created_at, f.published_at, f.structured, 1 as articles, f.embedding, 'it:' || f.id as match_key
-  from feed_items f where $7 = 'false'
+  from feed_items f where $7 = 'false' and f.summary is distinct from '${FAILED}'
   union all
   select r.id, s.canonical_url, s.title, s.summary, s.angle, null::int, s.specificity, s.angle_strength, s.score,
          s.tags, s.created_at, s.last_published, s.structured, s.articles, r.embedding, s.story_key
   from feed_stories s
   left join lateral (select id, embedding from feed_items fi where fi.canonical_url = s.canonical_url order by fi.id desc limit 1) r on true
-  where coalesce($7, '') <> 'false'
+  where coalesce($7, '') <> 'false' and s.summary is distinct from '${FAILED}'
 ),
 /* in_filter = passes the time/quality filters. Topic matching runs over ALL
    items so the matches the filters excluded can be reported separately

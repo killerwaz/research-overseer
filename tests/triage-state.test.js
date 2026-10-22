@@ -29,3 +29,17 @@ test('the old wordings are unchanged when nothing failed triage', () => {
   assert.strictEqual(runSummaryText({ unread: 3 }), "\u{1F52D} Nothing added. 3 pages couldn't be read.");
   assert.strictEqual(runSummaryText({}), '\u{1F52D} Nothing new — everything found was already in your feed.');
 });
+
+test('drain report: retried pages that worked, and ones given up after 3 tries', () => {
+  const T = require('../shared/triage-state.js');
+  assert.equal(T.drainReportText([], []), '');
+  const r = T.drainReportText([{ title: 'Bangladesh Bank <AI> rules', score: 7 }], []);
+  assert.ok(r.startsWith('\u{1F4C4} Summarized at last (the earlier try failed):\n• Bangladesh Bank &lt;AI&gt; rules [7]'));
+  const g = T.drainReportText([], [{ title: 'Scanned report' }, { title: 'Slides' }]);
+  assert.ok(g.includes("couldn't summarize these pages after 3 tries"));
+  assert.ok(g.includes('• Slides'));
+  assert.equal(T.drainReportSql([]), 'select null::text as recovered, null::text as given_up');
+  const s = T.drainReportSql([5, 'x', 9]);
+  assert.ok(s.includes('raw_doc_id in (5,9)'));
+  assert.ok(s.includes('triage_failures >= 3'));
+});

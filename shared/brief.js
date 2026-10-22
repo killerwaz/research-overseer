@@ -96,7 +96,8 @@ function briefSql({ since, topic, page, vec, cutoff }) {
   const sim = t && vec ? " or (fi.embedding is not null and 1 - (fi.embedding <=> '" + vec + "'::vector) >= " + Number(cutoff) + ')' : '';
   return 'with s as (select s.*, fi.id from feed_stories s ' +
     'left join lateral (select id, embedding from feed_items f where f.canonical_url = s.canonical_url order by f.id desc limit 1) fi on true ' +
-    'where s.created_at >= ' + sinceLit + (t ? ' and (coalesce(' + kw + ', false)' + sim + ')' : '') + '), ' +
+    // a failed triage (summary 'TRIAGE_FAILED', shared/triage-state.js FAILED) is not news
+    "where s.created_at >= " + sinceLit + " and s.summary is distinct from 'TRIAGE_FAILED'" + (t ? ' and (coalesce(' + kw + ', false)' + sim + ')' : '') + '), ' +
     'p as (select id, title, canonical_url, angle, summary, score, articles, created_at from s order by score desc nulls last, created_at desc limit ' + BRIEF_PAGE + ' offset ' + off + ') ' +
     "select (select json_agg(p order by p.score desc nulls last, p.created_at desc)::text from p) as rows, " +
     '(select count(*) from s)::int as total, (select count(*) from s where score >= 7)::int as good';

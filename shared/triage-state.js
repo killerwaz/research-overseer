@@ -38,4 +38,27 @@ function runSummaryText({ made = 0, unsummarized = 0, unread = 0, retry = false 
     " couldn't be summarized (the model gave no usable answer). " + later + unreadNote;
 }
 
-module.exports = { FAILED, MAX_TRIAGE_FAILURES, backlogHaving, runSummaryText };
+// After a WF-30 drain pass, for the pages he was TOLD had failed ("I will retry
+// automatically"): the retry worked (recovered) or the last try failed (givenUp).
+// Never-failed orphans stay silent, as before. rows: [{ title, score }]. '' = no message.
+function drainReportText(recovered, givenUp) {
+  const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const line = (r) => '• ' + esc(String(r.title || r.canonical_url || 'untitled').slice(0, 120)) + (r.score != null ? ' [' + r.score + ']' : '');
+  const rec = recovered || [], gone = givenUp || [];
+  const out = [];
+  if (rec.length) out.push('\u{1F4C4} Summarized at last (the earlier try failed):\n' + rec.map(line).join('\n') + '\nThey are in your feed now: ask about them, or say "brief me".');
+  if (gone.length) out.push("\u{26A0} I couldn't summarize " + (gone.length === 1 ? 'this page' : 'these pages') + ' after ' + MAX_TRIAGE_FAILURES +
+    ' tries, so I stopped retrying. ' + (gone.length === 1 ? 'It stays' : 'They stay') + ' saved, without a summary:\n' + gone.map(line).join('\n'));
+  return out.join('\n\n');
+}
+
+// One row back for the drained doc ids that had failed before: recovered and given up.
+function drainReportSql(docIds) {
+  const ids = (docIds || []).map(Number).filter((x) => Number.isInteger(x) && x > 0);
+  if (!ids.length) return 'select null::text as recovered, null::text as given_up';
+  const list = ids.join(',');
+  return "select (select json_agg(json_build_object('title', f.title, 'score', f.score))::text from feed_items f where f.raw_doc_id in (" + list + ") and f.summary is distinct from '" + FAILED + "') as recovered, " +
+    "(select json_agg(json_build_object('title', coalesce(f.title, rd.title), 'score', null))::text from raw_docs rd join feed_items f on f.raw_doc_id = rd.id where rd.id in (" + list + ") and f.summary = '" + FAILED + "' and rd.triage_failures >= " + MAX_TRIAGE_FAILURES + ') as given_up';
+}
+
+module.exports = { FAILED, MAX_TRIAGE_FAILURES, backlogHaving, runSummaryText, drainReportText, drainReportSql };

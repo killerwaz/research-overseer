@@ -114,3 +114,8 @@ test('a topic brief keeps its window in the reply', () => {
   assert.ok(r.output.startsWith('Best on funding (this week):'));
   assert.equal(B.briefTopicReply('funding', { items: [] }, 0, '1').output, 'Your feed has nothing on funding (today) yet.');
 });
+
+test('a failed triage row is never briefed (review finding 3)', () => {
+  const { FAILED } = require('../shared/triage-state.js');
+  assert.ok(B.briefSql({ since: NOW, topic: '', page: 0 }).includes("s.summary is distinct from '" + FAILED + "'"));
+});

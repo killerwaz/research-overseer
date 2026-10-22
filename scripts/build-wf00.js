@@ -1006,6 +1006,23 @@ return [{ json: { route: a.more_go, query: lb.list_query || '', ids: lb.list_ids
           .map((id) => ({ id, displayName: id, required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: 'string' })) },
       options: { waitForSubWorkflow: true } },
     onError: 'continueRegularOutput', alwaysOutputData: true },
+  // the unseen candidates through the feed-fit check (one 9B call, thinking off)
+  { id: 'morefitprep', name: 'More fit prep', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1252, 160],
+    parameters: { mode: 'runOnceForAllItems', jsCode: inline('more.js') + inline('feed-fit.js') + `
+const prep = $('More prep').first().json;
+const r = $input.first().json || {};
+let shown = [];
+try { shown = JSON.parse(prep.ids || '[]') || []; } catch (e) {}
+const c = moreCandidates(shown, r);
+return [{ json: { go: String(c.items.length > 0), llm_body: c.items.length ? JSON.stringify(fitBody('qwen/qwen3.5-9b', fitQuestion(prep.query), c.items)) : '' } }];`.trim() } },
+  { id: 'morefitif', name: 'More fit?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1254, 160],
+    parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, combinator: 'and',
+      conditions: [{ id: 'mfi1', leftValue: '={{ $json.go }}', rightValue: 'true', operator: { type: 'string', operation: 'equals' } }] } } },
+  { id: 'morefit', name: 'More fit', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [1256, 160],
+    parameters: { method: 'POST', url: 'http://host.docker.internal:1234/v1/chat/completions',
+      authentication: 'genericCredentialType', genericAuthType: 'httpBearerAuth',
+      sendBody: true, specifyBody: 'json', jsonBody: '={{ $json.llm_body }}', options: { timeout: 60000 } },
+    credentials: { httpBearerAuth: I.credentials.lmstudio }, retryOnFail: false, onError: 'continueRegularOutput' },
   // reply + both memory rows + his list = what he had + the new page (WF-31 wrote its bigger page over it)
   { id: 'morereply', name: 'More reply', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1260, 120],
     parameters: { mode: 'runOnceForAllItems', jsCode: inline('more.js') + inline('referent.js') + `
@@ -1013,10 +1030,18 @@ const a = $('Agent input').first().json;
 const prep = $('More prep').first().json;
 let out = { output: NOTHING_MORE, items: [], ids: [] };
 if (prep.route === 'feed') {
-  const r = $input.first().json || {};
+  let r = {};
+  try { r = $('More feed').first().json || {}; } catch (e) {}
   let shown = [];
   try { shown = JSON.parse(prep.ids || '[]') || []; } catch (e) {}
-  out = Array.isArray(r.items) ? moreReply(shown, r, prep.query) : { output: "I couldn't fetch more just now. Try again in a minute.", items: [], ids: shown };
+  if (!Array.isArray(r.items)) out = { output: "I couldn't fetch more just now. Try again in a minute.", items: [], ids: shown };
+  else {
+    /* the fit check's verdicts on the unseen candidates (none read = keep them all) */
+    const cands = moreCandidates(shown, r);
+    let verdicts = null;
+    try { verdicts = readFitVerdicts($('More fit').first().json.choices[0].message.content); } catch (e) {}
+    out = moreReply(shown, { items: keepFitting(cands.items, verdicts) }, prep.query, cands.fresh > MORE_CANDIDATES);
+  }
 }
 const list = prep.route === 'feed' ? moreListSql(a.chat_id, out.ids) : '';
 return [{ json: { output: out.output, items: out.items, save_sql: exchangeSql(a.chat_id, a.text, out.output) + (list ? '; ' + list : '') } }];`.trim() } },
@@ -1301,7 +1326,10 @@ const connections = {
   'More?': { main: [[{ node: 'More prep', type: 'main', index: 0 }], [{ node: 'Ref item?', type: 'main', index: 0 }]] },
   'More prep': { main: [[{ node: 'More feed?', type: 'main', index: 0 }]] },
   'More feed?': { main: [[{ node: 'More feed', type: 'main', index: 0 }], [{ node: 'More reply', type: 'main', index: 0 }]] },
-  'More feed': { main: [[{ node: 'More reply', type: 'main', index: 0 }]] },
+  'More feed': { main: [[{ node: 'More fit prep', type: 'main', index: 0 }]] },
+  'More fit prep': { main: [[{ node: 'More fit?', type: 'main', index: 0 }]] },
+  'More fit?': { main: [[{ node: 'More fit', type: 'main', index: 0 }], [{ node: 'More reply', type: 'main', index: 0 }]] },
+  'More fit': { main: [[{ node: 'More reply', type: 'main', index: 0 }]] },
   'More reply': { main: [[{ node: 'More save', type: 'main', index: 0 }]] },
   'More save': { main: [[{ node: 'More result', type: 'main', index: 0 }]] },
   'More result': { main: [[{ node: 'Prep reply', type: 'main', index: 0 }, { node: 'Memory text', type: 'main', index: 0 }]] },

@@ -42,6 +42,8 @@ select rd.id as raw_doc_id,
        -- raw_docs has no source column; seen_urls records it at ingest
        coalesce((select su.source from seen_urls su where su.canonical_url = rd.canonical_url), '') as source,
        coalesce(rd.scraper, '') as scraper,
+       -- > 0 = he was told this page failed; the drain reports how the retry went
+       rd.triage_failures,
        -- a media transcript is read at the media profile's 60k, not cut to 8k
        case when rd.scraper like 'media:%' then rd.markdown else left(rd.markdown, 8000) end as markdown,
        (select count(*) from backlog) as backlog_total,
@@ -157,6 +159,32 @@ const workflow = {
       },
       onError: 'continueRegularOutput' },
 
+    // ---- after a pass: how retries of pages he was TOLD had failed went ----
+    // ("I will retry automatically" was promised; a success used to be silent, review
+    // finding 3). Never-failed orphans stay silent. shared/triage-state.js drainReport*.
+    { id: 'drainprep', name: 'Drain report prep', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1000, 140],
+      parameters: { mode: 'runOnceForAllItems', jsCode: inlineShared('triage-state.js') + `
+const ids = $('Find backlog').all().map((i) => i.json).filter((d) => Number(d.triage_failures) > 0).map((d) => d.raw_doc_id);
+return [{ json: { sql: drainReportSql(ids) } }];`.trim() } },
+    { id: 'drainoutcome', name: 'Drain outcome', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [1200, 140],
+      parameters: { operation: 'executeQuery', query: '={{ $json.sql }}', options: {} },
+      credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true, onError: 'continueRegularOutput' },
+    { id: 'drainmsg', name: 'Drain message', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1400, 140],
+      parameters: { mode: 'runOnceForAllItems', jsCode: inlineShared('triage-state.js') + inlineShared('referent.js') + `
+const o = $input.first().json || {};
+const parse = (v) => { try { return JSON.parse(v || '[]') || []; } catch (e) { return []; } };
+const text = drainReportText(parse(o.recovered), parse(o.given_up));
+return [{ json: { text, has_text: String(Boolean(text)), memory_sql: text ? botSaidSql('${CHAT_ID}', text, [], 'pipeline') : 'select 1 as skipped' } }];`.trim() } },
+    { id: 'drainhas', name: 'Anything to say?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1600, 140],
+      parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, combinator: 'and',
+        conditions: [ { id: 'd1', leftValue: '={{ $json.has_text }}', rightValue: 'true', operator: { type: 'string', operation: 'equals' } } ] } } },
+    { id: 'drainsend', name: 'Send drain report', type: 'n8n-nodes-base.telegram', typeVersion: 1.2, position: [1800, 140],
+      parameters: { chatId: CHAT_ID, text: '={{ $json.text }}', additionalFields: { appendAttribution: false, parse_mode: 'HTML' } },
+      credentials: { telegramApi: CRED_TG }, onError: 'continueRegularOutput' },
+    { id: 'drainrecord', name: 'Record drain report', type: 'n8n-nodes-base.postgres', typeVersion: 2.4, position: [2000, 140],
+      parameters: { operation: 'executeQuery', query: "={{ $('Drain message').first().json.memory_sql }}", options: {} },
+      credentials: { postgres: CRED_PG }, executeOnce: true, alwaysOutputData: true, onError: 'continueRegularOutput' },
+
     // ---- LM Studio watch: clears the notice mute when the model comes back ----
     { id: 'lmping', name: 'Ping LM Studio', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [200, 460],
       parameters: { method: 'GET', url: 'http://host.docker.internal:1234/v1/models',
@@ -223,6 +251,12 @@ return [{ json: { lm_state: up ? 'up' : 'down' } }];
     'Find backlog': { main: [[{ node: 'Has backlog?', type: 'main', index: 0 }]] },
     'Has backlog?': { main: [[{ node: 'Build triage body', type: 'main', index: 0 }], []] },
     'Build triage body': { main: [[{ node: 'Drain triage', type: 'main', index: 0 }]] },
+    'Drain triage': { main: [[{ node: 'Drain report prep', type: 'main', index: 0 }]] },
+    'Drain report prep': { main: [[{ node: 'Drain outcome', type: 'main', index: 0 }]] },
+    'Drain outcome': { main: [[{ node: 'Drain message', type: 'main', index: 0 }]] },
+    'Drain message': { main: [[{ node: 'Anything to say?', type: 'main', index: 0 }]] },
+    'Anything to say?': { main: [[{ node: 'Send drain report', type: 'main', index: 0 }], []] },
+    'Send drain report': { main: [[{ node: 'Record drain report', type: 'main', index: 0 }]] },
     'Check idle backlog': { main: [[{ node: 'Should ask?', type: 'main', index: 0 }]] },
     'Should ask?': { main: [[{ node: 'Stamp notice', type: 'main', index: 0 }], []] },
     'Stamp notice': { main: [[{ node: 'Send notice', type: 'main', index: 0 }]] }
