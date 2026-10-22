@@ -21,7 +21,8 @@ services:
     container_name: n8n
     restart: unless-stopped
     ports:
-      - "5678:5678"
+      # loopback only: the ZZ webhooks' only auth is their path suffix
+      - "127.0.0.1:5678:5678"
     environment:
       - GENERIC_TIMEZONE=Asia/Dhaka
       - TZ=Asia/Dhaka
@@ -43,7 +44,8 @@ services:
     container_name: crawl4ai
     restart: unless-stopped
     ports:
-      - "11235:11235"
+      # loopback only, for debugging; n8n reaches it over the overseer network
+      - "127.0.0.1:11235:11235"
     environment:
       # Required since 0.9.x for non-loopback binds; same value goes into the
       # n8n "crawl4ai-bearer" credential.

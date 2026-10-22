@@ -2,7 +2,7 @@
 
 # Research Overseer
 
-![Orchestration n8n · triage qwen3.5-9b local · routing claude-haiku · storage Supabase Postgres · interface Telegram · 46 tests passing](docs/stack.svg)
+![Orchestration n8n · triage qwen3.5-9b local · routing qwen3.5-9b local · storage Supabase Postgres · interface Telegram · 279 tests passing](docs/stack.svg)
 
 A research discovery pipeline that runs on my own hardware. It searches (Exa, Tavily, Brave), watches RSS, scrapes what it finds, scores every document against a defined beat using a local 9B model, stores the results in Postgres, and answers questions about them over Telegram.
 
@@ -46,7 +46,7 @@ Two of the ten pipeline stages call a model. Everything else is code, which is w
 | 6 | Response validation | code | `shared/triage-validate.js`, recovers JSON stranded in `reasoning_content` |
 | 7 | Storage and scoring | code | Postgres; `score` is a generated column, not a model output |
 | 8 | Recency filtering | code | date arithmetic on `published_at` |
-| 9 | **Request routing** | **model** | Claude Haiku via OpenRouter, tool-calling only |
+| 9 | **Request routing** | **model** | qwen3.5-9b via LM Studio, thinking off, tool-calling only (`ROUTER_MODEL=haiku` at build time switches to Claude Haiku over OpenRouter) |
 | 10 | Reply formatting | code | `shared/telegram-format.js`, HTML escape and markdown strip |
 
 Recency is stage 8 rather than a scoring axis on purpose. Exa and Brave return a publication date on roughly every result, so recency is subtraction. Asking a 9B model to rate it 1 to 5 would be a lossy substitute for arithmetic it cannot do better.
@@ -55,7 +55,7 @@ Recency is stage 8 rather than a scoring axis on purpose. Exa and Brave return a
 
 Numbers from the running system.
 
-**Triage speed is governed by reasoning tokens, not input length.** The same document at three read lengths: 2,500 chars took 38.7s, 6,000 took 47.4s, 8,000 took 32.3s. The longest read was the fastest. Qwen spends roughly 3,000 tokens thinking to emit about 120 tokens of JSON. Truncating the input to speed things up does nothing. Thinking cannot be disabled either: `enable_thinking`, a `/no_think` suffix, and `reasoning_effort: minimal` were all tried and all ignored.
+**Triage speed is governed by reasoning tokens, not input length.** The same document at three read lengths: 2,500 chars took 38.7s, 6,000 took 47.4s, 8,000 took 32.3s. The longest read was the fastest. Qwen spends roughly 3,000 tokens thinking to emit about 120 tokens of JSON. Truncating the input to speed things up does nothing. `enable_thinking` and a `/no_think` suffix are ignored; only `reasoning_effort: "none"` switches thinking off (17s to 0.4s), so triage keeps it on and the router and checkers turn it off.
 
 **A single relevance score is useless at this scale.** Of 175 items scored on the original 1-5 axis, 93% landed on 4 or 5 and 71% scored exactly 5. Splitting it into specificity and angle strength took the distinct values on a 10-item sample from 1 to 4, and the two axes agreed exactly on only 3 of 9 items, so they measure different things.
 
@@ -65,7 +65,7 @@ Numbers from the running system.
 
 ## Current state
 
-261 documents triaged across 54 runs, 10 active RSS sources, 46 tests running in about 100ms with no dependencies.
+409 documents triaged across 109 runs (3,122 searchable passages), 10 active RSS sources, 279 tests running in about 250ms with no dependencies (as of 2026-10-22).
 
 ![Telegram reply listing five recent runs with per-run outcomes, one of them failed, followed by a backlog notice](docs/run-status.png)
 
@@ -124,7 +124,7 @@ The beat itself is untracked. It is the editorial definition of what the model s
 1. **Containers.** One-time: `docker volume create n8n_data`, `docker network create overseer`, then `docker compose -f docker/docker-compose.yml --env-file .env up -d`.
 2. **LM Studio.** Native install, not a container. Enable the server with auth, then `lms server start && lms load qwen/qwen3.5-9b -y`. Needs about 7 GB of VRAM. Feed search also needs the embedding model: `lms get https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF` (Q8, 640 MB). It loads on demand; load it with `-c 2048`, since a larger context costs VRAM the 9B needs.
 2b. **Media service** (YouTube and podcast links). Add `MEDIA_TOKEN` (any long random string) to `.env`. It is the `media` container in `docker/docker-compose.yml` and starts with the others; the first transcription downloads Parakeet TDT 0.6B v3 (about 650 MB) into the `media_data` volume.
-3. **Database.** Create a Supabase project and run `sql/001` through `sql/011` in order, then `node scripts/backfill-embeddings.js` once the workflows are up.
+3. **Database.** Create a Supabase project and run every file in `sql/` (`001` through `019`) in order, one statement per call, then `node scripts/backfill-embeddings.js` once the workflows are up.
 4. **Secrets and beat.** Copy `.env.example` to `.env` and fill it. Copy `beat.example.md` to `beat.md`.
 5. **n8n credentials.** Create the Postgres, Telegram, OpenRouter, Crawl4AI, LM Studio, and Firecrawl credentials in the n8n UI, then put their ids in `scripts/instance.json`.
 6. **Workflows.** Import from `workflows/`, put the resulting ids in `scripts/instance.json`, then `node scripts/deploy.js --all`. Publish everything: the error workflow has to stay published or it never fires.

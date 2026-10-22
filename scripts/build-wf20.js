@@ -347,7 +347,8 @@ const nodes = [
   { id: 'scrapeok', name: 'Scrape OK?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1600, -100],
     parameters: { options: {}, conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' },
       combinator: 'and', conditions: [ { id: 'c1',
-        leftValue: "={{ ($json.results?.[0]?.markdown?.fit_markdown || $json.results?.[0]?.markdown?.raw_markdown || '').length }}",
+        // the longer of fit and raw: a short non-empty fit hid a usable raw page and paid for Firecrawl
+        leftValue: "={{ Math.max(($json.results?.[0]?.markdown?.fit_markdown || '').length, ($json.results?.[0]?.markdown?.raw_markdown || '').length) }}",
         rightValue: 400, operator: { type: 'number', operation: 'gte' } } ] } } },
 
   { id: 'ismedia', name: 'Is media?', type: 'n8n-nodes-base.if', typeVersion: 2, position: [1250, -300],

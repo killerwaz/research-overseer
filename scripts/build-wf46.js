@@ -19,11 +19,12 @@ const CRED_PG = I.credentials.postgres;
 const inline = (f) => fs.readFileSync(path.join(__dirname, '..', 'shared', f), 'utf8').replace(/module\.exports[\s\S]*$/, '');
 const TG = 'https://api.telegram.org/bot__TG_TOKEN__/';
 
-const LOCK_SQL = "with cur as (select (select value from settings where key = 'deep_running') as v), " +
-  "ok as (select coalesce(nullif(v, ''), '1970-01-01')::timestamptz < now() - interval '16 minutes' as ok from cur), " +
-  "upd as (insert into settings (key, value, updated_at) select 'deep_running', now()::text, now() from ok where ok.ok " +
-  "on conflict (key) do update set value = excluded.value, updated_at = excluded.updated_at returning 1) " +
-  "select (select ok from ok) as ok, (select count(*) from upd) as took";
+// One statement, the staleness check inside the conflict update: Postgres re-checks the WHERE on the
+// locked row, so two jobs at once cannot both take it (a separate read-then-write let both through).
+const LOCK_SQL = "with upd as (insert into settings (key, value, updated_at) values ('deep_running', now()::text, now()) " +
+  "on conflict (key) do update set value = excluded.value, updated_at = excluded.updated_at " +
+  "where coalesce(nullif(settings.value, ''), '1970-01-01')::timestamptz < now() - interval '16 minutes' returning 1) " +
+  "select (select count(*) from upd) > 0 as ok, (select count(*) from upd) as took";
 
 const PREP = inline('telegram-format.js') + `
 const j = $input.first().json;

@@ -108,7 +108,7 @@
       ],
       "parameters": {
         "operation": "executeQuery",
-        "query": "with cur as (select (select value from settings where key = 'deep_running') as v), ok as (select coalesce(nullif(v, ''), '1970-01-01')::timestamptz < now() - interval '16 minutes' as ok from cur), upd as (insert into settings (key, value, updated_at) select 'deep_running', now()::text, now() from ok where ok.ok on conflict (key) do update set value = excluded.value, updated_at = excluded.updated_at returning 1) select (select ok from ok) as ok, (select count(*) from upd) as took",
+        "query": "with upd as (insert into settings (key, value, updated_at) values ('deep_running', now()::text, now()) on conflict (key) do update set value = excluded.value, updated_at = excluded.updated_at where coalesce(nullif(settings.value, ''), '1970-01-01')::timestamptz < now() - interval '16 minutes' returning 1) select (select count(*) from upd) > 0 as ok, (select count(*) from upd) as took",
         "options": {}
       },
       "credentials": {
