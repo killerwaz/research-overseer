@@ -69,7 +69,7 @@
       "parameters": {
         "workflowId": {
           "__rl": true,
-          "value": "AM0WjOKXpIemAzT6",
+          "value": "__WF10__",
           "mode": "id"
         },
         "workflowInputs": {
@@ -118,7 +118,7 @@
       "parameters": {
         "workflowId": {
           "__rl": true,
-          "value": "SujItqZD8LGV034c",
+          "value": "__WF11__",
           "mode": "id"
         },
         "workflowInputs": {
@@ -167,7 +167,7 @@
       "parameters": {
         "workflowId": {
           "__rl": true,
-          "value": "8whU7voTeLMySR6l",
+          "value": "__WF12__",
           "mode": "id"
         },
         "workflowInputs": {
@@ -216,7 +216,7 @@
       "parameters": {
         "workflowId": {
           "__rl": true,
-          "value": "HCnDeMk2Gkr1cut5",
+          "value": "__WF13__",
           "mode": "id"
         },
         "workflowInputs": {
@@ -283,8 +283,8 @@
       ],
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       }
     },
@@ -466,6 +466,6 @@
   },
   "settings": {
     "executionOrder": "v1",
-    "errorWorkflow": "PNJMA4NbQGmp1xKv"
+    "errorWorkflow": "__WF99__"
   }
 }

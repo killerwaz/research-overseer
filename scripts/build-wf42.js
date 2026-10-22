@@ -16,7 +16,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const I = require('./instance.json');
+const I = require('./ids.js').PLACEHOLDERS;
 const CRED_PG = I.credentials.postgres;
 const inline = (f) => fs.readFileSync(path.join(__dirname, '..', 'shared', f), 'utf8')
   .replace(/module\.exports[\s\S]*$/, '');
@@ -112,7 +112,7 @@ const wf42 = {
     'Any articles?': { main: [[{ node: 'Run WF-20', type: 'main', index: 0 }], [{ node: 'Return', type: 'main', index: 0 }]] },
     'Run WF-20': { main: [[{ node: 'Return', type: 'main', index: 0 }]] }
   },
-  settings: { executionOrder: 'v1', errorWorkflow: 'PNJMA4NbQGmp1xKv' }
+  settings: { executionOrder: 'v1', errorWorkflow: I.workflows['wf99-error-workflow'] }
 };
 // the queue call must not block the router
 const q = wf42.nodes.find((n) => n.name === 'Queue media');
@@ -253,7 +253,7 @@ const wf43 = {
     'Send stored': { main: [[{ node: 'Record prep', type: 'main', index: 0 }]] },
     'Record prep': { main: [[{ node: 'Record send', type: 'main', index: 0 }]] }
   },
-  settings: { executionOrder: 'v1', errorWorkflow: 'PNJMA4NbQGmp1xKv' }
+  settings: { executionOrder: 'v1', errorWorkflow: I.workflows['wf99-error-workflow'] }
 };
 wf43.nodes.find((n) => n.name === 'Process video').parameters.mode = 'each';
 

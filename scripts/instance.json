@@ -8,7 +8,9 @@
     "telegram":   { "id": "6RLwMp4ODoesGE4v", "name": "telegram-overseer-bot" },
     "openrouter": { "id": "CZJ5Mo20Hr8BNBxG", "name": "openrouter-api" },
     "lmstudio_openai": { "id": "7FnRHC0HF6R3yzW8", "name": "lmstudio-openai" },
-    "tavily":     { "id": "NlzPUPYE9V5uvhRg", "name": "tavily-api" }
+    "tavily":     { "id": "NlzPUPYE9V5uvhRg", "name": "tavily-api" },
+    "exa":        { "id": "lBgkLf08RQvF6Iwa", "name": "exa-api" },
+    "brave":      { "id": "J6YZk82KJiRr56tD", "name": "brave-api" }
   },
   "workflows": {
     "wf00-agent-router": "VQha8UiuOesJYa11",

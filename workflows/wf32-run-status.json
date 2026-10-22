@@ -5,7 +5,10 @@
       "parameters": {
         "workflowInputs": {
           "values": [
-            { "name": "limit", "type": "string" }
+            {
+              "name": "limit",
+              "type": "string"
+            }
           ]
         }
       },
@@ -13,7 +16,10 @@
       "name": "WF Input",
       "type": "n8n-nodes-base.executeWorkflowTrigger",
       "typeVersion": 1.1,
-      "position": [0, 0]
+      "position": [
+        0,
+        0
+      ]
     },
     {
       "parameters": {
@@ -27,9 +33,15 @@
       "name": "Select runs",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.4,
-      "position": [220, 0],
+      "position": [
+        220,
+        0
+      ],
       "credentials": {
-        "postgres": { "id": "tzBuhu9KEXlaRRfW", "name": "Postgres account" }
+        "postgres": {
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
+        }
       },
       "executeOnce": true,
       "alwaysOutputData": true
@@ -43,12 +55,38 @@
       "name": "Shape result",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [440, 0]
+      "position": [
+        440,
+        0
+      ]
     }
   ],
   "connections": {
-    "WF Input": { "main": [[{ "node": "Select runs", "type": "main", "index": 0 }]] },
-    "Select runs": { "main": [[{ "node": "Shape result", "type": "main", "index": 0 }]] }
+    "WF Input": {
+      "main": [
+        [
+          {
+            "node": "Select runs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select runs": {
+      "main": [
+        [
+          {
+            "node": "Shape result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
   },
-  "settings": { "executionOrder": "v1", "errorWorkflow": "PNJMA4NbQGmp1xKv" }
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "__WF99__"
+  }
 }

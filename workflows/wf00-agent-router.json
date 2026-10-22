@@ -37,8 +37,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       },
       "executeOnce": true,
@@ -95,8 +95,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       }
     },
@@ -235,8 +235,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       },
       "alwaysOutputData": true,
@@ -350,8 +350,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       }
     },
@@ -385,8 +385,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       },
       "executeOnce": true,
@@ -456,8 +456,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       },
       "executeOnce": true,
@@ -522,7 +522,7 @@
       "parameters": {
         "workflowId": {
           "__rl": true,
-          "value": "y6E8HRHr9RCVwkTa",
+          "value": "__WF46__",
           "mode": "id"
         },
         "workflowInputs": {
@@ -614,7 +614,7 @@
       "parameters": {
         "workflowId": {
           "__rl": true,
-          "value": "VaA4YM6N4ni7F6CB",
+          "value": "__WF31__",
           "mode": "id"
         },
         "workflowInputs": {
@@ -770,8 +770,8 @@
       },
       "credentials": {
         "httpBearerAuth": {
-          "id": "JsTIc0R9trd31PsV",
-          "name": "lmstudio-bearer"
+          "id": "__CRED_LMSTUDIO__",
+          "name": "__CREDNAME_LMSTUDIO__"
         }
       },
       "retryOnFail": false,
@@ -809,8 +809,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       },
       "alwaysOutputData": true,
@@ -907,7 +907,7 @@
       "parameters": {
         "workflowId": {
           "__rl": true,
-          "value": "du4KagpWdi5AT84v",
+          "value": "__WF40__",
           "mode": "id"
         },
         "workflowInputs": {
@@ -998,8 +998,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       },
       "alwaysOutputData": true,
@@ -1064,7 +1064,7 @@
       "parameters": {
         "workflowId": {
           "__rl": true,
-          "value": "H2MNGYXdulcWju1n",
+          "value": "__WF45__",
           "mode": "id"
         },
         "workflowInputs": {
@@ -1152,8 +1152,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       },
       "alwaysOutputData": true,
@@ -1186,7 +1186,7 @@
       "parameters": {
         "workflowId": {
           "__rl": true,
-          "value": "fzgIhUYkPOaSdCUu",
+          "value": "__WF42__",
           "mode": "id"
         },
         "workflowInputs": {
@@ -1324,7 +1324,7 @@
       "parameters": {
         "workflowId": {
           "__rl": true,
-          "value": "VaA4YM6N4ni7F6CB",
+          "value": "__WF31__",
           "mode": "id"
         },
         "workflowInputs": {
@@ -1476,7 +1476,7 @@
       "parameters": {
         "workflowId": {
           "__rl": true,
-          "value": "qAGxheHskgw3Ki9A",
+          "value": "__WF34__",
           "mode": "id"
         },
         "workflowInputs": {
@@ -1563,8 +1563,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       },
       "executeOnce": true,
@@ -1635,8 +1635,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       },
       "alwaysOutputData": true,
@@ -1711,8 +1711,8 @@
       },
       "credentials": {
         "httpBearerAuth": {
-          "id": "JsTIc0R9trd31PsV",
-          "name": "lmstudio-bearer"
+          "id": "__CRED_LMSTUDIO__",
+          "name": "__CREDNAME_LMSTUDIO__"
         }
       },
       "retryOnFail": false,
@@ -1801,8 +1801,8 @@
       },
       "credentials": {
         "httpBearerAuth": {
-          "id": "JsTIc0R9trd31PsV",
-          "name": "lmstudio-bearer"
+          "id": "__CRED_LMSTUDIO__",
+          "name": "__CREDNAME_LMSTUDIO__"
         }
       },
       "retryOnFail": false,
@@ -1872,8 +1872,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       },
       "executeOnce": true,
@@ -1917,8 +1917,8 @@
       },
       "credentials": {
         "httpBearerAuth": {
-          "id": "JsTIc0R9trd31PsV",
-          "name": "lmstudio-bearer"
+          "id": "__CRED_LMSTUDIO__",
+          "name": "__CREDNAME_LMSTUDIO__"
         }
       },
       "retryOnFail": false,
@@ -1972,7 +1972,7 @@
       "parameters": {
         "workflowId": {
           "__rl": true,
-          "value": "NJEqsBX7BENN1OcT",
+          "value": "__WF44__",
           "mode": "id"
         },
         "workflowInputs": {
@@ -2032,8 +2032,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       },
       "executeOnce": true,
@@ -2077,8 +2077,8 @@
       },
       "credentials": {
         "httpBearerAuth": {
-          "id": "JsTIc0R9trd31PsV",
-          "name": "lmstudio-bearer"
+          "id": "__CRED_LMSTUDIO__",
+          "name": "__CREDNAME_LMSTUDIO__"
         }
       },
       "retryOnFail": false,
@@ -2114,8 +2114,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       },
       "executeOnce": true,
@@ -2173,8 +2173,8 @@
       },
       "credentials": {
         "httpBearerAuth": {
-          "id": "JsTIc0R9trd31PsV",
-          "name": "lmstudio-bearer"
+          "id": "__CRED_LMSTUDIO__",
+          "name": "__CREDNAME_LMSTUDIO__"
         }
       },
       "retryOnFail": false,
@@ -2210,8 +2210,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       },
       "executeOnce": true,
@@ -2282,8 +2282,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       },
       "executeOnce": true,
@@ -2452,7 +2452,7 @@
       "parameters": {
         "workflowId": {
           "__rl": true,
-          "value": "NXWu2wqU6ifrFIpd",
+          "value": "__WF20__",
           "mode": "id"
         },
         "workflowInputs": {
@@ -2540,8 +2540,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       },
       "executeOnce": true,
@@ -2624,8 +2624,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       },
       "executeOnce": true,
@@ -2662,8 +2662,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       },
       "executeOnce": true,
@@ -2763,8 +2763,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       },
       "executeOnce": true,
@@ -2875,7 +2875,7 @@
       "parameters": {
         "workflowId": {
           "__rl": true,
-          "value": "VaA4YM6N4ni7F6CB",
+          "value": "__WF31__",
           "mode": "id"
         },
         "workflowInputs": {
@@ -3023,8 +3023,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       },
       "executeOnce": true,
@@ -3095,8 +3095,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       },
       "executeOnce": true,
@@ -3161,7 +3161,7 @@
       "parameters": {
         "workflowId": {
           "__rl": true,
-          "value": "VaA4YM6N4ni7F6CB",
+          "value": "__WF31__",
           "mode": "id"
         },
         "workflowInputs": {
@@ -3295,8 +3295,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       },
       "executeOnce": true,
@@ -3333,8 +3333,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       },
       "executeOnce": true,
@@ -3379,8 +3379,8 @@
       },
       "credentials": {
         "openAiApi": {
-          "id": "7FnRHC0HF6R3yzW8",
-          "name": "lmstudio-openai"
+          "id": "__CRED_LMSTUDIO_OPENAI__",
+          "name": "__CREDNAME_LMSTUDIO_OPENAI__"
         }
       }
     },
@@ -3400,8 +3400,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       }
     },
@@ -3418,7 +3418,7 @@
         "description": "Run ONE search source now. COSTS MONEY AND ~6 MINUTES. Call it immediately ONLY when the user used an explicit search verb — search, find me, look up, go get, dig into, run a search. For anything phrased as a question ('what's happening with X', 'anything on X', 'how is X going') do NOT call this tool and do NOT offer it: read query_feed instead; when the feed has no answer the system answers from the web by itself. Call this tool only when the user explicitly asks to search, find, dig into or track something (or says yes to a sweep you confirmed). A wrong call costs six minutes of their machine. Params: source (exa|tavily|brave|rss), query. exa = conceptual or thematic digs. tavily = a specific named topic. brave = broad general sweep. rss = recency from known feeds ('anything new today', cheap, no confirmation needed). Does NOT read past results.",
         "workflowId": {
           "__rl": true,
-          "value": "ccdGJn47aX7PHBti",
+          "value": "__WF41__",
           "mode": "id"
         },
         "workflowInputs": {
@@ -3484,7 +3484,7 @@
         "description": "Run ALL discovery sources (exa, tavily, brave, rss). The most expensive action there is. NEVER call it in response to the message that first asks for it — 'sweep', 'go wide', 'full run on X' get a one-line confirmation question and nothing else. Call it ONLY when your previous message asked to confirm a sweep and the user's reply is a yes.",
         "workflowId": {
           "__rl": true,
-          "value": "du4KagpWdi5AT84v",
+          "value": "__WF40__",
           "mode": "id"
         },
         "workflowInputs": {
@@ -3550,7 +3550,7 @@
         "description": "Ingest the links the user pasted: articles, PDFs, YouTube videos, podcast and audio links. Call it ONCE per message, even when the message has several links — it reads every link in the message itself. Cheap — execute immediately, no confirmation. Also call it, with url empty, when the user just says transcribe / listen / hear after being told a video has no captions. Videos are summarised in the background and each summary arrives as its own Telegram message; words like slides, deck, presentation, watch, look (read the screen) or transcribe, listen, hear (use the audio) in the message are picked up automatically. Reply with ONE short line based on the note it returns. Never write a summary of a video yourself.",
         "workflowId": {
           "__rl": true,
-          "value": "fzgIhUYkPOaSdCUu",
+          "value": "__WF42__",
           "mode": "id"
         },
         "workflowInputs": {
@@ -3606,7 +3606,7 @@
         "description": "Read EXISTING triaged results. Use for 'what did you find', 'show me', 'anything good last night'. NEVER triggers a new run. CRITICAL: if the question implies ANY time window — today, tonight, last night, this morning, yesterday, this week, recently, just now — you MUST pass `since` as an ISO timestamp you compute from the current time given above. Omitting it returns the whole archive, and you will report old items as if they were new. Only omit `since` for questions with no time element at all ('show me the best stuff', 'anything on agents'). FILTERS COME ONLY FROM THE USER'S CURRENT WORDS. 'anything on X?' / 'what about X' / 'what do we have on X' = tag ONLY: no min_score, no max_age_days, no since — even if earlier messages asked for 'good' or 'this week'. Add min_score only when this message says good/best/top/worth reading; add a time filter only when this message names a time. Keep the user's topic words as they are; do not add words like 'ai' to tag. Items are scored on two axes: specificity (1-5, how concrete and verifiable the claims are — vendor SEO content scores low) and angle_strength (1-5, how non-obvious the publishable hook is). score = the two added, 2-10. Use min_score 7+ for 'the good stuff', 8+ for 'only the best'. Quality and recency are separate knobs and combine freely: min_score filters how good, max_age_days filters how fresh. 'anything good this week' = min_score 7 + max_age_days 7. Results always come back best-first. Results are one row per story by default: several outlets covering the same event come back as one row with an articles count. Set group_stories to 'false' only when the user explicitly asks for every article or every source. Put the question's topic in tag ('nvidia export control'). It searches titles, summaries AND the full text of every saved article and video transcript, by keyword AND by meaning, so plain wording works ('AI that can buy things' finds agent-payment items). SPECIFIC QUESTIONS — who, how much, when, which, what did X say ('who bought Langfuse?', 'how much has Harvey raised?', 'what does the video say about shapes?') — are query_feed too: put the names and key nouns in tag ('Langfuse acquisition', 'Harvey funding') and answer from the items' evidence field, which is the matching passage of the article itself. Quote its figures and names, say which item number it came from, and give evidence.link when there is one (a video at that moment). If no evidence answers the question, say the feed does not say — never fill the gap from memory. For several topics at once — comparisons, 'X and Y' — separate them with | ('nigeria ai | bangladesh bank'), up to 3; each topic gets its own share of the results and every item says which topic it matched. With a topic, results come back most-relevant-first. If a topic search comes back empty, the feed really has nothing on it: say so in one sentence and stop (the web answer follows by itself; never offer a search). Time words and quality belong in max_age_days and min_score, never in tag. Every item has a number n. Show it when you list items; follow-ups like 'the first one' go to get_item, not here. Params: max_age_days (days since publication), min_score (2-10), since (ISO timestamp, for an exact cutoff), tag, limit (default 20), group_stories, min_relevance (legacy, leave empty).",
         "workflowId": {
           "__rl": true,
-          "value": "VaA4YM6N4ni7F6CB",
+          "value": "__WF31__",
           "mode": "id"
         },
         "workflowInputs": {
@@ -3732,7 +3732,7 @@
         "description": "Fetch ONE item from the list you last showed in this chat, by its number n, with the cleaned text of the saved article (page_excerpt). Use for every follow-up about a listed item: 'the first one', '#3', 'tell me more about number 2', 'what does 4 say', '1. especially the global south part'. Never re-run query_feed for these — a new query returns a different list. Answer from the summary and page_excerpt it returns, and follow any format instruction in the message (shorter, no timestamps, bullets, plain prose). A video or link summary the user was just sent is item 1. If it says the item is not found, ask which item they mean.",
         "workflowId": {
           "__rl": true,
-          "value": "VaA4YM6N4ni7F6CB",
+          "value": "__WF31__",
           "mode": "id"
         },
         "workflowInputs": {
@@ -3858,7 +3858,7 @@
         "description": "Report recent runs: when, scope, counts, ok/partial/failed. Use for 'did last night's run work', 'when did you last run', 'did anything break'.",
         "workflowId": {
           "__rl": true,
-          "value": "Ni3bddpEPN91ISg2",
+          "value": "__WF32__",
           "mode": "id"
         },
         "workflowInputs": {
@@ -3894,7 +3894,7 @@
         "description": "Add, remove or list RSS feeds, or score every source. Use for 'add this feed', 'stop following X', 'what feeds are you watching'; action scorecard for 'how are my sources doing', 'which feeds are worth it', 'where do the good items come from' — report its numbers (good = score 7+), list silent feeds (0 items) by name, and never switch a source off unless asked. Params: action (add|remove|list|scorecard); url (for add/remove); label (optional); id (for remove); days (scorecard window, empty = all time).",
         "workflowId": {
           "__rl": true,
-          "value": "qAGxheHskgw3Ki9A",
+          "value": "__WF34__",
           "mode": "id"
         },
         "workflowInputs": {
@@ -5629,6 +5629,6 @@
   },
   "settings": {
     "executionOrder": "v1",
-    "errorWorkflow": "PNJMA4NbQGmp1xKv"
+    "errorWorkflow": "__WF99__"
   }
 }

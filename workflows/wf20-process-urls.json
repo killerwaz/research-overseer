@@ -51,8 +51,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       },
       "executeOnce": true
@@ -101,8 +101,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       },
       "executeOnce": true,
@@ -183,8 +183,8 @@
       },
       "credentials": {
         "httpBearerAuth": {
-          "id": "avVVOMOhNmIhsK5n",
-          "name": "crawl4ai-bearer"
+          "id": "__CRED_CRAWL4AI__",
+          "name": "__CREDNAME_CRAWL4AI__"
         }
       },
       "retryOnFail": true,
@@ -432,8 +432,8 @@
       },
       "credentials": {
         "httpBearerAuth": {
-          "id": "J7cbHkpEdHeUIhif",
-          "name": "firecrawl-api"
+          "id": "__CRED_FIRECRAWL__",
+          "name": "__CREDNAME_FIRECRAWL__"
         }
       },
       "retryOnFail": true,
@@ -519,8 +519,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       }
     },
@@ -537,7 +537,7 @@
         "mode": "each",
         "workflowId": {
           "__rl": true,
-          "value": "HISagmvZYi6O7N5u",
+          "value": "__WF21__",
           "mode": "id"
         },
         "workflowInputs": {
@@ -660,8 +660,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       },
       "executeOnce": true
@@ -698,8 +698,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       },
       "executeOnce": true,
@@ -791,8 +791,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       },
       "executeOnce": true,
@@ -1203,6 +1203,7 @@
     }
   },
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "errorWorkflow": "__WF99__"
   }
 }

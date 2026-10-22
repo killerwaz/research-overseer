@@ -48,8 +48,8 @@
       ],
       "credentials": {
         "httpBearerAuth": {
-          "id": "NlzPUPYE9V5uvhRg",
-          "name": "tavily-api"
+          "id": "__CRED_TAVILY__",
+          "name": "__CREDNAME_TAVILY__"
         }
       },
       "retryOnFail": true,
@@ -74,7 +74,7 @@
       "parameters": {
         "workflowId": {
           "__rl": true,
-          "value": "NXWu2wqU6ifrFIpd",
+          "value": "__WF20__",
           "mode": "id"
         },
         "workflowInputs": {
@@ -176,6 +176,6 @@
   },
   "settings": {
     "executionOrder": "v1",
-    "errorWorkflow": "PNJMA4NbQGmp1xKv"
+    "errorWorkflow": "__WF99__"
   }
 }

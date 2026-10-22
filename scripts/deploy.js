@@ -5,7 +5,7 @@
 //   __TG_TOKEN__   <- .env TELEGRAM_BOT_TOKEN     (wf00)
 //   __TG_CHAT__    <- .env TG_CHAT_ID             (wf00, wf20, wf30, wf99)
 //   __ZZ_SECRET__  <- .env ZZ_WEBHOOK_SECRET      (wf00 test hook, tools/*)
-//   __WF40_ID__    <- instance.json workflows     (wf30)
+//   __CRED_*__ __CREDNAME_*__ __WF43__ __WFID_*__ <- instance.json (every credential / workflow id; scripts/ids.js)
 //   __BEAT__       <- beat.md                     (wf20, wf30 triage prompt)
 //   __EXA_KEY__ __BRAVE_KEY__ __FIRECRAWL_KEY__ __LM_KEY__ <- .env (wf46 'Deep run')
 //
@@ -22,6 +22,7 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
 const instance = require('./instance.json');
+const { idSubstitutions } = require('./ids.js');
 
 function loadEnv() {
   const out = {};
@@ -62,11 +63,9 @@ async function main() {
     __LM_KEY__: env.LMSTUDIO_API_KEY,
     __BEAT__: loadBeat()
   };
-  // __WF31__ / __WF40_ID__ style tokens resolve to workflow ids by number.
-  for (const [key, id] of Object.entries(instance.workflows)) {
-    const num = (key.match(/^wf(\d+)/) || [])[1];
-    if (num) { subs[`__WF${num}__`] = id; subs[`__WF${num}_ID__`] = id; }
-  }
+  // Every credential and workflow id (__CRED_POSTGRES__, __WF31__, __WFID_TOOLS_ZZ_SQL_RUNNER__ ...)
+  // resolves from instance.json, so the committed JSON never names one instance's ids (scripts/ids.js).
+  Object.assign(subs, idSubstitutions(instance));
 
   let names = process.argv.slice(2);
   const skipGate = names.includes('--skip-gate');
@@ -91,6 +90,8 @@ async function main() {
       if (!val) throw new Error(`${key} needs ${ph} but no value is available (check .env; for __BEAT__, copy beat.example.md to beat.md)`);
       body = body.replaceAll(ph, val);
     }
+    const left = body.match(/__(?:CRED|CREDNAME|WF|WFID|TG|ZZ|MEDIA|EXA|BRAVE|FIRECRAWL|LM|BEAT)[A-Z0-9_]*__/);
+    if (left) throw new Error(`${key} still has ${left[0]} after substitution (missing from scripts/ids.js or instance.json?)`);
 
     const res = await fetch(`${base}/api/v1/workflows/${id}`, {
       method: 'PUT',

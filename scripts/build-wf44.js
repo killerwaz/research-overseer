@@ -10,7 +10,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const I = require('./instance.json');
+const I = require('./ids.js').PLACEHOLDERS;
 const CRED_LM = I.credentials.lmstudio;
 const CRED_TAVILY = I.credentials.tavily;
 const inline = (f) => fs.readFileSync(path.join(__dirname, '..', 'shared', f), 'utf8').replace(/module\.exports[\s\S]*$/, '');
@@ -61,7 +61,7 @@ const wf = {
     'Ask the 9B?': { main: [[{ node: 'Answer', type: 'main', index: 0 }]] },
     'Answer': { main: [[{ node: 'Compose', type: 'main', index: 0 }]] }
   },
-  settings: { executionOrder: 'v1', errorWorkflow: 'PNJMA4NbQGmp1xKv' }
+  settings: { executionOrder: 'v1', errorWorkflow: I.workflows['wf99-error-workflow'] }
 };
 
 const out = path.join(__dirname, '..', 'workflows', 'wf44-web-answer.json');

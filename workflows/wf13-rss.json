@@ -37,8 +37,8 @@
       ],
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       },
       "executeOnce": true,
@@ -77,7 +77,7 @@
       "parameters": {
         "workflowId": {
           "__rl": true,
-          "value": "NXWu2wqU6ifrFIpd",
+          "value": "__WF20__",
           "mode": "id"
         },
         "workflowInputs": {
@@ -190,6 +190,6 @@
   },
   "settings": {
     "executionOrder": "v1",
-    "errorWorkflow": "PNJMA4NbQGmp1xKv"
+    "errorWorkflow": "__WF99__"
   }
 }

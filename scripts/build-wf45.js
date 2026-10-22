@@ -10,7 +10,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const I = require('./instance.json');
+const I = require('./ids.js').PLACEHOLDERS;
 const CRED_LM = I.credentials.lmstudio;
 const WF31 = I.workflows['wf31-query-feed'];
 const MODEL = 'qwen/qwen3.5-9b';
@@ -196,7 +196,7 @@ const wf = {
     'Recheck fix': { main: [[{ node: 'Apply fixes', type: 'main', index: 0 }]] },
     'Apply fixes': { main: [[{ node: 'Done', type: 'main', index: 0 }]] },
   },
-  settings: { executionOrder: 'v1', errorWorkflow: 'PNJMA4NbQGmp1xKv' }
+  settings: { executionOrder: 'v1', errorWorkflow: I.workflows['wf99-error-workflow'] }
 };
 
 const out = path.join(__dirname, '..', 'workflows', 'wf45-synth-answer.json');

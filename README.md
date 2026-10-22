@@ -2,7 +2,7 @@
 
 # Research Overseer
 
-![Orchestration n8n · triage qwen3.5-9b local · routing qwen3.5-9b local · storage Supabase Postgres · interface Telegram · 283 tests passing](docs/stack.svg)
+![Orchestration n8n · triage qwen3.5-9b local · routing qwen3.5-9b local · storage Supabase Postgres · interface Telegram · 288 tests passing](docs/stack.svg)
 
 A research discovery pipeline that runs on my own hardware. It searches (Exa, Tavily, Brave), watches RSS, scrapes what it finds, scores every document against a defined beat using a local 9B model, stores the results in Postgres, and answers questions about them over Telegram.
 
@@ -65,7 +65,7 @@ Numbers from the running system.
 
 ## Current state
 
-409 documents triaged across 109 runs (3,122 searchable passages), 10 active RSS sources, 283 tests running in about 250ms with no dependencies (as of 2026-10-22).
+409 documents triaged across 109 runs (3,122 searchable passages), 10 active RSS sources, 288 tests running in about 250ms with no dependencies (as of 2026-10-22).
 
 ![Telegram reply listing five recent runs with per-run outcomes, one of them failed, followed by a backlog notice](docs/run-status.png)
 
@@ -126,8 +126,10 @@ The beat itself is untracked. It is the editorial definition of what the model s
 2b. **Media service** (YouTube and podcast links). Add `MEDIA_TOKEN` (any long random string) to `.env`. It is the `media` container in `docker/docker-compose.yml` and starts with the others; the first transcription downloads Parakeet TDT 0.6B v3 (about 650 MB) into the `media_data` volume.
 3. **Database.** Create a Supabase project and run every file in `sql/` (`001` through `020`) in order, one statement per call, then `node scripts/backfill-embeddings.js` once the workflows are up.
 4. **Secrets and beat.** Copy `.env.example` to `.env` and fill it. Copy `beat.example.md` to `beat.md`.
-5. **n8n credentials.** Create the Postgres, Telegram, OpenRouter, Crawl4AI, LM Studio, and Firecrawl credentials in the n8n UI, then put their ids in `scripts/instance.json`.
-6. **Workflows.** Import from `workflows/`, put the resulting ids in `scripts/instance.json`, then `node scripts/deploy.js --all`. Publish everything: the error workflow has to stay published or it never fires.
+5. **n8n credentials.** Create one credential per entry under `credentials` in `scripts/instance.json` (Postgres, Telegram, Crawl4AI bearer, LM Studio bearer, LM Studio as an OpenAI API, Firecrawl, Tavily, Exa, Brave; OpenRouter only for `ROUTER_MODEL=haiku`), then replace each `id` and `name` there with yours.
+6. **Workflows.** Import every file in `workflows/` and `workflows/tools/`, put the ids n8n gives them under `workflows` in `scripts/instance.json`, then `node scripts/deploy.js --all`. The committed JSON names no instance's ids: every credential, sub-workflow and error-workflow reference is a placeholder (`__CRED_POSTGRES__`, `__WF21__`, ...) that deploy fills from `instance.json`, and it refuses to deploy if one is left unfilled. Publish everything, sub-workflows before the workflows that call them (n8n refuses otherwise); the error workflow (WF-99) has to stay published or it never fires.
+
+Editing a workflow in the n8n UI and exporting it brings literal ids back: run `node scripts/placeholderize.js <file>` before committing (`npm test` fails if one slips through).
 
 Inbound Telegram uses `getUpdates` polling, so n8n needs no public URL and no tunnel. Keep it that way. The ZZ helper webhooks authenticate by path suffix alone and must never be reachable from the internet.
 

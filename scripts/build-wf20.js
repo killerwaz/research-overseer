@@ -3,9 +3,10 @@
 const fs = require('fs');
 const path = require('path');
 
-// Instance-local ids live in instance.json; the chat id is substituted at
+// Instance-local ids are placeholders (scripts/ids.js) that deploy.js fills from
+// instance.json; the chat id is substituted at
 // deploy time by scripts/deploy.js so it never lands in committed JSON.
-const I = require('./instance.json');
+const I = require('./ids.js').PLACEHOLDERS;
 const { TASTE_SQL } = require('../shared/feedback.js');
 const { FAILED } = require('../shared/triage-state.js');
 // a feed row that holds a real summary (a failed triage stores FAILED, shared/triage-state.js)
@@ -603,7 +604,8 @@ const connections = {
 const workflow = {
   name: 'WF-20 process_urls',
   nodes, connections,
-  settings: { executionOrder: 'v1' }
+  // live had this all along (set in the UI); a deploy keeps it, a fresh install would not
+  settings: { executionOrder: 'v1', errorWorkflow: I.workflows['wf99-error-workflow'] }
 };
 
 const out = path.join(__dirname, '..', 'workflows', 'wf20-process-urls.json');
@@ -773,7 +775,7 @@ return $input.all();
     'Embed chunks': { main: [[{ node: 'Build chunk store', type: 'main', index: 0 }]] },
     'Build chunk store': { main: [[{ node: 'Store chunks', type: 'main', index: 0 }]] }
   },
-  settings: { executionOrder: 'v1', errorWorkflow: 'PNJMA4NbQGmp1xKv' }
+  settings: { executionOrder: 'v1', errorWorkflow: I.workflows['wf99-error-workflow'] }
 };
 const out21 = path.join(__dirname, '..', 'workflows', 'wf21-triage-one.json');
 fs.writeFileSync(out21, JSON.stringify(wf21, null, 2));

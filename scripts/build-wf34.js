@@ -5,7 +5,9 @@
 const fs = require('fs');
 const path = require('path');
 
-const CRED_PG = { id: 'tzBuhu9KEXlaRRfW', name: 'Postgres account' };
+// Instance-local ids are placeholders (scripts/ids.js), filled from instance.json by deploy.js.
+const I = require('./ids.js').PLACEHOLDERS;
+const CRED_PG = I.credentials.postgres;
 
 const inline = (f) => fs.readFileSync(path.join(__dirname, '..', 'shared', f), 'utf8')
   .replace(/module\.exports[\s\S]*$/, '');
@@ -134,7 +136,7 @@ return [{ json: out }];
     'Remove source': { main: [[{ node: 'Shape result', type: 'main', index: 0 }]] },
     'List sources': { main: [[{ node: 'Shape result', type: 'main', index: 0 }]] }
   },
-  settings: { executionOrder: 'v1', errorWorkflow: 'PNJMA4NbQGmp1xKv' }
+  settings: { executionOrder: 'v1', errorWorkflow: I.workflows['wf99-error-workflow'] }
 };
 
 const out = path.join(__dirname, '..', 'workflows', 'wf34-manage-sources.json');

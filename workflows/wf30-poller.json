@@ -37,8 +37,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       },
       "alwaysOutputData": true
@@ -102,7 +102,7 @@
         "mode": "each",
         "workflowId": {
           "__rl": true,
-          "value": "HISagmvZYi6O7N5u",
+          "value": "__WF21__",
           "mode": "id"
         },
         "workflowInputs": {
@@ -199,8 +199,8 @@
       },
       "credentials": {
         "httpBearerAuth": {
-          "id": "JsTIc0R9trd31PsV",
-          "name": "lmstudio-bearer"
+          "id": "__CRED_LMSTUDIO__",
+          "name": "__CREDNAME_LMSTUDIO__"
         }
       },
       "retryOnFail": false,
@@ -239,8 +239,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       },
       "executeOnce": true
@@ -261,8 +261,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       },
       "executeOnce": true,
@@ -334,8 +334,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       },
       "executeOnce": true
@@ -359,8 +359,8 @@
       },
       "credentials": {
         "telegramApi": {
-          "id": "6RLwMp4ODoesGE4v",
-          "name": "telegram-overseer-bot"
+          "id": "__CRED_TELEGRAM__",
+          "name": "__CREDNAME_TELEGRAM__"
         }
       },
       "onError": "continueRegularOutput"
@@ -481,6 +481,6 @@
   },
   "settings": {
     "executionOrder": "v1",
-    "errorWorkflow": "PNJMA4NbQGmp1xKv"
+    "errorWorkflow": "__WF99__"
   }
 }

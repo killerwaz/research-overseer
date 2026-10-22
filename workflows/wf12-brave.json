@@ -71,8 +71,8 @@
       ],
       "credentials": {
         "httpHeaderAuth": {
-          "id": "J6YZk82KJiRr56tD",
-          "name": "brave-api"
+          "id": "__CRED_BRAVE__",
+          "name": "__CREDNAME_BRAVE__"
         }
       },
       "retryOnFail": true,
@@ -97,7 +97,7 @@
       "parameters": {
         "workflowId": {
           "__rl": true,
-          "value": "NXWu2wqU6ifrFIpd",
+          "value": "__WF20__",
           "mode": "id"
         },
         "workflowInputs": {
@@ -199,6 +199,6 @@
   },
   "settings": {
     "executionOrder": "v1",
-    "errorWorkflow": "PNJMA4NbQGmp1xKv"
+    "errorWorkflow": "__WF99__"
   }
 }

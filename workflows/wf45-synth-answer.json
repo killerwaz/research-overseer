@@ -59,7 +59,7 @@
       "parameters": {
         "workflowId": {
           "__rl": true,
-          "value": "VaA4YM6N4ni7F6CB",
+          "value": "__WF31__",
           "mode": "id"
         },
         "workflowInputs": {
@@ -246,8 +246,8 @@
       },
       "credentials": {
         "httpBearerAuth": {
-          "id": "JsTIc0R9trd31PsV",
-          "name": "lmstudio-bearer"
+          "id": "__CRED_LMSTUDIO__",
+          "name": "__CREDNAME_LMSTUDIO__"
         }
       },
       "retryOnFail": false,
@@ -322,8 +322,8 @@
       },
       "credentials": {
         "httpBearerAuth": {
-          "id": "JsTIc0R9trd31PsV",
-          "name": "lmstudio-bearer"
+          "id": "__CRED_LMSTUDIO__",
+          "name": "__CREDNAME_LMSTUDIO__"
         }
       },
       "retryOnFail": false,
@@ -412,8 +412,8 @@
       },
       "credentials": {
         "httpBearerAuth": {
-          "id": "JsTIc0R9trd31PsV",
-          "name": "lmstudio-bearer"
+          "id": "__CRED_LMSTUDIO__",
+          "name": "__CREDNAME_LMSTUDIO__"
         }
       },
       "retryOnFail": false,
@@ -502,8 +502,8 @@
       },
       "credentials": {
         "httpBearerAuth": {
-          "id": "JsTIc0R9trd31PsV",
-          "name": "lmstudio-bearer"
+          "id": "__CRED_LMSTUDIO__",
+          "name": "__CREDNAME_LMSTUDIO__"
         }
       },
       "retryOnFail": false,
@@ -546,8 +546,8 @@
       },
       "credentials": {
         "httpBearerAuth": {
-          "id": "JsTIc0R9trd31PsV",
-          "name": "lmstudio-bearer"
+          "id": "__CRED_LMSTUDIO__",
+          "name": "__CREDNAME_LMSTUDIO__"
         }
       },
       "retryOnFail": false,
@@ -834,6 +834,6 @@
   },
   "settings": {
     "executionOrder": "v1",
-    "errorWorkflow": "PNJMA4NbQGmp1xKv"
+    "errorWorkflow": "__WF99__"
   }
 }

@@ -14,7 +14,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const I = require('./instance.json');
+const I = require('./ids.js').PLACEHOLDERS;
 const CRED_PG = I.credentials.postgres;
 const inline = (f) => fs.readFileSync(path.join(__dirname, '..', 'shared', f), 'utf8').replace(/module\.exports[\s\S]*$/, '');
 const TG = 'https://api.telegram.org/bot__TG_TOKEN__/';
@@ -121,7 +121,7 @@ const wf = {
     'Deep run': { main: [[{ node: 'Deep send', type: 'main', index: 0 }]] },
     'Deep send': { main: [[{ node: 'Deep memory', type: 'main', index: 0 }]] }
   },
-  settings: { executionOrder: 'v1', errorWorkflow: 'PNJMA4NbQGmp1xKv' }
+  settings: { executionOrder: 'v1', errorWorkflow: I.workflows['wf99-error-workflow'] }
 };
 
 const out = path.join(__dirname, '..', 'workflows', 'wf46-deep-research.json');

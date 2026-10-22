@@ -55,8 +55,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       },
       "executeOnce": true,
@@ -174,8 +174,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       },
       "alwaysOutputData": true,
@@ -257,8 +257,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       },
       "alwaysOutputData": true,
@@ -301,8 +301,8 @@
       },
       "credentials": {
         "httpBearerAuth": {
-          "id": "JsTIc0R9trd31PsV",
-          "name": "lmstudio-bearer"
+          "id": "__CRED_LMSTUDIO__",
+          "name": "__CREDNAME_LMSTUDIO__"
         }
       },
       "retryOnFail": false,
@@ -374,8 +374,8 @@
       },
       "credentials": {
         "postgres": {
-          "id": "tzBuhu9KEXlaRRfW",
-          "name": "Postgres account"
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
         }
       },
       "alwaysOutputData": true,
@@ -658,6 +658,6 @@
   },
   "settings": {
     "executionOrder": "v1",
-    "errorWorkflow": "PNJMA4NbQGmp1xKv"
+    "errorWorkflow": "__WF99__"
   }
 }

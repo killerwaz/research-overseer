@@ -15,7 +15,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const I = require('./instance.json');
+const I = require('./ids.js').PLACEHOLDERS;
 const CRED_PG = I.credentials.postgres;
 const CRED_LM = I.credentials.lmstudio;
 
@@ -406,7 +406,7 @@ const wf = {
     'Shape result': { main: [[{ node: 'Remember list', type: 'main', index: 0 }]] },
     'Remember list': { main: [[{ node: 'Return', type: 'main', index: 0 }]] }
   },
-  settings: { executionOrder: 'v1', errorWorkflow: 'PNJMA4NbQGmp1xKv' }
+  settings: { executionOrder: 'v1', errorWorkflow: I.workflows['wf99-error-workflow'] }
 };
 
 const out = path.join(__dirname, '..', 'workflows', 'wf31-query-feed.json');

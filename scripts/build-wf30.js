@@ -7,9 +7,10 @@
 const fs = require('fs');
 const path = require('path');
 
-// Instance-local ids live in instance.json; the chat id is substituted at
+// Instance-local ids are placeholders (scripts/ids.js) that deploy.js fills from
+// instance.json; the chat id is substituted at
 // deploy time by scripts/deploy.js.
-const I = require('./instance.json');
+const I = require('./ids.js').PLACEHOLDERS;
 const CRED_PG = I.credentials.postgres;
 const CRED_TG = I.credentials.telegram;
 const CRED_LM = I.credentials.lmstudio;
@@ -226,7 +227,7 @@ return [{ json: { lm_state: up ? 'up' : 'down' } }];
     'Should ask?': { main: [[{ node: 'Stamp notice', type: 'main', index: 0 }], []] },
     'Stamp notice': { main: [[{ node: 'Send notice', type: 'main', index: 0 }]] }
   },
-  settings: { executionOrder: 'v1', errorWorkflow: 'PNJMA4NbQGmp1xKv' }
+  settings: { executionOrder: 'v1', errorWorkflow: I.workflows['wf99-error-workflow'] }
 };
 
 const out = path.join(__dirname, '..', 'workflows', 'wf30-poller.json');

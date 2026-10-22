@@ -7,7 +7,10 @@
       "name": "Error Trigger",
       "type": "n8n-nodes-base.errorTrigger",
       "typeVersion": 1,
-      "position": [0, 0]
+      "position": [
+        0,
+        0
+      ]
     },
     {
       "parameters": {
@@ -18,7 +21,10 @@
       "name": "Format error",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [200, 0]
+      "position": [
+        200,
+        0
+      ]
     },
     {
       "parameters": {
@@ -32,9 +38,15 @@
       "name": "Mark run failed",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.4,
-      "position": [400, 0],
+      "position": [
+        400,
+        0
+      ],
       "credentials": {
-        "postgres": { "id": "tzBuhu9KEXlaRRfW", "name": "Postgres account" }
+        "postgres": {
+          "id": "__CRED_POSTGRES__",
+          "name": "__CREDNAME_POSTGRES__"
+        }
       },
       "onError": "continueRegularOutput"
     },
@@ -42,23 +54,64 @@
       "parameters": {
         "chatId": "__TG_CHAT__",
         "text": "={{ $('Format error').first().json.text }}",
-        "additionalFields": { "appendAttribution": false, "parse_mode": "HTML" }
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
       },
       "id": "tgalert",
       "name": "Telegram alert",
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
-      "position": [600, 0],
+      "position": [
+        600,
+        0
+      ],
       "credentials": {
-        "telegramApi": { "id": "6RLwMp4ODoesGE4v", "name": "telegram-overseer-bot" }
+        "telegramApi": {
+          "id": "__CRED_TELEGRAM__",
+          "name": "__CREDNAME_TELEGRAM__"
+        }
       },
       "onError": "continueRegularOutput"
     }
   ],
   "connections": {
-    "Error Trigger": { "main": [[{ "node": "Format error", "type": "main", "index": 0 }]] },
-    "Format error": { "main": [[{ "node": "Mark run failed", "type": "main", "index": 0 }]] },
-    "Mark run failed": { "main": [[{ "node": "Telegram alert", "type": "main", "index": 0 }]] }
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Format error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format error": {
+      "main": [
+        [
+          {
+            "node": "Mark run failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark run failed": {
+      "main": [
+        [
+          {
+            "node": "Telegram alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
   },
-  "settings": { "executionOrder": "v1" }
+  "settings": {
+    "executionOrder": "v1"
+  }
 }

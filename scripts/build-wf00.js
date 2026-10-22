@@ -12,9 +12,10 @@ const { AGENT_ROWS } = require('../shared/referent.js');
 const inline = (f) => fs.readFileSync(path.join(__dirname, '..', 'shared', f), 'utf8')
   .replace(/module\.exports[\s\S]*$/, '');
 
-// Instance-local ids live in instance.json; personal values (chat id, webhook
+// Instance-local ids are placeholders (scripts/ids.js) that deploy.js fills from
+// instance.json; personal values (chat id, webhook
 // secret) stay out of the committed JSON entirely — deploy.js substitutes them.
-const I = require('./instance.json');
+const I = require('./ids.js').PLACEHOLDERS;
 const CRED_PG = I.credentials.postgres;
 const CRED_OR = I.credentials.openrouter;
 const CHAT_ID = '__TG_CHAT__';
@@ -1365,7 +1366,7 @@ const connections = {
 };
 
 const workflow = { name: 'WF-00 agent_router', nodes, connections,
-  settings: { executionOrder: 'v1', errorWorkflow: 'PNJMA4NbQGmp1xKv' } };
+  settings: { executionOrder: 'v1', errorWorkflow: I.workflows['wf99-error-workflow'] } };
 
 const repoOut = path.join(__dirname, '..', 'workflows', 'wf00-agent-router.json');
 fs.writeFileSync(repoOut, JSON.stringify(workflow, null, 2));
