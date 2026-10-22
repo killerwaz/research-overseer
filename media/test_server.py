@@ -52,6 +52,27 @@ class Modes(unittest.TestCase):
             raise self.verdict
         return dict(self.verdict)
 
+    def test_concurrent_upgrades_of_one_video_keep_both(self):
+        # code review finding 5: "transcribe" and "slides" for the same video at once. Each call read
+        # the cache, worked, and wrote its whole copy back, so the later write dropped the transcript.
+        import threading
+        self.run_t()                     # cached with captions
+        self.verdict = {"look": False, "kind": "interview", "reason": "step 1"}
+        def slow_parakeet(url):
+            time.sleep(0.3)
+            return {"source": "parakeet", "caption_lang": "", "paragraphs": [{"start": 0, "text": "p"}]}
+        with mock.patch.object(server, "parakeet", slow_parakeet), \
+             mock.patch.object(server, "on_screen", lambda url, d: ([{"start": 15, "text": "slide"}], "")), \
+             mock.patch.object(server.vision, "decide_look", self.fake_decide):
+            ts = [threading.Thread(target=server.transcript, args=("https://youtu.be/abcdefghijk",), kwargs=kw)
+                  for kw in ({"transcribe": True}, {"slides": True})]
+            ts[0].start(); time.sleep(0.05); ts[1].start()
+            for t in ts:
+                t.join()
+        doc = json.loads(server.cache_path("Youtube", "abcdefghijk").read_text(encoding="utf-8"))
+        self.assertEqual(doc["source"], "parakeet")
+        self.assertEqual(doc["slides"][0]["text"], "slide")
+
     def test_default_is_two_requests_captions_only(self):
         out = self.run_t()
         self.assertEqual(self.calls, ["dump", "caption", "decide"])   # decide is local, not YouTube

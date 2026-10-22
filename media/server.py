@@ -185,7 +185,24 @@ def cache_path(extractor, vid):
 
 
 def save(doc):
-    cache_path(doc["extractor"], doc["id"]).write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+    # write then rename: a reader never sees half a file
+    p = cache_path(doc["extractor"], doc["id"])
+    tmp = p.with_name(p.name + f".{threading.get_ident()}.tmp")
+    tmp.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, p)
+
+
+# One video at a time (code review finding 5): "transcribe" and "slides" for the same video at once
+# each read the cache, worked, and wrote their whole copy back, so the later write dropped the other's
+# work. The second call now waits, then finds the first one's result in the cache. Different videos
+# still run side by side.
+_video_locks = {}
+_video_locks_guard = threading.Lock()
+
+
+def video_lock(key):
+    with _video_locks_guard:
+        return _video_locks.setdefault(key, threading.Lock())
 
 
 def look_decision(doc):
@@ -215,6 +232,12 @@ def screen_note(asked, verdict, slides_note):
 
 
 def transcript(url, slides=False, transcribe=False, auto=True):
+    m = YT_ID.search(url)
+    with video_lock(m.group(1) if m else url):
+        return _transcript(url, slides, transcribe, auto)
+
+
+def _transcript(url, slides, transcribe, auto):
     doc = None
     m = YT_ID.search(url)
     if m and cache_path("Youtube", m.group(1)).exists():
